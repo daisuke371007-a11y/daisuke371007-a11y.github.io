@@ -1,0 +1,1153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PLOWLIGHT</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #070a12; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; outline: none; }
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0"></canvas>
+<script>window.PLOWLIGHT_EDITION = "demo";</script>
+<script>
+// content.js — PLOWLIGHT: the districts, the weather, the garage.
+(function (root) {
+  "use strict";
+  // tiles
+  var T = { LOT: 0, ROAD: 1, DRIVE: 2, BUILD: 3, CAR: 4, PRIO: 5, DEPOT: 6, ROCK: 7, PARK: 8 };
+  // districts: size in tiles, a map generator, the night's weather, the pay, what opens the next
+  var DISTRICTS = [
+    { id: "MAPLE", name: "Maple Street", w: 46, h: 30, gen: "suburb", seed: 11, pay: 1.0, prio: "the school bus route", prioPay: 120, start: 10, fall: [0.3, 0.6], night: 240, stars: [0.5, 0.75, 0.92], blurb: "Quiet suburb. Every house has a driveway - don't bury it." },
+    
+  ];
+  // the garage: bought with the night's pay
+  var UPGRADES = [
+    { id: "BLADE", name: "Wider Blade", desc: "+25% blade width.", max: 6, base: 60, grow: 1.6 },
+    { id: "ENGINE", name: "Bigger Engine", desc: "Push 30% more snow before it spills over the top.", max: 6, base: 70, grow: 1.6 },
+    { id: "ANGLE", name: "Swing Blade", desc: "Angle the blade further: snow rolls off to the side faster.", max: 3, base: 90, grow: 2.0 },
+    { id: "SPEED", name: "Gearbox", desc: "+12% top speed.", max: 4, base: 80, grow: 1.7 },
+    { id: "WING", name: "Wing Plow", desc: "A side wing: wider on the side the snow rolls to, and it throws the windrow further.", max: 3, base: 220, grow: 2.0 },
+    { id: "BLOWER", name: "Snowblower", desc: "When the blade is loaded, blow the snow far off the road (Level up: further).", max: 3, base: 400, grow: 1.9 },
+    { id: "SALT", name: "Salt Spreader", desc: "Press F to salt: salted road stays clear while it snows. More salt per level.", max: 4, base: 160, grow: 1.7 },
+    { id: "SCRAPER", name: "Steel Scraper", desc: "Leaves less snow behind and cuts through ice.", max: 3, base: 150, grow: 1.9 },
+    { id: "CHAINS", name: "Tyre Chains", desc: "Grip on ice and hills.", max: 3, base: 140, grow: 1.8 },
+    { id: "CREW", name: "Hire a Crew Truck", desc: "Another plow joins you and works the streets on its own.", max: 4, base: 600, grow: 2.1 },
+    { id: "TRAINING", name: "Crew Training", desc: "Crew trucks drive faster and angle their blades better.", max: 3, base: 500, grow: 2.0 },
+    { id: "OVERTIME", name: "Overtime", desc: "+30 seconds of night before dawn.", max: 3, base: 250, grow: 2.0 },
+    { id: "CONTRACT", name: "Better Contract", desc: "+15% pay for every clear road.", max: 5, base: 200, grow: 1.8 }
+  ];
+  var UPGRADE = {}; UPGRADES.forEach(function (u) { UPGRADE[u.id] = u; });
+  var WEATHER = [
+    { id: "LIGHT", name: "Light snow", mul: 0.75 },
+    { id: "STEADY", name: "Steady snow", mul: 1 },
+    { id: "HEAVY", name: "Heavy snow", mul: 1.35 },
+    { id: "BLIZZARD", name: "Blizzard", mul: 1.7, wind: true },
+    { id: "SLEET", name: "Freezing rain", mul: 0.6, ice: true }
+  ];
+  var TIPS = [
+    "Angle the blade with Q and E. Snow rolls off the trailing end of an angled blade - that is how real plows make a windrow at the curb.",
+    "Push snow onto lawns and empty lots. A buried driveway is a phone call to the city, and the city takes it out of your pay.",
+    "A straight blade collects snow until it spills over. Angle it, or lift it (Space) and dump the load somewhere harmless.",
+    "Salt (F) keeps a road clear while it keeps snowing. Refill at the depot.",
+    "It never stops snowing. A road you cleared at midnight needs another pass by six.",
+    "Crew trucks work on their own. Train them, and they angle their blades like you do."
+  ];
+  var api = { T: T, DISTRICTS: DISTRICTS, UPGRADES: UPGRADES, UPGRADE: UPGRADE, WEATHER: WEATHER, TIPS: TIPS, TILE: 32, CELL: 8 };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.CONTENT = api;
+})(this);
+
+</script>
+<script>
+// plow.js — PLOWLIGHT: a town under snow, trucks that push it, and where the snow goes.
+// Pure logic: the page, the balance runs and the tests all drive it the same way.
+(function (root) {
+  "use strict";
+  var node = typeof module !== "undefined" && module.exports;
+  var C = node ? require("./content.js") : root.CONTENT;
+  var T = C.T, TS = C.TILE, CS = C.CELL, SUB = TS / CS;   // 4 snow cells per tile, each way
+  var CLEAR = 5;                                          // a road under 5 cm is passable
+
+  function rng(seed) {
+    var a = seed >>> 0;
+    return function () { a = (a + 0x6D2B79F5) >>> 0; var t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+
+  // --- the save ---
+  function newGame(opts) {
+    opts = opts || {};
+    return { v: 1, demo: !!opts.demo, money: 0, total: 0, ups: {}, open: 1, district: 0, stars: {}, best: {}, nights: 0, seed: opts.seed || 1 };
+  }
+  function lv(g, id) { return g.ups[id] || 0; }
+  function cost(g, id) { var u = C.UPGRADE[id], l = lv(g, id); return l >= u.max ? Infinity : Math.round(u.base * Math.pow(u.grow, l)); }
+  function canBuy(g, id) { return lv(g, id) < C.UPGRADE[id].max && g.money >= cost(g, id); }
+  function buy(g, id) { if (!canBuy(g, id)) return false; g.money -= cost(g, id); g.ups[id] = lv(g, id) + 1; return true; }
+  function stats(g) {
+    return {
+      width: 40 * (1 + 0.25 * lv(g, "BLADE")),
+      cap: 1100 * (1 + 0.3 * lv(g, "ENGINE")),
+      maxAngle: [0.42, 0.55, 0.68, 0.8][lv(g, "ANGLE")],
+      speed: 150 * (1 + 0.12 * lv(g, "SPEED")),
+      wing: lv(g, "WING"), blower: lv(g, "BLOWER"),
+      salt: lv(g, "SALT") ? 25 + 15 * lv(g, "SALT") : 0,
+      residual: [1.6, 1.0, 0.5, 0.2][lv(g, "SCRAPER")],
+      grip: 0.45 + 0.18 * lv(g, "CHAINS"),
+      crew: lv(g, "CREW"), training: lv(g, "TRAINING"),
+      extra: 30 * lv(g, "OVERTIME"), pay: 1 + 0.15 * lv(g, "CONTRACT")
+    };
+  }
+
+  // --- the maps, generated the same way every time ---
+  function genMap(d) {
+    var w = d.w, h = d.h, t = new Uint8Array(w * h), grade = new Float32Array(w * h), prio = new Uint8Array(w * h), r = rng(d.seed);
+    function set(x, y, v) { if (x >= 0 && y >= 0 && x < w && y < h) t[y * w + x] = v; }
+    function get(x, y) { return x >= 0 && y >= 0 && x < w && y < h ? t[y * w + x] : T.ROCK; }
+    function hroad(y, x0, x1, wd) { for (var x = x0; x <= x1; x++) for (var k = 0; k < wd; k++) set(x, y + k, T.ROAD); }
+    function vroad(x, y0, y1, wd) { for (var y = y0; y <= y1; y++) for (var k = 0; k < wd; k++) set(x + k, y, T.ROAD); }
+    function houses(dense) {
+      // houses along the roads, each with a driveway down to the street
+      for (var y = 1; y < h - 1; y++) for (var x = 1; x < w - 1; x++) {
+        if (get(x, y) !== T.LOT) continue;
+        var down = get(x, y + 1) === T.ROAD, up = get(x, y - 1) === T.ROAD;
+        if (!(down || up) || r() > (dense ? 0.75 : 0.42)) continue;
+        var dy = down ? -1 : 1, ok = true;
+        for (var a = 0; a < 2; a++) for (var b = 1; b <= 2; b++) if (get(x + a, y + dy * b) !== T.LOT) ok = false;
+        if (!ok) continue;
+        set(x, y, T.DRIVE);
+        for (a = 0; a < 2; a++) for (b = 1; b <= 2; b++) set(x + a - (r() < 0.5 ? 0 : 0), y + dy * b, T.BUILD);
+        x += 2;
+      }
+    }
+    var depot = { x: 2, y: 2 };
+    if (d.gen === "suburb" || d.gen === "hill") {
+      var rows = d.gen === "hill" ? [3, 10, 17, 24, 31] : [3, 11, 19, 25], cols = d.gen === "hill" ? [3, 14, 25, 36, 46] : [3, 15, 27, 39];
+      rows.forEach(function (y) { hroad(y, 3, w - 5, 2); });
+      cols.forEach(function (x) { vroad(x, 3, rows[rows.length - 1] + 1, 2); });
+      houses(false);
+      // the school, and the bus route to it
+      for (var y = 6; y <= 8; y++) for (var x = 18; x <= 23; x++) set(x, y, T.BUILD);
+      var pr = d.gen === "hill" ? 10 : 11;
+      for (x = 3; x <= 28; x++) for (var k = 0; k < 2; k++) prio[(pr + k) * w + x] = 1;
+      depot = { x: 1, y: 3 }; set(1, 3, T.DEPOT); set(2, 3, T.ROAD); set(1, 4, T.DEPOT); set(2, 4, T.ROAD);
+      if (d.gen === "hill") for (y = 0; y < h; y++) for (x = 0; x < w; x++) grade[y * w + x] = (x > 12 && x < 32) ? 1 : 0.35;
+    } else if (d.gen === "town") {
+      var rws = [2, 11, 20], cls = [2, 13, 24, 35, 41];
+      rws.forEach(function (y) { hroad(y, 2, w - 2, 3); });
+      cls.forEach(function (x) { if (x < w - 1) vroad(x, 2, 22, 2); });
+      for (y = 0; y < h; y++) for (x = 0; x < w; x++) if (get(x, y) === T.LOT && r() < 0.82) set(x, y, T.BUILD);
+      // little squares to put the snow in
+      [[6, 6], [18, 15], [29, 6], [30, 15], [8, 15]].forEach(function (p) { for (var a = 0; a < 3; a++) for (var b = 0; b < 2; b++) if (get(p[0] + a, p[1] + b) === T.BUILD) set(p[0] + a, p[1] + b, T.LOT); });
+      // the third lane is for parking: cars, and the snow the plows push against them
+      rws.forEach(function (y) { for (var x = 2; x < w - 1; x++) if (get(x, y + 2) === T.ROAD && get(x, y + 3) !== T.ROAD) set(x, y + 2, r() < 0.33 ? T.CAR : T.PARK); });
+      for (x = 2; x <= 26; x++) for (k = 0; k < 3; k++) if (get(x, 11 + k) === T.ROAD) prio[(11 + k) * w + x] = 1;
+      houses(true);
+      // sidewalks along every street: the snowbank goes on the curb
+      var walk = [];
+      for (y = 0; y < h; y++) for (x = 0; x < w; x++) if (get(x, y) === T.BUILD && [get(x + 1, y), get(x - 1, y), get(x, y + 1), get(x, y - 1)].indexOf(T.ROAD) >= 0) walk.push([x, y]);
+      walk.forEach(function (p) { set(p[0], p[1], T.PARK); });
+      depot = { x: 0, y: 2 }; set(0, 2, T.DEPOT); set(1, 2, T.ROAD); set(0, 3, T.DEPOT); set(1, 3, T.ROAD);
+    } else if (d.gen === "airport") {
+      hroad(14, 6, w - 6, 4);
+      for (x = 6; x <= w - 6; x++) for (k = 0; k < 4; k++) prio[(14 + k) * w + x] = 1;
+      hroad(8, 6, w - 6, 2); hroad(24, 10, w - 10, 2); hroad(30, 6, w - 6, 2);
+      [6, 20, 34, 48, w - 8].forEach(function (x) { vroad(x, 8, 31, 2); });
+      for (y = 2; y <= 5; y++) for (x = 22; x <= 38; x++) set(x, y, T.BUILD);
+      for (y = 6; y <= 7; y++) for (x = 22; x <= 38; x++) set(x, y, T.ROAD);
+      [[10, 26], [26, 26], [40, 26]].forEach(function (p) { for (var a = 0; a < 6; a++) for (var b = 0; b < 3; b++) set(p[0] + a, p[1] + b, T.BUILD); });
+      for (x = 12; x <= 46; x += 4) set(x, 23, T.DRIVE);
+      depot = { x: 5, y: 8 }; set(5, 8, T.DEPOT); set(5, 9, T.DEPOT);
+    } else if (d.gen === "pass") {
+      for (y = 0; y < h; y++) for (x = 0; x < w; x++) set(x, y, T.ROCK);
+      var lanes = [3, 11, 19, 27, 35];
+      lanes.forEach(function (y) { for (var x = 4; x <= w - 5; x++) { set(x, y - 1, T.LOT); set(x, y + 2, T.LOT); } });
+      lanes.forEach(function (y, i) {
+        hroad(y, 4, w - 5, 2);
+        if (i < lanes.length - 1) { var xs = i % 2 === 0 ? w - 7 : 4; for (var yy = y; yy <= lanes[i + 1] + 1; yy++) { if (get(xs - 1, yy) !== T.ROAD) set(xs - 1, yy, T.LOT); if (get(xs + 2, yy) !== T.ROAD) set(xs + 2, yy, T.LOT); } vroad(xs, y, lanes[i + 1] + 1, 2); }
+      });
+      for (x = 4; x <= w - 5; x++) for (k = 0; k < 2; k++) prio[(3 + k) * w + x] = 1;
+      for (y = 0; y < h; y++) for (x = 0; x < w; x++) grade[y * w + x] = 0.7;
+      // lay-bys to pull over in
+      [[20, 8], [44, 16], [14, 24], [50, 31], [30, 39]].forEach(function (p) { for (var a = 0; a < 4; a++) for (var b = 0; b < 2; b++) set(p[0] + a, p[1] + b, T.LOT); });
+      set(3, 35, T.DEPOT); set(3, 36, T.DEPOT);
+      depot = { x: 3, y: 35 };
+    }
+    // fill in pockets: a patch of ground walled in on three sides is a dead end nobody can turn in
+    for (var pass = 0; pass < 3; pass++) for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
+      var tv0 = get(x, y); if (tv0 !== T.LOT && tv0 !== T.PARK) continue;
+      var walls = [get(x + 1, y), get(x - 1, y), get(x, y + 1), get(x, y - 1)].filter(solidTile).length;
+      if (walls >= 3) set(x, y, d.gen === "pass" ? T.ROCK : T.BUILD);
+    }
+    // count the road
+    var roads = [], drives = [];
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) { var v = t[y * w + x]; if (v === T.ROAD) roads.push(y * w + x); if (v === T.DRIVE) drives.push(y * w + x); }
+    return { w: w, h: h, t: t, grade: grade, prio: prio, depot: depot, roads: roads, drives: drives };
+  }
+  function solidTile(v) { return v === T.BUILD || v === T.CAR || v === T.ROCK; }
+
+  // --- a night ---
+  function startNight(g, di, seed) {
+    var d = C.DISTRICTS[di], map = genMap(d), s = stats(g), r = rng((seed || (g.seed * 7919 + g.nights * 104729 + di * 31)) >>> 0);
+    var cw = map.w * SUB, ch = map.h * SUB, n = cw * ch;
+    var depth = new Float32Array(n), salt = new Float32Array(n), solid = new Uint8Array(n), kind = new Uint8Array(n);
+    for (var cy = 0; cy < ch; cy++) for (var cx = 0; cx < cw; cx++) {
+      var tv = map.t[(cy / SUB | 0) * map.w + (cx / SUB | 0)], i = cy * cw + cx;
+      kind[i] = tv; solid[i] = solidTile(tv) ? 1 : 0;
+      depth[i] = solid[i] ? 0 : d.start * (0.92 + 0.16 * r());
+    }
+    // tonight's weather: the forecast picks one, the district sets how hard it falls
+    var wpool = ["LIGHT", "STEADY", "STEADY", "HEAVY"];
+    if (d.fall[1] > 0.7) wpool.push("BLIZZARD");
+    if (d.ice) wpool.push("SLEET");
+    var wid = wpool[Math.floor(r() * wpool.length)], weather = C.WEATHER.filter(function (x) { return x.id === wid; })[0];
+    var fall = (d.fall[0] + (d.fall[1] - d.fall[0]) * r()) * weather.mul;
+    var run = { g: g, di: di, d: d, map: map, s: s, rng: r, cw: cw, ch: ch, depth: depth, salt: salt, solid: solid, kind: kind, natural: d.start, weather: weather, fall: fall,
+      t: 0, len: d.night + s.extra, trucks: [], events: [], over: false, avalancheT: 40, prioMet: null, saltStock: s.salt };
+    var dp = map.depot;
+    run.trucks.push(newTruck(run, (dp.x + 1.5) * TS, (dp.y + 0.5) * TS, 0, false));
+    for (var k = 0; k < s.crew; k++) run.trucks.push(newTruck(run, (dp.x + 1.5) * TS, (dp.y + 0.5) * TS + (k + 1) * 6, 0, true, k));
+    run.player = run.trucks[0];
+    return run;
+  }
+  function newTruck(run, x, y, h, ai, k) {
+    return { x: x, y: y, h: h, v: 0, thr: 0, steer: 0, angle: 0, wantAngle: 0, down: true, salting: false, load: 0, ai: ai, k: k || 0, plan: null, think: 0, stuck: 0 };
+  }
+  function cellAt(run, x, y) { var cx = Math.floor(x / CS), cy = Math.floor(y / CS); if (cx < 0 || cy < 0 || cx >= run.cw || cy >= run.ch) return -1; return cy * run.cw + cx; }
+  function tileAt(run, x, y) { var tx = Math.floor(x / TS), ty = Math.floor(y / TS); if (tx < 0 || ty < 0 || tx >= run.map.w || ty >= run.map.h) return T.ROCK; return run.map.t[ty * run.map.w + tx]; }
+  function blocked(run, x, y) { return solidTile(tileAt(run, x, y)); }
+
+  // drop snow at a point; if it lands on a building, slide it back toward `from` until it finds ground
+  function deposit(run, x, y, amt, fx, fy) {
+    if (amt <= 0) return 0;
+    for (var k = 0; k < 6; k++) {
+      var i = cellAt(run, x, y);
+      if (i >= 0 && !run.solid[i]) {
+        // spread a little so windrows look like ridges, not spikes
+        run.depth[i] += amt * 0.6;
+        var n1 = cellAt(run, x + CS, y), n2 = cellAt(run, x - CS, y), n3 = cellAt(run, x, y + CS), n4 = cellAt(run, x, y - CS), rest = amt * 0.4, nn = [n1, n2, n3, n4].filter(function (q) { return q >= 0 && !run.solid[q]; });
+        if (!nn.length) run.depth[i] += rest; else nn.forEach(function (q) { run.depth[q] += rest / nn.length; });
+        return amt;
+      }
+      x += (fx - x) * 0.3; y += (fy - y) * 0.3;
+    }
+    return 0;
+  }
+
+  // --- the blade ---
+  function bladeGeom(run, tr) {
+    var s = run.s, ch = Math.cos(tr.h), sh = Math.sin(tr.h);
+    var fx = tr.x + ch * 20, fy = tr.y + sh * 20;
+    // the blade runs across the truck, swung by the angle
+    var px = -sh, py = ch, ca = Math.cos(tr.angle), sa = Math.sin(tr.angle);
+    // a positive angle swings the +across end forward, so snow rolls off the other end
+    var dx = px * ca + ch * sa, dy = py * ca + sh * sa;
+    var hw = s.width / 2, wingW = s.wing ? 12 * s.wing : 0;
+    // the trailing end is the one swung back (dot with heading smaller)
+    var trailSign = tr.angle > 0 ? -1 : 1;
+    var aEnd = { x: fx + dx * (hw + (trailSign > 0 ? wingW : 0)), y: fy + dy * (hw + (trailSign > 0 ? wingW : 0)) };
+    var bEnd = { x: fx - dx * (hw + (trailSign < 0 ? wingW : 0)), y: fy - dy * (hw + (trailSign < 0 ? wingW : 0)) };
+    var trail = Math.abs(tr.angle) < 0.03 ? null : (trailSign > 0 ? aEnd : bEnd);
+    return { fx: fx, fy: fy, dx: dx, dy: dy, a: aEnd, b: bEnd, trail: trail, out: trail ? { x: (trail.x - fx) / (hw + wingW || 1), y: (trail.y - fy) / (hw + wingW || 1) } : null };
+  }
+  function plowStep(run, tr, dt) {
+    var s = run.s, G = bladeGeom(run, tr);
+    if (tr.down && tr.v > 4) {
+      // scrape every cell under the blade
+      var L = Math.hypot(G.a.x - G.b.x, G.a.y - G.b.y), steps = Math.max(2, Math.ceil(L / 4));
+      var seen = {};
+      for (var k = 0; k <= steps; k++) {
+        var px = G.b.x + (G.a.x - G.b.x) * k / steps, py = G.b.y + (G.a.y - G.b.y) * k / steps;
+        for (var f = 0; f < 2; f++) {
+          var i = cellAt(run, px + Math.cos(tr.h) * f * 5, py + Math.sin(tr.h) * f * 5);
+          if (i < 0 || run.solid[i] || seen[i]) continue; seen[i] = 1;
+          var take = run.depth[i] - s.residual;
+          if (take > 0) { run.depth[i] -= take; tr.load += take; }
+        }
+      }
+    }
+    if (tr.load <= 0) { tr.load = 0; return; }
+    // an angled blade rolls the snow off its trailing end: a windrow
+    if (G.trail && tr.down && tr.v > 4) {
+      var roll = tr.load * Math.min(1, 6 * Math.abs(Math.sin(tr.angle)) * dt);
+      var off = 8 + 10 * s.wing;
+      var put = deposit(run, G.trail.x + G.out.x * off - Math.cos(tr.h) * 4, G.trail.y + G.out.y * off - Math.sin(tr.h) * 4, roll, G.fx, G.fy);
+      tr.load -= put;
+    }
+    // the snowblower throws a loaded blade far off the road
+    if (s.blower && tr.load > s.cap * 0.2 && tr.down) {
+      var dirx = G.out ? G.out.x : -Math.sin(tr.h), diry = G.out ? G.out.y : Math.cos(tr.h);
+      var dist = 70 + 45 * s.blower, blow = tr.load * Math.min(1, 2.5 * dt);
+      var bx = G.fx + dirx * dist, by = G.fy + diry * dist;
+      var got = 0; for (var q = 0; q < 3; q++) got += deposit(run, bx + (run.rng() - 0.5) * 20, by + (run.rng() - 0.5) * 20, blow / 3, G.fx, G.fy);
+      tr.load -= got; tr.blowing = got > 0 ? 0.2 : tr.blowing;
+    }
+    // too much: it spills over the ends and the top
+    if (tr.load > s.cap) {
+      var over = tr.load - s.cap;
+      deposit(run, G.a.x, G.a.y, over * 0.3, G.fx, G.fy); deposit(run, G.b.x, G.b.y, over * 0.3, G.fx, G.fy);
+      deposit(run, G.fx + Math.cos(tr.h) * 10, G.fy + Math.sin(tr.h) * 10, over * 0.4, tr.x, tr.y);
+      tr.load = s.cap;
+      run.events.push({ e: "spill", x: G.fx, y: G.fy });
+    }
+  }
+  // lift the blade: whatever it carried is left in a pile right there
+  function setBlade(run, tr, down) {
+    if (tr.down === down) return;
+    tr.down = down;
+    if (!down && tr.load > 0) {
+      var G = bladeGeom(run, tr), per = tr.load / 5;
+      for (var k = 0; k < 5; k++) deposit(run, G.fx + Math.cos(tr.h) * 6 + (k - 2) * G.dx * 8, G.fy + Math.sin(tr.h) * 6 + (k - 2) * G.dy * 8, per, tr.x, tr.y);
+      run.events.push({ e: "dump", x: G.fx, y: G.fy, amt: tr.load });
+      tr.load = 0;
+    }
+  }
+
+  // --- driving ---
+  function drive(run, tr, dt) {
+    var s = run.s, ci = cellAt(run, tr.x, tr.y);
+    var icy = run.weather.ice && !(ci >= 0 && run.salt[ci] > 0);
+    var grip = icy ? s.grip : 1;
+    var deep = ci >= 0 ? run.depth[ci] : 0;
+    var top = (tr.ai ? 0.8 + 0.07 * s.training : 1) * s.speed / (1 + 0.9 * tr.load / s.cap) / (1 + Math.max(0, deep - 10) / 40);
+    var want = tr.thr >= 0 ? tr.thr * top : tr.thr * 70;
+    var acc = 260 * grip;
+    tr.v += Math.max(-acc * dt, Math.min(acc * dt, want - tr.v));
+    // hills: uphill (north) is slower, downhill a little faster; a loaded blade makes it worse
+    var tx = Math.floor(tr.x / TS), ty = Math.floor(tr.y / TS), gr = run.map.grade[Math.max(0, Math.min(run.map.h - 1, ty)) * run.map.w + Math.max(0, Math.min(run.map.w - 1, tx))] || 0;
+    if (gr) tr.v += Math.sin(tr.h) * gr * 70 * dt * (1 + tr.load / s.cap) * (icy ? 1.6 : 1);
+    var turn = 2.4 * Math.max(-1, Math.min(1, tr.steer)) * Math.min(1, Math.abs(tr.v) / 50) * (tr.v < 0 ? -1 : 1) * (icy ? 0.6 + 0.4 * grip : 1);
+    tr.h += turn * dt;
+    var nx = tr.x + Math.cos(tr.h) * tr.v * dt, ny = tr.y + Math.sin(tr.h) * tr.v * dt;
+    // the truck's corners against buildings, rocks and parked cars
+    var hit = false;
+    [[16, 9], [16, -9], [-14, 9], [-14, -9]].forEach(function (c) { var cx2 = nx + Math.cos(tr.h) * c[0] - Math.sin(tr.h) * c[1], cy2 = ny + Math.sin(tr.h) * c[0] + Math.cos(tr.h) * c[1]; if (blocked(run, cx2, cy2) || cx2 < 0 || cy2 < 0 || cx2 > run.map.w * TS || cy2 > run.map.h * TS) hit = true; });
+    if (hit) { if (Math.abs(tr.v) > 60) run.events.push({ e: "bump", x: tr.x, y: tr.y }); tr.v *= -0.25; tr.stuck += dt; }
+    else { tr.x = nx; tr.y = ny; tr.stuck = Math.max(0, tr.stuck - dt); }
+    var ang = Math.max(-s.maxAngle, Math.min(s.maxAngle, tr.wantAngle));
+    tr.angle += Math.max(-1.8 * dt, Math.min(1.8 * dt, ang - tr.angle));
+    // salt behind the truck
+    if (tr.salting && run.saltStock > 0 && Math.abs(tr.v) > 10 && !tr.ai) {
+      run.saltStock = Math.max(0, run.saltStock - dt);
+      var rx = tr.x - Math.cos(tr.h) * 16, ry = tr.y - Math.sin(tr.h) * 16;
+      for (var k = -2; k <= 2; k++) { var i = cellAt(run, rx - Math.sin(tr.h) * k * 6, ry + Math.cos(tr.h) * k * 6); if (i >= 0 && !run.solid[i]) run.salt[i] = 80; }
+    }
+    // the depot refills the salt
+    if (tileAt(run, tr.x, tr.y) === T.DEPOT || Math.hypot(tr.x - (run.map.depot.x + 0.5) * TS, tr.y - (run.map.depot.y + 1) * TS) < TS * 1.6) { if (run.saltStock < s.salt) { run.saltStock = Math.min(s.salt, run.saltStock + 12 * dt); } }
+  }
+
+  // --- the crew (and the balance bot) drive themselves ---
+  function isRoad(v) { return v === T.ROAD || v === T.DEPOT; }
+  function roadClear(run, tile) {
+    // a tile is clear when at least 12 of its 16 cells are under the line (a windrow at the curb is fine)
+    var w = run.map.w, tx = tile % w, ty = tile / w | 0, bad = 0;
+    for (var a = 0; a < SUB; a++) for (var b = 0; b < SUB; b++) { if (run.depth[(ty * SUB + b) * run.cw + tx * SUB + a] >= CLEAR) bad++; }
+    return bad <= 4;
+  }
+  function tileDepth(run, tile) {
+    var w = run.map.w, tx = tile % w, ty = tile / w | 0, sum = 0;
+    for (var a = 0; a < SUB; a++) for (var b = 0; b < SUB; b++) sum += run.depth[(ty * SUB + b) * run.cw + tx * SUB + a];
+    return sum / (SUB * SUB);
+  }
+  function bfsPath(run, from, goalFn, maxN, any) {
+    var w = run.map.w, h = run.map.h, prev = new Int32Array(w * h).fill(-2), q = [from], head = 0;
+    prev[from] = -1;
+    while (head < q.length && head < (maxN || 4000)) {
+      var u = q[head++];
+      if (u !== from && goalFn(u)) { var path = [u]; while (prev[path[0]] >= 0) path.unshift(prev[path[0]]); return path; }
+      var ux = u % w, uy = u / w | 0;
+      for (var k = 0; k < 4; k++) {
+        var vx = ux + [1, -1, 0, 0][k], vy = uy + [0, 0, 1, -1][k];
+        if (vx < 0 || vy < 0 || vx >= w || vy >= h) continue;
+        var v = vy * w + vx, tv = run.map.t[v];
+        if (prev[v] !== -2 || solidTile(tv)) continue;
+        if (!any && tv !== T.ROAD && tv !== T.DEPOT) continue;
+        prev[v] = u; q.push(v);
+      }
+    }
+    return null;
+  }
+  // several nearby goals at once, so the driver can prefer the one straight ahead
+  function bfsGoals(run, from, goalFn, want) {
+    var w = run.map.w, h = run.map.h, prev = new Int32Array(w * h).fill(-2), dist = new Int32Array(w * h), q = [from], head = 0, out = [];
+    prev[from] = -1;
+    while (head < q.length && out.length < want) {
+      var u = q[head++];
+      if (u !== from && goalFn(u)) out.push(u);
+      var ux = u % w, uy = u / w | 0;
+      for (var k = 0; k < 4; k++) {
+        var vx = ux + [1, -1, 0, 0][k], vy = uy + [0, 0, 1, -1][k];
+        if (vx < 0 || vy < 0 || vx >= w || vy >= h) continue;
+        var v = vy * w + vx, tv = run.map.t[v];
+        if (prev[v] !== -2 || (tv !== T.ROAD && tv !== T.DEPOT)) continue;
+        prev[v] = u; dist[v] = dist[u] + 1; q.push(v);
+      }
+    }
+    return out.map(function (g0) { var p = [g0]; while (prev[p[0]] >= 0) p.unshift(prev[p[0]]); return { goal: g0, path: p, d: dist[g0] }; });
+  }
+  // which way should the blade throw here? toward lawn or lot, away from driveways and the road
+  function sideScore(run, x, y, nx, ny) {
+    var sc = 0;
+    for (var k = 1; k <= 3; k++) {
+      var tv = tileAt(run, x + nx * TS * k, y + ny * TS * k);
+      if (tv === T.LOT || tv === T.PARK) sc += 3 / k; else if (tv === T.DRIVE) sc -= 4 / k; else if (tv === T.ROAD || tv === T.DEPOT) sc -= 0.6 / k; else sc -= 0.3 / k;
+    }
+    return sc;
+  }
+  function autoDrive(run, tr, dt, skill) {
+    var w = run.map.w;
+    tr.think -= dt;
+    var here = Math.floor(tr.y / TS) * w + Math.floor(tr.x / TS), onRoad = isRoad(run.map.t[here]);
+    if (tr.think <= 0 || !tr.plan || !tr.plan.length) {
+      tr.think = 0.6;
+      if (!onRoad) tr.plan = bfsPath(run, here, function (u) { return isRoad(run.map.t[u]); }, 6000, true);
+      else {
+        // the nearest road that still needs plowing (crews keep to their own share of the town)
+        var share = tr.ai ? run.trucks.filter(function (q) { return q.ai; }).length + 1 : 1, mine = tr.ai ? tr.k + 1 : 0;
+        tr.plan = share > 1 ? bfsPath(run, here, function (u) { return run.map.t[u] === T.ROAD && (Math.floor((u % w) / 8) + Math.floor((u / w | 0) / 8)) % share === mine && !roadClear(run, u) && !(tr.skip && tr.skip[u] > run.t); }) : null;
+        if (!tr.plan) {
+          var cands = bfsGoals(run, here, function (u) { return run.map.t[u] === T.ROAD && !roadClear(run, u) && !(tr.skip && tr.skip[u] > run.t); }, 24);
+          var best = null, bs = 1e9, hx = Math.cos(tr.h), hy = Math.sin(tr.h);
+          cands.forEach(function (c) {
+            // first step direction vs heading: turning round costs as much as five tiles
+            var f = c.path.length > 1 ? c.path[1] : c.goal, fx = (f % w) - (here % w), fy = (f / w | 0) - (here / w | 0);
+            var turn = (fx || fy) ? (1 - (fx * hx + fy * hy) / Math.hypot(fx, fy)) / 2 : 0;
+            var sc = c.d + turn * 10;
+            if (sc < bs) { bs = sc; best = c; }
+          });
+          tr.plan = best ? best.path : null;
+        }
+      }
+      // the same goal for too long (a dead end, a pile): leave it for a while
+      var goal = tr.plan ? tr.plan[tr.plan.length - 1] : -1;
+      if (goal === tr.goal) { tr.goalT += 0.6; if (tr.goalT > 7) { (tr.skip = tr.skip || {})[goal] = run.t + 40; tr.plan = null; tr.goalT = 0; } }
+      else { tr.goal = goal; tr.goalT = 0; }
+    }
+    if (!tr.plan || !tr.plan.length) { tr.thr = 0; return; }
+    if (tr.plan[0] === here && tr.plan.length > 1) tr.plan.shift();
+    var nxt = tr.plan[0], gx = (nxt % w + 0.5) * TS, gy = ((nxt / w | 0) + 0.5) * TS, dist = Math.hypot(gx - tr.x, gy - tr.y);
+    if (nxt === here && dist < 10) { tr.plan.shift(); if (!tr.plan.length) tr.plan = null; return; }
+    var want = Math.atan2(gy - tr.y, gx - tr.x), diff = Math.atan2(Math.sin(want - tr.h), Math.cos(want - tr.h));
+    tr.steer = Math.max(-1, Math.min(1, diff * 2.4));
+    // slow down for corners ahead
+    var corner = 0;
+    if (tr.plan.length > 1) { var n2 = tr.plan[1], a1 = Math.atan2((n2 / w | 0) - (nxt / w | 0), n2 % w - nxt % w); corner = Math.abs(Math.atan2(Math.sin(a1 - want), Math.cos(a1 - want))); }
+    tr.thr = Math.abs(diff) > 2.0 ? -0.6 : Math.abs(diff) > 0.8 ? 0.3 : (corner > 0.6 && dist < 50 ? 0.45 : 1);
+    // not getting anywhere: back up and turn for a moment
+    if (tr.backT > 0) { tr.backT -= dt; tr.thr = -0.8; tr.steer = tr.backSteer; return; }
+    if (Math.abs(tr.v) < 10 && tr.thr > 0.2) tr.slowT = (tr.slowT || 0) + dt; else tr.slowT = 0;
+    if (tr.slowT > 1 || tr.stuck > 0.6) { tr.backT = 0.9; tr.backSteer = run.rng() < 0.5 ? 1 : -1; tr.slowT = 0; tr.stuck = 0; tr.plan = null; return; }
+    // angle the blade toward the better side
+    var lx = -Math.sin(tr.h), ly = Math.cos(tr.h);
+    var left = sideScore(run, tr.x, tr.y, lx, ly), right = sideScore(run, tr.x, tr.y, -lx, -ly);
+    var aim = left >= right ? 1 : -1;
+    // a negative angle rolls snow off the +across end
+    tr.wantAngle = (skill > 0.5 || run.rng() < skill) ? -aim * run.s.maxAngle : 0;
+    if (!tr.down) setBlade(run, tr, true);
+    // a full straight blade: lift it over a lawn if there's one
+    if (tr.load > run.s.cap * 0.95 && Math.abs(tr.angle) < 0.05) { var G = bladeGeom(run, tr); if (tileAt(run, G.fx, G.fy) === T.LOT) { setBlade(run, tr, false); setBlade(run, tr, true); } }
+  }
+
+  // --- one step ---
+  function step(run, dt) {
+    if (run.over) return;
+    run.t += dt;
+    var d = run.d, rate = run.fall / 60 * dt;  // cm per second
+    run.natural += rate;
+    var depth = run.depth, salt = run.salt, solid = run.solid;
+    for (var i = 0; i < depth.length; i++) {
+      if (solid[i]) continue;
+      if (salt[i] > 0) { salt[i] -= dt; if (depth[i] > 0) depth[i] = Math.max(0, depth[i] - 0.6 * dt); }
+      else depth[i] += rate;
+    }
+    // avalanches on the pass bury a stretch of road
+    if (d.avalanche) {
+      run.avalancheT -= dt;
+      if (run.avalancheT <= 0) {
+        run.avalancheT = 45 + run.rng() * 30;
+        var tile = run.map.roads[Math.floor(run.rng() * run.map.roads.length)], tx = tile % run.map.w, ty = tile / run.map.w | 0;
+        for (var a = -2; a <= 2; a++) for (var b = -1; b <= 2; b++) { var cx = (tx + a) * SUB, cy = (ty + b) * SUB; for (var u = 0; u < SUB; u++) for (var v = 0; v < SUB; v++) { var k = (cy + v) * run.cw + cx + u; if (k >= 0 && k < depth.length && !solid[k]) depth[k] += 28 * (1 - Math.abs(a) / 3); } }
+        run.events.push({ e: "avalanche", x: (tx + 0.5) * TS, y: (ty + 0.5) * TS });
+      }
+    }
+    run.trucks.forEach(function (tr) {
+      if (tr.ai) autoDrive(run, tr, dt, 0.55 + 0.15 * run.s.training);
+      drive(run, tr, dt);
+      plowStep(run, tr, dt);
+      if (tr.blowing > 0) tr.blowing -= dt;
+    });
+    // the priority deadline (the airport's flight)
+    if (d.prioAt && run.prioMet === null && run.t >= run.len * d.prioAt) run.prioMet = prioFraction(run) >= 0.9;
+    if (run.t >= run.len) end(run);
+  }
+  function prioFraction(run) {
+    var n = 0, c = 0;
+    for (var i = 0; i < run.map.prio.length; i++) if (run.map.prio[i] && run.map.t[i] === T.ROAD) { n++; if (roadClear(run, i)) c++; }
+    return n ? c / n : 1;
+  }
+  function clearFraction(run) { var c = 0; run.map.roads.forEach(function (t) { if (roadClear(run, t)) c++; }); return c / (run.map.roads.length || 1); }
+  // a driveway is buried when it holds far more than the snow that fell on it
+  function buried(run) { var n = 0; run.map.drives.forEach(function (t) { if (tileDepth(run, t) > run.natural + 14) n++; }); return n; }
+
+  function end(run) {
+    if (run.over) return;
+    run.over = true;
+    var g = run.g, d = run.d, s = run.s;
+    var frac = clearFraction(run), clearTiles = Math.round(frac * run.map.roads.length);
+    var prioOk = d.prioAt ? !!run.prioMet : prioFraction(run) >= 0.9;
+    var base = Math.round(clearTiles * 0.5 * d.pay * s.pay), bonus = prioOk ? Math.round(d.prioPay * s.pay) : 0, fine = buried(run) * Math.round(6 * d.pay);
+    var pay = Math.max(0, base + bonus - fine);
+    var stars = d.stars.filter(function (x) { return frac >= x; }).length;
+    g.money += pay; g.total += pay; g.nights++;
+    var prev = g.stars[d.id] || 0;
+    if (stars > prev) g.stars[d.id] = stars;
+    g.best[d.id] = Math.max(g.best[d.id] || 0, Math.round(frac * 100));
+    var opened = false;
+    if (stars >= 2 && prioOk && g.open === run.di + 1 && run.di + 1 < C.DISTRICTS.length) { g.open++; opened = true; }
+    var finished = stars >= 2 && prioOk && run.di === C.DISTRICTS.length - 1 && !g.done;
+    if (finished) g.done = true;
+    run.summary = { frac: frac, clearTiles: clearTiles, roadTiles: run.map.roads.length, base: base, bonus: bonus, prioOk: prioOk, fine: fine, buried: fine ? fine / Math.round(6 * d.pay) : 0, pay: pay, stars: stars, opened: opened, finished: finished, weather: run.weather.name };
+    run.events.push({ e: "dawn" });
+  }
+
+  function save(g) { return JSON.stringify(g); }
+  function load(str) { var g = JSON.parse(str); if (!g || g.v !== 1 || typeof g.ups !== "object") throw new Error("not a PLOWLIGHT save"); return g; }
+
+  var api = { CLEAR: CLEAR, TS: TS, CS: CS, SUB: SUB, rng: rng, newGame: newGame, lv: lv, cost: cost, canBuy: canBuy, buy: buy, stats: stats, genMap: genMap,
+    startNight: startNight, step: step, end: end, drive: drive, plowStep: plowStep, setBlade: setBlade, bladeGeom: bladeGeom, deposit: deposit, autoDrive: autoDrive,
+    cellAt: cellAt, tileAt: tileAt, roadClear: roadClear, tileDepth: tileDepth, clearFraction: clearFraction, prioFraction: prioFraction, buried: buried, bfsPath: bfsPath, save: save, load: load };
+  if (node) module.exports = api;
+  else root.PLOW = api;
+})(this);
+
+</script>
+<script>
+// bot.js — drives the player's truck like a steady player (the same driver the crew trucks use),
+// buys upgrades at dawn, and works through the districts. Used to tune pay and to prove the game can be finished.
+//   node bot.js [nights] [seed]  -> one line per night
+(function (root) {
+"use strict";
+var node = typeof module !== "undefined" && module.exports;
+var P = node ? require("./plow.js") : root.PLOW, C = node ? require("./content.js") : root.CONTENT;
+
+function night(g, di, skill, seed) {
+  var run = P.startNight(g, di, seed), dt = 1 / 30;
+  run.player.bot = true;
+  while (!run.over) { P.autoDrive(run, run.player, dt, skill === undefined ? 1 : skill); P.step(run, dt); run.events.length = 0; }
+  return run;
+}
+var PREF = ["BLADE", "ENGINE", "ANGLE", "SPEED", "CONTRACT", "CREW", "SCRAPER", "CHAINS", "WING", "TRAINING", "SALT", "OVERTIME", "BLOWER"];
+function shop(g) {
+  for (var guard = 0; guard < 60; guard++) {
+    var opts = PREF.filter(function (id) { return P.canBuy(g, id); });
+    if (!opts.length) return;
+    // a crew truck is worth saving for once the basics are bought
+    if (P.lv(g, "BLADE") >= 2 && P.lv(g, "ENGINE") >= 2 && P.lv(g, "CREW") < C.UPGRADE.CREW.max) {
+      if (P.canBuy(g, "CREW")) { P.buy(g, "CREW"); continue; }
+      if (g.money + 150 < P.cost(g, "CREW") * 1.0 && P.cost(g, "CREW") < 4000) opts = opts.filter(function (id) { return P.cost(g, id) < 120; });
+      if (!opts.length) return;
+    }
+    // the cheapest first, but save up for a crew truck once one is close
+    opts.sort(function (a, b) { return P.cost(g, a) - P.cost(g, b); });
+    P.buy(g, opts[0]);
+  }
+}
+function campaign(maxNights, seed, skill) {
+  var g = P.newGame({ seed: seed || 3 }), log = [];
+  for (var n = 0; n < (maxNights || 80); n++) {
+    var di = Math.min(g.open, C.DISTRICTS.length) - 1;
+    var run = night(g, di, skill);
+    log.push({ night: n + 1, d: C.DISTRICTS[di].id, w: run.weather.id, clear: Math.round(run.summary.frac * 100), stars: run.summary.stars, pay: run.summary.pay, prio: run.summary.prioOk, buried: run.summary.buried, money: g.money });
+    if (g.done) break;
+    shop(g);
+  }
+  return { g: g, log: log };
+}
+var api = { night: night, shop: shop, campaign: campaign, PREF: PREF };
+if (node) module.exports = api; else root.BOT = api;
+if (node && require.main === module) {
+  var r = campaign(+(process.argv[2] || 60), +(process.argv[3] || 3), process.argv[4] === undefined ? 1 : +process.argv[4]);
+  r.log.forEach(function (l) { console.log(JSON.stringify(l)); });
+  console.log("done", !!r.g.done, "in", r.log.length, "nights; ups", JSON.stringify(r.g.ups));
+}
+})(this);
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var C = window.CONTENT, P = window.PLOW, BOT = window.BOT, T = C.T, TS = C.TILE, CS = C.CELL;
+  var ED = window.PLOWLIGHT_EDITION || "full", DEMO = ED === "demo";
+  var PROFILE_URL = "https://kqmigqkqri.itch.io/";
+  var STORE_URL = "https://kqmigqkqri.itch.io/plowlight";
+  var W = 1280, H = 800;
+  var SANS = "'Segoe UI', system-ui, -apple-system, sans-serif", SERIF = "Georgia, 'Times New Roman', serif";
+  var COL = { text: "#eef3ff", dim: "#9eabc8", gold: "#ffb347", good: "#8fe3a8", bad: "#ff8a7a", panel: "rgba(12,18,32,0.94)", line: "#3b4a6e" };
+  var cv = document.getElementById("c"), cx = cv.getContext("2d"), scale = 1, dpr = 1;
+
+  // ---------------- saving ----------------
+  var KEY = DEMO ? "plowlight.demo.v1" : "plowlight.v1", SKEY = KEY + ".settings";
+  var settings = { sound: true, music: true, seenHelp: false };
+  try { var ss = localStorage.getItem(SKEY); if (ss) { var so = JSON.parse(ss); for (var k0 in so) settings[k0] = so[k0]; } } catch (e) {}
+  function saveSettings() { try { localStorage.setItem(SKEY, JSON.stringify(settings)); } catch (e) {} }
+  var g = null;
+  try { var raw = localStorage.getItem(KEY); if (raw) g = P.load(raw); } catch (e) { g = null; }
+  if (!g) g = P.newGame({ demo: DEMO, seed: (Date.now() % 100000) + 1 });
+  function persist() { try { localStorage.setItem(KEY, P.save(g)); } catch (e) {} }
+
+  // ---------------- sound: engine, scrape, blower, a quiet night tune ----------------
+  var ac = null, master = null, eng = null, scrape = null, blowS = null;
+  function noiseBuf(a) { var len = a.sampleRate * 2, buf = a.createBuffer(1, len, a.sampleRate), d = buf.getChannelData(0); for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1; return buf; }
+  function audio() {
+    try {
+      if (!ac) {
+        ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = 0.8; master.connect(ac.destination);
+        var o = ac.createOscillator(); o.type = "sawtooth"; o.frequency.value = 45; var lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 260;
+        eng = ac.createGain(); eng.gain.value = 0; o.connect(lp); lp.connect(eng); eng.connect(master); o.start(); eng.osc = o;
+        var n1 = ac.createBufferSource(); n1.buffer = noiseBuf(ac); n1.loop = true; var bp = ac.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 700; bp.Q.value = 0.8;
+        scrape = ac.createGain(); scrape.gain.value = 0; n1.connect(bp); bp.connect(scrape); scrape.connect(master); n1.start();
+        var n2 = ac.createBufferSource(); n2.buffer = noiseBuf(ac); n2.loop = true; var hp = ac.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 1800;
+        blowS = ac.createGain(); blowS.gain.value = 0; n2.connect(hp); hp.connect(blowS); blowS.connect(master); n2.start();
+      }
+      if (ac.state === "suspended") ac.resume();
+      return ac;
+    } catch (e) { return null; }
+  }
+  function tone(f, d, type, vol, delay, slide) {
+    if (!settings.sound) return; var a = audio(); if (!a) return;
+    var t0 = a.currentTime + (delay || 0), o = a.createOscillator(), gn = a.createGain();
+    o.type = type || "sine"; o.frequency.setValueAtTime(f, t0); if (slide) o.frequency.exponentialRampToValueAtTime(slide, t0 + d);
+    gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol || 0.04, t0 + 0.005); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+    o.connect(gn); gn.connect(master); o.start(t0); o.stop(t0 + d + 0.03);
+  }
+  function sfx(k) {
+    if (k === "ui") tone(1100, 0.04, "sine", 0.03);
+    else if (k === "bad") tone(140, 0.12, "square", 0.03);
+    else if (k === "buy") { tone(660, 0.08, "triangle", 0.05); tone(990, 0.16, "triangle", 0.05, 0.06); }
+    else if (k === "bump") tone(90, 0.2, "square", 0.05, 0, 50);
+    else if (k === "dump") tone(160, 0.35, "triangle", 0.05, 0, 70);
+    else if (k === "blade") tone(320, 0.12, "square", 0.025, 0, 200);
+    else if (k === "spill") tone(200, 0.15, "sawtooth", 0.015, 0, 120);
+    else if (k === "avalanche") { tone(60, 1.2, "sawtooth", 0.06, 0, 30); tone(90, 1, "square", 0.03, 0.1, 40); }
+    else if (k === "dawn") [392, 494, 587, 784].forEach(function (f, i) { tone(f, 0.7, "triangle", 0.045, i * 0.14); });
+  }
+  var music = { next: 0, i: 0 }, spillT = 0;
+  function ambient() {
+    if (!ac || ac.state !== "running") return;
+    var tr = screen === "night" && run && !paused && !run.over ? run.player : null, on = settings.sound && tr;
+    eng.gain.setTargetAtTime(on ? 0.035 + Math.abs(tr.v) / 6000 : 0, ac.currentTime, 0.1);
+    if (tr) eng.osc.frequency.setTargetAtTime(40 + Math.abs(tr.v) * 0.35 + tr.load / 60, ac.currentTime, 0.1);
+    scrape.gain.setTargetAtTime(on && tr.down && tr.v > 10 ? 0.02 + tr.load / run.s.cap * 0.04 : 0, ac.currentTime, 0.08);
+    blowS.gain.setTargetAtTime(on && tr.blowing > 0 ? 0.05 : 0, ac.currentTime, 0.1);
+    if (!settings.music) return;
+    if (music.next < ac.currentTime) music.next = ac.currentTime + 0.05;
+    while (music.next < ac.currentTime + 0.3) {
+      var bar = Math.floor(music.i / 8) % 4, root = [0, 5, 7, 3][bar], step = music.i % 8;
+      var n = [12, 16, 19, 23, 19, 16, 14, 12][step] + root;
+      if (step % 2 === 0) bell(261.6 * Math.pow(2, n / 12 - 1), music.next, step === 0 ? 0.022 : 0.012);
+      if (step === 0) { bell(65.4 * Math.pow(2, root / 12), music.next, 0.03); }
+      music.i++; music.next += 0.42;
+    }
+  }
+  function bell(f, t0, vol) {
+    var o = ac.createOscillator(), gn = ac.createGain(); o.type = "sine"; o.frequency.value = f;
+    gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol, t0 + 0.01); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + 2.2);
+    o.connect(gn); gn.connect(master); o.start(t0); o.stop(t0 + 2.3);
+  }
+
+  // ---------------- drawing helpers ----------------
+  function rr(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
+  function text(s, x, y, size, col, align, weight, font) { cx.font = (weight || 600) + " " + size + "px " + (font || SANS); cx.fillStyle = col || COL.text; cx.textAlign = align || "left"; cx.textBaseline = "middle"; cx.fillText(s, x, y); }
+  function tw(s, size, weight, font) { cx.font = (weight || 600) + " " + size + "px " + (font || SANS); return cx.measureText(s).width; }
+  function wrap(s, x, y, maxW, size, col, lh, weight, align) {
+    var lines = [];
+    String(s).split("\n").forEach(function (p) { var ws = p.split(" "), line = ""; ws.forEach(function (w) { var t = line ? line + " " + w : w; if (tw(t, size, weight) > maxW && line) { lines.push(line); line = w; } else line = t; }); lines.push(line); });
+    lines.forEach(function (l, i) { text(l, x, y + i * lh, size, col, align, weight); });
+    return y + lines.length * lh;
+  }
+  var buttons = [], mouse = { x: -1, y: -1 };
+  function hot(x, y, w, h) { return mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h; }
+  function button(x, y, w, h, label, fn, o) {
+    o = o || {};
+    var on = hot(x, y, w, h) && !o.disabled;
+    rr(x, y, w, h, Math.min(h / 2, 12));
+    cx.fillStyle = o.disabled ? "rgba(28,34,50,0.85)" : o.primary ? (on ? "#ffc874" : COL.gold) : o.active ? "rgba(70,96,150,0.95)" : on ? "rgba(52,68,104,0.95)" : "rgba(30,40,64,0.92)"; cx.fill();
+    cx.strokeStyle = o.primary ? "#ffe0a8" : o.active ? "#c8d8ff" : "rgba(160,180,230,0.4)"; cx.lineWidth = 1.2; cx.stroke();
+    text(label, x + w / 2, y + h / 2 + 1, o.size || 14, o.disabled ? "#68728e" : o.primary ? "#2a1604" : COL.text, "center", 700);
+    if (!o.disabled && fn) buttons.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+  function glow(c, x, y, r, col, a) { var gr = c.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, col.replace("A", a)); gr.addColorStop(1, col.replace("A", 0)); c.fillStyle = gr; c.beginPath(); c.arc(x, y, r, 0, 7); c.fill(); }
+  var t0 = performance.now();
+  function now() { return (performance.now() - t0) / 1000; }
+
+  // ---------------- the town, painted once per night ----------------
+  function hash(x, y) { var v = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return v - Math.floor(v); }
+  function paintGround(map, did) {
+    var can = document.createElement("canvas"); can.width = map.w * TS; can.height = map.h * TS;
+    var c = can.getContext("2d"), lamps = [];
+    var lawn = did === "PASS" ? "#1d222a" : did === "AIRPORT" ? "#1b2421" : "#18231d";
+    c.fillStyle = lawn; c.fillRect(0, 0, can.width, can.height);
+    for (var y = 0; y < map.h; y++) for (var x = 0; x < map.w; x++) {
+      var v = map.t[y * map.w + x], px = x * TS, py = y * TS;
+      if (v === T.ROAD || v === T.DEPOT) { c.fillStyle = v === T.DEPOT ? "#3a3530" : "#2b2e36"; c.fillRect(px, py, TS, TS); }
+      else if (v === T.DRIVE) { c.fillStyle = "#4a4740"; c.fillRect(px + 4, py, TS - 8, TS); }
+      else if (v === T.PARK) { c.fillStyle = did === "OLDTOWN" ? "#3c3e46" : "#2b2e36"; c.fillRect(px, py, TS, TS); }
+      else if (v === T.LOT) { c.fillStyle = hash(x, y) < 0.5 ? lawn : "#1c2820"; c.fillRect(px, py, TS, TS); }
+      else if (v === T.ROCK) { c.fillStyle = hash(x, y) < 0.5 ? "#2c2f37" : "#33363f"; c.fillRect(px, py, TS, TS); }
+    }
+    // lane markings on long straight roads
+    c.strokeStyle = "rgba(230,200,90,0.5)"; c.lineWidth = 2; c.setLineDash([10, 12]);
+    for (y = 0; y < map.h - 1; y++) for (x = 0; x < map.w; x++) { if (map.t[y * map.w + x] === T.ROAD && map.t[(y + 1) * map.w + x] === T.ROAD && (y === 0 || map.t[(y - 1) * map.w + x] !== T.ROAD) && (y + 2 >= map.h || map.t[(y + 2) * map.w + x] !== T.ROAD)) { c.beginPath(); c.moveTo(x * TS, (y + 1) * TS); c.lineTo(x * TS + TS, (y + 1) * TS); c.stroke(); } }
+    c.setLineDash([]);
+    // buildings: roofs under snow; rocks; parked cars
+    for (y = 0; y < map.h; y++) for (x = 0; x < map.w; x++) {
+      v = map.t[y * map.w + x]; px = x * TS; py = y * TS;
+      if (v === T.BUILD) {
+        // one snowy roof per building: edges only where the building ends
+        var isB = function (xx, yy) { return xx >= 0 && yy >= 0 && xx < map.w && yy < map.h && map.t[yy * map.w + xx] === T.BUILD; };
+        var hue = Math.floor(hash(Math.floor(x / 2) * 3, Math.floor(y / 2)) * 5), walls = ["#6a4a40", "#545866", "#665446", "#465668", "#664e4e"][hue];
+        c.fillStyle = "#c4cedd"; c.fillRect(px, py, TS, TS);
+        c.fillStyle = walls;
+        if (!isB(x, y - 1)) c.fillRect(px, py, TS, 4);
+        if (!isB(x, y + 1)) c.fillRect(px, py + TS - 6, TS, 6);
+        if (!isB(x - 1, y)) c.fillRect(px, py, 4, TS);
+        if (!isB(x + 1, y)) c.fillRect(px + TS - 4, py, 4, TS);
+        if (hash(x, y * 7) < 0.12) { c.fillStyle = "#3a2a24"; c.fillRect(px + 12, py + 10, 7, 7); c.fillStyle = "#dfe7f2"; c.fillRect(px + 12, py + 9, 7, 2); }
+        if (hash(x * 5, y * 3) < 0.18 && !isB(x, y + 1)) lamps.push({ x: px + 16, y: py + TS + 2, r: 34, warm: true, win: true });
+      } else if (v === T.CAR) {
+        var cc = ["#7a2a2a", "#2a4a7a", "#3a6a3a", "#6a6a6a", "#8a7a2a"][Math.floor(hash(x, y) * 5)];
+        c.fillStyle = cc; rr2(c, px + 4, py + 7, TS - 8, TS - 14, 5); c.fill();
+        c.fillStyle = "#e8eef8"; rr2(c, px + 9, py + 9, TS - 18, TS - 18, 3); c.fill();
+      } else if (v === T.DEPOT) {
+        c.fillStyle = "#8a7a6a"; c.beginPath(); c.arc(px + 12, py + 16, 10, 0, 7); c.fill();
+      }
+      // street lamps at road corners
+      if (v === T.ROAD && x % 7 === 0 && (y === 0 || map.t[(y - 1) * map.w + x] !== T.ROAD)) lamps.push({ x: px + 16, y: py + 4, r: 110, warm: true });
+    }
+    // the priority route, faintly painted
+    c.strokeStyle = "rgba(255,170,60,0.22)"; c.lineWidth = 2;
+    for (y = 0; y < map.h; y++) for (x = 0; x < map.w; x++) if (map.prio[y * map.w + x] && map.t[y * map.w + x] === T.ROAD) { c.strokeRect(x * TS + 3, y * TS + 3, TS - 6, TS - 6); }
+    // curbs: a thin dark edge where road meets anything else, drawn over the snow so the streets read
+    var cb = document.createElement("canvas"); cb.width = can.width; cb.height = can.height; var k2 = cb.getContext("2d");
+    k2.fillStyle = "rgba(40,50,70,0.35)";
+    var road = function (xx, yy) { var q = xx >= 0 && yy >= 0 && xx < map.w && yy < map.h ? map.t[yy * map.w + xx] : -1; return q === T.ROAD || q === T.DEPOT; };
+    for (y = 0; y < map.h; y++) for (x = 0; x < map.w; x++) if (road(x, y)) {
+      if (!road(x, y - 1)) k2.fillRect(x * TS, y * TS - 1, TS, 2);
+      if (!road(x, y + 1)) k2.fillRect(x * TS, y * TS + TS - 1, TS, 2);
+      if (!road(x - 1, y)) k2.fillRect(x * TS - 1, y * TS, 2, TS);
+      if (!road(x + 1, y)) k2.fillRect(x * TS + TS - 1, y * TS, 2, TS);
+    }
+    return { can: can, lamps: lamps, curbs: cb };
+  }
+  function rr2(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
+
+  // ---------------- snow, drawn from the depth of every cell ----------------
+  var snowCan = document.createElement("canvas"), snowCtx = snowCan.getContext("2d"), snowImg = null;
+  function paintSnow(r) {
+    if (snowCan.width !== r.cw || snowCan.height !== r.ch) { snowCan.width = r.cw; snowCan.height = r.ch; snowImg = snowCtx.createImageData(r.cw, r.ch); }
+    var d = snowImg.data, dep = r.depth, sol = r.solid, cw = r.cw, salt = r.salt;
+    for (var i = 0; i < dep.length; i++) {
+      var o = i * 4;
+      if (sol[i]) { d[o + 3] = 0; continue; }
+      // under the passable line the snow is a thin dusting; over it, white
+      var z = dep[i], a = z < 0.4 ? 0 : z < 5 ? z / 5 * 0.32 : Math.min(1, 0.62 + (z - 5) / 12);
+      // light from the upper left: a ridge is brighter on its far side, shadowed on the near
+      var up = i >= cw ? dep[i - cw] : z, sh = Math.max(-28, Math.min(22, (z - up) * 2.2));
+      var base = z > 18 ? 252 : 236 + z * 0.9;
+      d[o] = Math.min(255, base - 10 + sh); d[o + 1] = Math.min(255, base - 3 + sh); d[o + 2] = Math.min(255, base + 6 + sh); d[o + 3] = a * 255;
+      if (salt[i] > 0 && z < 3) { d[o] = 120; d[o + 1] = 110; d[o + 2] = 100; d[o + 3] = 50; }
+    }
+    snowCtx.putImageData(snowImg, 0, 0);
+  }
+
+  // ---------------- trucks ----------------
+  function drawTruck(c, r, tr, t, isPlayer) {
+    var G = P.bladeGeom(r, tr);
+    c.save(); c.translate(tr.x, tr.y); c.rotate(tr.h);
+    // shadow, body, cab, beacon
+    c.fillStyle = "rgba(0,0,0,0.35)"; c.fillRect(-15, -9, 32, 22);
+    c.fillStyle = isPlayer ? "#f29b2a" : "#3a8ad8"; rr2(c, -16, -10, 26, 20, 3); c.fill();
+    c.fillStyle = isPlayer ? "#ffbf5a" : "#5aa8f0"; rr2(c, 2, -9, 12, 18, 3); c.fill();
+    c.fillStyle = "#1a2230"; c.fillRect(9, -7, 4, 14);
+    c.fillStyle = "#2a2a2a"; c.fillRect(-14, -10, 6, 3); c.fillRect(-14, 7, 6, 3); c.fillRect(4, -10, 6, 3); c.fillRect(4, 7, 6, 3);
+    if (tr.salting && r.saltStock > 0) { c.fillStyle = "rgba(220,200,170,0.6)"; for (var k = 0; k < 6; k++) c.fillRect(-22 - Math.random() * 12, (Math.random() - 0.5) * 20, 2, 2); }
+    c.restore();
+    // the blade
+    c.strokeStyle = tr.down ? "#c8d0dc" : "#7a8290"; c.lineWidth = tr.down ? 5 : 3; c.lineCap = "round";
+    c.beginPath(); c.moveTo(G.a.x, G.a.y); c.lineTo(G.b.x, G.b.y); c.stroke();
+    c.strokeStyle = "#3a4250"; c.lineWidth = 2; c.beginPath(); c.moveTo(tr.x + Math.cos(tr.h) * 12, tr.y + Math.sin(tr.h) * 12); c.lineTo(G.fx, G.fy); c.stroke();
+    // the load riding on the blade
+    if (tr.load > 20) {
+      var f = Math.min(1, tr.load / r.s.cap), px = G.fx + Math.cos(tr.h) * (4 + f * 7), py = G.fy + Math.sin(tr.h) * (4 + f * 7);
+      c.fillStyle = "rgba(240,246,255,0.95)"; c.beginPath(); c.ellipse(px, py, Math.hypot(G.a.x - G.b.x, G.a.y - G.b.y) / 2 * (0.55 + 0.4 * f), 3 + f * 7, Math.atan2(G.dy, G.dx), 0, 7); c.fill();
+    }
+    // where the snow will roll: a little arrow at the trailing end
+    if (isPlayer && G.trail && tr.down) { var ax = G.trail.x + G.out.x * 14, ay = G.trail.y + G.out.y * 14; c.fillStyle = "rgba(255,200,120,0.85)"; c.beginPath(); c.arc(ax, ay, 3, 0, 7); c.fill(); }
+  }
+  function lightTruck(c, tr, t, isPlayer) {
+    // headlights: a cone ahead
+    var ch = Math.cos(tr.h), sh = Math.sin(tr.h), len = isPlayer ? 300 : 220;
+    var gr = c.createRadialGradient(tr.x + ch * 10, tr.y + sh * 10, 10, tr.x + ch * 10, tr.y + sh * 10, len);
+    gr.addColorStop(0, "rgba(0,0,0,0.95)"); gr.addColorStop(1, "rgba(0,0,0,0)");
+    c.fillStyle = gr; c.beginPath(); c.moveTo(tr.x + ch * 10, tr.y + sh * 10);
+    c.arc(tr.x + ch * 10, tr.y + sh * 10, len, tr.h - 0.42, tr.h + 0.42); c.closePath(); c.fill();
+    glowCut(c, tr.x, tr.y, 70, 0.9);
+  }
+  function glowCut(c, x, y, r, a) { var gr = c.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, "rgba(0,0,0," + a + ")"); gr.addColorStop(1, "rgba(0,0,0,0)"); c.fillStyle = gr; c.beginPath(); c.arc(x, y, r, 0, 7); c.fill(); }
+
+  // ---------------- a night ----------------
+  var zoom = 1, screen = "title", run = null, ground = null, paused = false, helpOpen = false, helpPage = 0, acc = 0, dawn = null, msg = null, keys = {}, cam = { x: 0, y: 0 }, flakes = [], spray = [], showMap = true, lastPrio = 0;
+  for (var fi = 0; fi < 220; fi++) flakes.push({ x: Math.random() * W, y: Math.random() * H, s: 0.5 + Math.random() * 1.6, p: Math.random() * 6 });
+  var lightCan = document.createElement("canvas"); lightCan.width = W; lightCan.height = H; var lc = lightCan.getContext("2d");
+  function flash(s, col) { msg = { s: s, t: 0, col: col || COL.text }; }
+  function startNight(di) {
+    run = P.startNight(g, di); ground = paintGround(run.map, run.d.id); screen = "night"; paused = false; dawn = null; acc = 0; spray = [];
+    cam.x = run.player.x; cam.y = run.player.y;
+    flash(run.weather.name + " tonight. " + C.TIPS[g.nights % C.TIPS.length].split(".")[0] + ".", COL.dim);
+    if (!settings.seenHelp) { helpOpen = true; helpPage = 0; }
+  }
+  function handle(e) {
+    if (e.e === "bump") sfx("bump");
+    else if (e.e === "dump") sfx("dump");
+    else if (e.e === "spill") { if (spillT <= 0) { sfx("spill"); spillT = 0.6; } }
+    else if (e.e === "avalanche") { sfx("avalanche"); flash("Avalanche! A stretch of road is buried.", COL.bad); }
+    else if (e.e === "dawn") { sfx("dawn"); dawn = { t: 0, sum: run.summary }; persist(); }
+  }
+  function controls() {
+    var tr = run.player;
+    tr.thr = (keys.w || keys.arrowup ? 1 : 0) - (keys.s || keys.arrowdown ? 1 : 0);
+    tr.steer = (keys.d || keys.arrowright ? 1 : 0) - (keys.a || keys.arrowleft ? 1 : 0);
+    // Q swings the blade to throw left, E to throw right
+    if (keys.q) tr.wantAngle = Math.min(run.s.maxAngle, tr.wantAngle + 2.2 / 60);
+    if (keys.e) tr.wantAngle = Math.max(-run.s.maxAngle, tr.wantAngle - 2.2 / 60);
+    tr.salting = !!salting;
+  }
+  var salting = false, hideHud = false, autopilot = false;
+  function drawNight(dt) {
+    var t = now();
+    if (!paused && !helpOpen && !dawn && !run.over) {
+      if (autopilot) { run.player.bot = true; P.autoDrive(run, run.player, dt, 1); } else controls();
+      acc += dt; var n = 0;
+      while (acc >= 1 / 60 && n < 4) { P.step(run, 1 / 60); run.events.forEach(handle); run.events.length = 0; acc -= 1 / 60; n++; }
+      if (n >= 4) acc = 0;
+    }
+    spillT -= dt;
+    var tr = run.player;
+    cam.x += (tr.x + Math.cos(tr.h) * tr.v * 0.6 - cam.x) * Math.min(1, dt * 3); cam.y += (tr.y + Math.sin(tr.h) * tr.v * 0.6 - cam.y) * Math.min(1, dt * 3);
+    var mw = run.map.w * TS, mh = run.map.h * TS;
+    var hw = W / 2 / zoom, hh = H / 2 / zoom;
+    cam.x = Math.max(hw, Math.min(mw - hw, cam.x)); cam.y = Math.max(hh, Math.min(mh - hh + 40, cam.y));
+    if (mw < W / zoom) cam.x = mw / 2; if (mh < H / zoom) cam.y = mh / 2;
+    var Z = zoom, ox = Math.round(W / 2 - cam.x * Z), oy = Math.round(H / 2 - cam.y * Z);
+    var view = function (c) { c.translate(ox, oy); c.scale(Z, Z); };
+    cx.fillStyle = "#06080e"; cx.fillRect(0, 0, W, H);
+    cx.save(); view(cx);
+    cx.drawImage(ground.can, 0, 0);
+    paintSnow(run);
+    // soften the cell edges a little so drifts look like drifts
+    cx.imageSmoothingEnabled = true; cx.filter = "blur(" + (3.6 * zoom).toFixed(1) + "px)"; cx.drawImage(snowCan, 0, 0, run.cw * CS, run.ch * CS); cx.filter = "none";
+    cx.drawImage(ground.curbs, 0, 0);
+    run.trucks.forEach(function (q) { drawTruck(cx, run, q, t, q === run.player); });
+    // blower spray
+    run.trucks.forEach(function (q) { if (q.blowing > 0) { var G = P.bladeGeom(run, q), dx = G.out ? G.out.x : 0, dy = G.out ? G.out.y : 1; for (var k = 0; k < 9; k++) spray.push({ x: G.fx, y: G.fy, vx: dx * (220 + Math.random() * 220) + (Math.random() - 0.5) * 90, vy: dy * (220 + Math.random() * 220) + (Math.random() - 0.5) * 90, t: 0, r: 1.5 + Math.random() * 3 }); } });
+    spray = spray.filter(function (p) { p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.95; p.vy *= 0.95; return p.t < 0.75; });
+    spray.forEach(function (p) { cx.globalAlpha = 0.9 * (1 - p.t / 0.75); cx.fillStyle = "#f4f8ff"; cx.beginPath(); cx.arc(p.x, p.y, p.r * (1 + p.t * 1.5), 0, 7); cx.fill(); }); cx.globalAlpha = 1;
+    cx.restore();
+    // night: everything dark but the lamps and the trucks' lights
+    var night = 0.5 - 0.3 * Math.max(0, (run.t / run.len - 0.8) / 0.2);
+    lc.globalCompositeOperation = "source-over"; lc.clearRect(0, 0, W, H); lc.fillStyle = "rgba(8,14,40," + night + ")"; lc.fillRect(0, 0, W, H);
+    lc.globalCompositeOperation = "destination-out"; lc.save(); view(lc);
+    ground.lamps.forEach(function (l) { var x = l.x * Z + ox, y = l.y * Z + oy; if (x < -150 || x > W + 150 || y < -150 || y > H + 150) return; glowCut(lc, l.x, l.y, l.r, l.win ? 0.3 : 0.5); });
+    run.trucks.forEach(function (q) { lightTruck(lc, q, t, q === run.player); });
+    lc.restore(); lc.globalCompositeOperation = "source-over";
+    cx.drawImage(lightCan, 0, 0);
+    // warm glow on top: lamps and the orange beacons
+    cx.save(); cx.globalCompositeOperation = "lighter"; view(cx);
+    ground.lamps.forEach(function (l) { if (l.win) return; var x = l.x * Z + ox, y = l.y * Z + oy; if (x < -150 || x > W + 150 || y < -150 || y > H + 150) return; glow(cx, l.x, l.y, 80, "rgba(255,170,90,A)", 0.1); glow(cx, l.x, l.y, 6, "rgba(255,230,180,A)", 0.8); });
+    run.trucks.forEach(function (q) { var on = Math.sin(t * 9 + q.k) > 0; if (on) { glow(cx, q.x - Math.cos(q.h) * 2, q.y - Math.sin(q.h) * 2, 46, "rgba(255,140,30,A)", 0.4); } glow(cx, q.x + Math.cos(q.h) * 16, q.y + Math.sin(q.h) * 16, 30, "rgba(255,250,220,A)", 0.25); });
+    cx.restore();
+    // falling snow
+    var wind = run.weather.wind ? 2.5 : 0.4, fall = Math.min(1, run.fall / 1.2);
+    cx.fillStyle = "rgba(235,242,255,0.8)";
+    flakes.forEach(function (f, i) { if (i / flakes.length > 0.35 + 0.65 * fall) return; f.y += (40 + f.s * 50) * dt; f.x += (wind * 30 + Math.sin(t + f.p) * 12) * dt; if (f.y > H) { f.y = -4; f.x = Math.random() * W; } if (f.x > W) f.x -= W; cx.fillRect(f.x, f.y, f.s * 1.4, f.s * 1.4); });
+    if (!hideHud) drawHud(t);
+    drawMsg(dt);
+    if (helpOpen) drawHelp();
+    else if (paused && !dawn) drawPause();
+    if (dawn) drawDawn(dt);
+  }
+  function clock(f) { var mins = 22 * 60 + f * 8 * 60, h = Math.floor(mins / 60) % 24, m = Math.floor(mins % 60), ap = h >= 12 && h < 24 ? "PM" : "AM", hh = h % 12 || 12; return hh + ":" + (m < 10 ? "0" : "") + m + " " + ap; }
+  var hudT = 0, hudCache = null;
+  function drawHud(t) {
+    var r = run, s = r.s, tr = r.player;
+    hudT -= 1 / 60;
+    if (hudT <= 0 || !hudCache) { hudT = 0.25; hudCache = { clear: P.clearFraction(r), prio: P.prioFraction(r), buried: P.buried(r) }; }
+    var h = hudCache;
+    var grd = cx.createLinearGradient(0, 0, 0, 84); grd.addColorStop(0, "rgba(4,8,18,0.85)"); grd.addColorStop(1, "rgba(4,8,18,0)"); cx.fillStyle = grd; cx.fillRect(0, 0, W, 84);
+    text(r.d.name, 22, 22, 18, COL.text, "left", 700, SERIF);
+    text(clock(Math.min(1, r.t / r.len)) + "  ·  " + r.weather.name, 22, 46, 13, COL.dim, "left", 700);
+    // clear-road meter with the star lines
+    var bx = 360, bw = 420;
+    text("ROADS CLEAR", bx, 16, 11, COL.dim, "left", 800); text(Math.round(h.clear * 100) + "%", bx + bw, 16, 13, COL.text, "right", 800);
+    rr(bx, 26, bw, 12, 6); cx.fillStyle = "rgba(255,255,255,0.08)"; cx.fill();
+    rr(bx, 26, Math.max(12, bw * h.clear), 12, 6); cx.fillStyle = h.clear >= r.d.stars[1] ? COL.good : "#9fc4ff"; cx.fill();
+    r.d.stars.forEach(function (st, i) { var x = bx + bw * st; cx.fillStyle = "#ffd27a"; cx.fillRect(x - 1, 22, 2, 20); text("★".repeat(i + 1), x, 50, 10, h.clear >= st ? "#ffd27a" : "rgba(255,210,122,0.4)", "center", 800); });
+    // the priority route
+    var pf = h.prio, pdl = r.d.prioAt ? "by " + clock(r.d.prioAt) : "by dawn";
+    text((r.prioMet === true ? "✓ " : "") + cap(r.d.prio) + ": " + Math.round(pf * 100) + "% (needs 90% " + pdl + ")", bx, 68, 12, r.prioMet === false ? COL.bad : pf >= 0.9 ? COL.good : "#ffc874", "left", 700);
+    // money, salt, load, blade
+    text("$" + g.money, W - 22, 22, 18, COL.gold, "right", 800, SERIF);
+    if (h.buried) text(h.buried + " driveway" + (h.buried > 1 ? "s" : "") + " buried", W - 22, 46, 12, COL.bad, "right", 700);
+    // bottom panel
+    var y0 = H - 54;
+    rr(16, y0, 300, 40, 10); cx.fillStyle = "rgba(6,10,22,0.8)"; cx.fill();
+    text("BLADE", 30, y0 + 13, 10, COL.dim, "left", 800);
+    rr(30, y0 + 22, 150, 9, 4); cx.fillStyle = "rgba(255,255,255,0.08)"; cx.fill();
+    var lf = Math.min(1, tr.load / s.cap); rr(30, y0 + 22, Math.max(9, 150 * lf), 9, 4); cx.fillStyle = lf > 0.9 ? COL.bad : "#e8eef8"; cx.fill();
+    text(tr.down ? "DOWN" : "LIFTED", 180, y0 + 13, 10, tr.down ? COL.good : "#ffc874", "right", 800);
+    // the angle dial: which way snow will roll
+    var dx0 = 230, dy0 = y0 + 20;
+    cx.strokeStyle = "rgba(255,255,255,0.3)"; cx.lineWidth = 2; cx.beginPath(); cx.arc(dx0, dy0, 14, 0, 7); cx.stroke();
+    cx.strokeStyle = "#c8d0dc"; cx.lineWidth = 4; cx.beginPath(); cx.moveTo(dx0 - Math.cos(tr.angle) * 13, dy0 + Math.sin(tr.angle) * 13); cx.lineTo(dx0 + Math.cos(tr.angle) * 13, dy0 - Math.sin(tr.angle) * 13); cx.stroke();
+    var side = Math.abs(tr.angle) < 0.03 ? "straight" : tr.angle > 0 ? "snow ← left" : "snow right →";
+    text(side, 282, dy0, 11, COL.dim, "center", 700);
+    if (s.salt) { rr(330, y0, 150, 40, 10); cx.fillStyle = "rgba(6,10,22,0.8)"; cx.fill(); text("SALT (F)" + (salting ? " ON" : ""), 344, y0 + 13, 10, salting ? COL.good : COL.dim, "left", 800); rr(344, y0 + 22, 122, 9, 4); cx.fillStyle = "rgba(255,255,255,0.08)"; cx.fill(); rr(344, y0 + 22, Math.max(9, 122 * r.saltStock / s.salt), 9, 4); cx.fillStyle = "#d8c8a8"; cx.fill(); }
+    text("WASD drive · Q / E swing the blade · Space lift / drop · F salt · M map · Esc pause", W / 2 + 120, H - 16, 12, "rgba(220,228,255,0.55)", "center", 600);
+    if (showMap) drawMinimap();
+    button(W - 64, H - 54, 44, 40, "II", function () { paused = true; }, { size: 13 });
+  }
+  function drawMinimap() {
+    var r = run, map = r.map, sc = Math.min(220 / (map.w * TS), 150 / (map.h * TS)), mw = map.w * TS * sc, mh = map.h * TS * sc, x0 = W - mw - 22, y0 = 92;
+    rr(x0 - 6, y0 - 6, mw + 12, mh + 12, 8); cx.fillStyle = "rgba(6,10,22,0.75)"; cx.fill();
+    var ts = TS * sc;
+    for (var i = 0; i < map.roads.length; i++) { var tile = map.roads[i], tx = tile % map.w, ty = tile / map.w | 0; cx.fillStyle = P.roadClear(r, tile) ? (map.prio[tile] ? "#ffb347" : "#3a4258") : "#e8eef8"; cx.fillRect(x0 + tx * ts, y0 + ty * ts, ts + 0.5, ts + 0.5); }
+    r.trucks.forEach(function (q) { cx.fillStyle = q === r.player ? "#ff9a2a" : "#4aa8ff"; cx.beginPath(); cx.arc(x0 + q.x * sc, y0 + q.y * sc, 3, 0, 7); cx.fill(); });
+    var d = map.depot; cx.fillStyle = "#c8b89a"; cx.fillRect(x0 + d.x * ts, y0 + d.y * ts, ts * 1.5, ts * 1.5);
+  }
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+  function drawMsg(dt) {
+    if (!msg) return; msg.t += dt; var life = msg.s.length > 60 ? 6 : 3; if (msg.t > life) { msg = null; return; }
+    var a = Math.min(1, (life - msg.t) * 2), ww = Math.min(900, tw(msg.s, 15, 700) + 40);
+    cx.globalAlpha = a; rr(W / 2 - ww / 2, 96, ww, 32, 16); cx.fillStyle = "rgba(8,12,26,0.88)"; cx.fill(); text(msg.s, W / 2, 112, 15, msg.col, "center", 700); cx.globalAlpha = 1;
+  }
+  function drawPause() {
+    cx.fillStyle = "rgba(4,8,18,0.62)"; cx.fillRect(0, 0, W, H);
+    text("PAUSED", W / 2, 300, 40, COL.text, "center", 700, SERIF);
+    button(W / 2 - 100, 350, 200, 46, "RESUME", function () { paused = false; }, { primary: true });
+    button(W / 2 - 100, 408, 200, 40, "HOW TO PLAY", function () { helpOpen = true; helpPage = 0; }, { size: 13 });
+    button(W / 2 - 100, 458, 200, 40, "END THE SHIFT NOW", function () { paused = false; P.end(run); run.events.forEach(handle); run.events.length = 0; }, { size: 13 });
+  }
+
+  // ---------------- dawn: the city pays ----------------
+  function drawDawn(dt) {
+    dawn.t += dt;
+    var s = dawn.sum, a = Math.min(1, dawn.t * 2);
+    cx.fillStyle = "rgba(255,170,110," + 0.12 * a + ")"; cx.fillRect(0, 0, W, H);
+    cx.fillStyle = "rgba(6,10,22," + 0.74 * a + ")"; cx.fillRect(0, 0, W, H);
+    cx.globalAlpha = a;
+    text("6:00 AM · DAWN", W / 2, 130, 15, COL.dim, "center", 800);
+    text(Math.round(s.frac * 100) + "% of " + run.d.name + " is clear", W / 2, 176, 36, COL.text, "center", 700, SERIF);
+    var st = ""; for (var i = 0; i < 3; i++) st += i < s.stars ? "★" : "☆";
+    text(st, W / 2, 226, 34, "#ffd27a", "center", 700);
+    var lines = [["Clear road (" + s.clearTiles + " of " + s.roadTiles + " blocks)", "+$" + s.base], [cap(run.d.prio) + (s.prioOk ? " - open in time" : " - not open in time"), s.prioOk ? "+$" + s.bonus : "$0"], [s.buried ? s.buried + " buried driveway" + (s.buried > 1 ? "s" : "") + " (complaints)" : "No complaints", s.fine ? "-$" + s.fine : "$0"]];
+    lines.forEach(function (l, i) { var y = 286 + i * 34; text(l[0], W / 2 - 300, y, 16, COL.text, "left", 600); text(l[1], W / 2 + 300, y, 18, l[1].charAt(0) === "-" ? COL.bad : COL.gold, "right", 800); });
+    cx.fillStyle = "rgba(255,255,255,0.2)"; cx.fillRect(W / 2 - 300, 384, 600, 1);
+    text("Tonight's pay", W / 2 - 300, 410, 18, COL.text, "left", 800); text("$" + s.pay, W / 2 + 300, 410, 24, COL.gold, "right", 800, SERIF);
+    var y = 460;
+    if (s.opened) { text("New district open: " + C.DISTRICTS[g.open - 1].name + "!", W / 2, y, 18, COL.good, "center", 800); y += 32; }
+    else if (!s.finished && g.open === run.di + 1 && run.di + 1 < C.DISTRICTS.length) { text("To open the next district: ★★ and " + run.d.prio + " open in time.", W / 2, y, 14, COL.dim, "center", 700); y += 28; }
+    if (s.finished) { text("Every district is clear. The county is yours.", W / 2, y, 18, COL.good, "center", 800); y += 32; }
+    cx.globalAlpha = 1;
+    if (dawn.t > 0.6) {
+      button(W / 2 - 230, 560, 220, 52, "TO THE GARAGE", function () { afterDawn("garage"); }, { primary: true, size: 16 });
+      button(W / 2 + 10, 560, 220, 52, "ANOTHER NIGHT", function () { afterDawn("again"); }, { size: 15 });
+      followLine(H - 50);
+    }
+  }
+  function afterDawn(where) {
+    var s = dawn.sum; dawn = null;
+    if (DEMO && s.stars >= 2 && s.prioOk && !g.sawDemoEnd) { g.sawDemoEnd = true; persist(); screen = "demoend"; return; }
+    if (!DEMO && s.finished) { screen = "won"; return; }
+    if (where === "again") startNight(run.di); else { screen = "garage"; pickD = Math.min(g.open, C.DISTRICTS.length) - 1; }
+  }
+  function followLine(y) {
+    var label = "Enjoying it? Follow Proven Little Games on itch.io for new games", w = tw(label, 13, 700) + 30, x = W / 2 - w / 2, on = hot(x, y - 15, w, 30);
+    rr(x, y - 15, w, 30, 15); cx.fillStyle = on ? "rgba(60,80,130,0.95)" : "rgba(24,32,54,0.85)"; cx.fill();
+    text(label, W / 2, y, 13, on ? COL.gold : COL.dim, "center", 700);
+    buttons.push({ x: x, y: y - 15, w: w, h: 30, fn: function () { try { window.open(PROFILE_URL, "_blank", "noopener"); } catch (e) {} } });
+  }
+
+  // ---------------- the garage ----------------
+  var pickD = 0;
+  function drawGarage() {
+    drawBackdrop();
+    cx.fillStyle = "rgba(6,10,22,0.7)"; cx.fillRect(0, 0, W, H);
+    text("THE GARAGE", 50, 50, 30, COL.text, "left", 700, SERIF);
+    text("$" + g.money, W - 50, 50, 26, COL.gold, "right", 800, SERIF);
+    // districts
+    text("TONIGHT'S DISTRICT", 50, 96, 12, COL.dim, "left", 800);
+    for (var i = 0; i < 5; i++) (function (i) {
+      var x = 50 + i * 238, y = 110, w = 226, h = 104, d = C.DISTRICTS[i], open = d && i < g.open, sel = pickD === i;
+      rr(x, y, w, h, 12); cx.fillStyle = sel ? "rgba(60,80,130,0.95)" : open ? "rgba(26,36,60,0.94)" : "rgba(16,22,36,0.9)"; cx.fill();
+      cx.strokeStyle = sel ? COL.gold : "rgba(160,180,230,0.3)"; cx.lineWidth = sel ? 2 : 1.2; cx.stroke();
+      if (d && open) {
+        text(d.name, x + 14, y + 24, 17, COL.text, "left", 700, SERIF);
+        var st = ""; for (var k = 0; k < 3; k++) st += k < (g.stars[d.id] || 0) ? "★" : "☆";
+        text(st, x + w - 14, y + 24, 15, "#ffd27a", "right", 700);
+        wrap(d.blurb, x + 14, y + 50, w - 28, 11, COL.dim, 15, 600);
+        buttons.push({ x: x, y: y, w: w, h: h, fn: function () { pickD = i; sfx("ui"); } });
+      } else text(d ? "Locked" : "FULL GAME", x + w / 2, y + h / 2, 14, "#6a7896", "center", 700);
+      if (!d) text(["", "Old Town", "Hillside", "County Airport", "Pass Road"][i], x + w / 2, y + h / 2 + 22, 15, "#8a98b8", "center", 700, SERIF);
+    })(i);
+    // upgrades
+    text("UPGRADES", 50, 240, 12, COL.dim, "left", 800);
+    C.UPGRADES.forEach(function (u, i) {
+      var col = i % 2, row = Math.floor(i / 2), x = 50 + col * 600, y = 254 + row * 66, l = P.lv(g, u.id), c = P.cost(g, u.id), can = P.canBuy(g, u.id);
+      rr(x, y, 580, 58, 10); cx.fillStyle = "rgba(24,32,54,0.92)"; cx.fill();
+      text(u.name, x + 14, y + 19, 15, COL.text, "left", 700);
+      wrap(u.desc, x + 14, y + 39, 330, 11, COL.dim, 13, 600);
+      for (var q = 0; q < u.max; q++) { cx.beginPath(); cx.arc(x + 440 - (u.max - q) * 11, y + 19, 3.6, 0, 7); cx.fillStyle = q < l ? COL.gold : "rgba(150,170,210,0.35)"; cx.fill(); }
+      button(x + 452, y + 11, 116, 36, l >= u.max ? "MAX" : "$" + c, function () { if (P.buy(g, u.id)) { sfx("buy"); persist(); } else sfx("bad"); }, { primary: can, disabled: !can, size: 14 });
+    });
+    button(W - 290, H - 66, 240, 50, "START THE NIGHT", function () { startNight(pickD); }, { primary: true, size: 17 });
+    button(50, H - 60, 120, 40, "TITLE", function () { screen = "title"; }, { size: 13 });
+    button(182, H - 60, 150, 40, "HOW TO PLAY", function () { helpOpen = true; helpPage = 0; }, { size: 13 });
+    if (helpOpen) drawHelp();
+  }
+
+  // ---------------- help ----------------
+  var HELP = [
+    ["Plow the town", "It snowed all evening and it is still snowing. Drive with WASD or the arrow keys. Your blade scrapes up everything it passes over. By 6 AM the city pays you for every block of road under 5 cm of snow."],
+    ["Swing the blade", "Q and E swing the blade. An angled blade rolls the snow off its trailing end into a ridge beside you - a windrow. The little arrow on the blade shows where it will go. A straight blade just collects snow until it spills over; Space lifts the blade and leaves the load in a pile."],
+    ["Where the snow goes", "Push snow onto lawns, empty lots and the parking lane. Never onto someone's driveway: a buried driveway means a complaint, and the city takes it out of your pay. It keeps snowing all night, so a road you cleared early may need a second pass. Salt (F) keeps a road clear - refill at the depot."],
+    ["Grow the fleet", "At dawn, spend your pay in the garage: a wider blade, a bigger engine, a wing plow, a snowblower, chains for ice and hills - and crew trucks that plow on their own. Get two stars and open the priority route in time to unlock the next district."]
+  ];
+  function drawHelp() {
+    cx.fillStyle = "rgba(4,8,18,0.78)"; cx.fillRect(0, 0, W, H);
+    var x = 250, y = 130, ww = 780, hh = 520, p = HELP[helpPage];
+    rr(x, y, ww, hh, 18); cx.fillStyle = COL.panel; cx.fill(); cx.strokeStyle = COL.line; cx.lineWidth = 1.5; cx.stroke();
+    text("HOW TO PLAY " + (helpPage + 1) + "/" + HELP.length, x + 30, y + 34, 12, COL.dim, "left", 800);
+    text(p[0], x + 30, y + 80, 32, COL.gold, "left", 700, SERIF);
+    wrap(p[1], x + 30, y + 136, ww - 60, 18, COL.text, 29, 600);
+    var close = function () { helpOpen = false; settings.seenHelp = true; saveSettings(); };
+    if (helpPage > 0) button(x + 30, y + hh - 66, 120, 42, "BACK", function () { helpPage--; }, {});
+    if (helpPage < HELP.length - 1) button(x + ww - 150, y + hh - 66, 120, 42, "NEXT", function () { helpPage++; }, { primary: true });
+    else button(x + ww - 150, y + hh - 66, 120, 42, "PLOW!", close, { primary: true });
+    button(x + ww / 2 - 60, y + hh - 66, 120, 42, "CLOSE", close, {});
+  }
+
+  // ---------------- title: a crew plows Maple Street behind the logo ----------------
+  var back = null, backGround = null, backT = 0;
+  function stepBackdrop(dt) {
+    if (!back) { var bg = P.newGame({ seed: 4 }); bg.ups = { BLADE: 3, WING: 2, BLOWER: 2, CREW: 2 }; back = P.startNight(bg, 0, 77); back.len = 1e9; backGround = paintGround(back.map, "MAPLE"); back.player.bot = true; }
+    backT += dt;
+    for (var k = 0; k < 2; k++) { P.autoDrive(back, back.player, dt / 2, 1); P.step(back, dt / 2); back.events.length = 0; }
+  }
+  function drawBackdrop() {
+    stepBackdrop(1 / 60);
+    var tr = back.player, ox = Math.round(W / 2 - Math.max(W / 2, Math.min(back.map.w * TS - W / 2, tr.x))), oy = Math.round(H / 2 - Math.max(H / 2, Math.min(back.map.h * TS - H / 2, tr.y)));
+    cx.save(); cx.translate(ox, oy); cx.drawImage(backGround.can, 0, 0); paintSnow(back); cx.imageSmoothingEnabled = true; cx.filter = "blur(2.2px)"; cx.drawImage(snowCan, 0, 0, back.cw * CS, back.ch * CS); cx.filter = "none"; cx.drawImage(backGround.curbs, 0, 0);
+    back.trucks.forEach(function (q) { drawTruck(cx, back, q, now(), q === back.player); }); cx.restore();
+    lc.globalCompositeOperation = "source-over"; lc.clearRect(0, 0, W, H); lc.fillStyle = "rgba(8,14,40,0.5)"; lc.fillRect(0, 0, W, H);
+    lc.globalCompositeOperation = "destination-out"; lc.save(); lc.translate(ox, oy);
+    backGround.lamps.forEach(function (l) { glowCut(lc, l.x, l.y, l.r, l.win ? 0.3 : 0.5); });
+    back.trucks.forEach(function (q) { lightTruck(lc, q, now(), q === back.player); }); lc.restore(); lc.globalCompositeOperation = "source-over";
+    cx.drawImage(lightCan, 0, 0);
+    cx.save(); cx.globalCompositeOperation = "lighter"; cx.translate(ox, oy);
+    back.trucks.forEach(function (q) { if (Math.sin(now() * 9 + q.k) > 0) glow(cx, q.x, q.y, 46, "rgba(255,140,30,A)", 0.4); });
+    cx.restore();
+    cx.fillStyle = "rgba(235,242,255,0.8)"; var t = now();
+    flakes.forEach(function (f) { f.y += (40 + f.s * 50) / 60; f.x += Math.sin(t + f.p) * 0.2; if (f.y > H) { f.y = -4; f.x = Math.random() * W; } cx.fillRect(f.x, f.y, f.s * 1.4, f.s * 1.4); });
+  }
+  function drawTitle() {
+    drawBackdrop();
+    var gr = cx.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, "rgba(4,8,18,0.75)"); gr.addColorStop(0.35, "rgba(4,8,18,0.1)"); gr.addColorStop(0.7, "rgba(4,8,18,0.1)"); gr.addColorStop(1, "rgba(4,8,18,0.8)"); cx.fillStyle = gr; cx.fillRect(0, 0, W, H);
+    cx.font = "700 96px " + SERIF; cx.textAlign = "center"; cx.textBaseline = "middle";
+    cx.shadowColor = "rgba(255,160,60,0.85)"; cx.shadowBlur = 28; cx.fillStyle = "#fff6ea"; cx.fillText("PLOWLIGHT", W / 2, 120); cx.shadowBlur = 0;
+    text("The snow won't stop. Neither will you.", W / 2, 186, 22, "#ffe6c8", "center", 600, SERIF);
+    text("FREE DEMO · Maple Street", W / 2, 220, 14, COL.gold, "center", 800);
+    button(W / 2 - 160, 560, 320, 58, g.nights ? "CONTINUE" : "START YOUR SHIFT", function () { audio(); if (!g.nights) startNight(0); else { screen = "garage"; pickD = Math.min(g.open, C.DISTRICTS.length) - 1; } }, { primary: true, size: 19 });
+    button(W / 2 - 160, 630, 155, 40, "HOW TO PLAY", function () { helpOpen = true; helpPage = 0; }, { size: 13 });
+    button(W / 2 + 5, 630, 155, 40, settings.music ? "MUSIC ON" : "MUSIC OFF", function () { settings.music = !settings.music; saveSettings(); audio(); }, { size: 13 });
+    button(W / 2 - 160, 680, 320, 34, settings.sound ? "SOUND ON" : "SOUND OFF", function () { settings.sound = !settings.sound; saveSettings(); }, { size: 12 });
+    button(W - 300, H - 66, 270, 40, "GET THE FULL GAME", openStore, { size: 13 });
+    if (helpOpen) drawHelp();
+  }
+  
+  function openStore() { try { window.open(STORE_URL, "_blank", "noopener"); } catch (e) {} }
+  function drawDemoEnd() {
+    drawBackdrop();
+    cx.fillStyle = "rgba(4,8,18,0.72)"; cx.fillRect(0, 0, W, H);
+    text("THE DEMO ENDS HERE", W / 2, 190, 38, COL.gold, "center", 700, SERIF);
+    var y = wrap("Maple Street is open and the school bus got through. The full game has four more districts - Old Town's parked cars, Hillside's ice, the County Airport's 5 AM flight and the avalanches on Pass Road - with the snowblower, the wing plow, salt and a whole crew of trucks.", W / 2, 260, 780, 18, COL.text, 28, 600, "center");
+    button(W / 2 - 170, y + 36, 340, 56, "GET THE FULL GAME", openStore, { primary: true, size: 18 });
+    button(W / 2 - 100, y + 104, 200, 42, "KEEP PLOWING", function () { screen = "garage"; pickD = 0; }, { size: 13 });
+    followLine(H - 60);
+  }
+  
+  function drawWon() {
+    drawBackdrop();
+    cx.fillStyle = "rgba(4,8,18,0.66)"; cx.fillRect(0, 0, W, H);
+    text("THE COUNTY IS CLEAR", W / 2, 220, 44, COL.gold, "center", 700, SERIF);
+    wrap(g.nights + " nights behind the blade, $" + g.total + " earned. Every district opened, the summit road included. The snow will be back tomorrow - and so will you.", W / 2, 300, 720, 18, COL.text, 28, 600, "center");
+    button(W / 2 - 110, 430, 220, 50, "TO THE GARAGE", function () { screen = "garage"; }, { primary: true });
+    followLine(H - 60);
+  }
+
+  // ---------------- main loop and input ----------------
+  var lastT = performance.now();
+  function frame(nowT) {
+    var dt = Math.min(0.05, (nowT - lastT) / 1000); lastT = nowT;
+    buttons = [];
+    cx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    ambient();
+    if (screen === "title") drawTitle();
+    else if (screen === "night") drawNight(dt);
+    else if (screen === "garage") drawGarage();
+    else if (screen === "won") drawWon();
+    else if (screen === "demoend") drawDemoEnd();
+    requestAnimationFrame(frame);
+  }
+  function resize() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H); dpr = window.devicePixelRatio || 1;
+    cv.style.width = Math.floor(W * scale) + "px"; cv.style.height = Math.floor(H * scale) + "px";
+    cv.width = Math.floor(W * scale * dpr); cv.height = Math.floor(H * scale * dpr);
+  }
+  window.addEventListener("resize", resize); resize();
+  function local(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+  cv.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  cv.addEventListener("pointermove", function (e) { var m = local(e); mouse.x = m.x; mouse.y = m.y; });
+  cv.addEventListener("pointerdown", function (e) {
+    var m = local(e); mouse.x = m.x; mouse.y = m.y; cv.focus(); audio();
+    for (var i = buttons.length - 1; i >= 0; i--) { var b = buttons[i]; if (m.x >= b.x && m.x <= b.x + b.w && m.y >= b.y && m.y <= b.y + b.h) { sfx("ui"); b.fn(); return; } }
+  });
+  window.addEventListener("keydown", function (e) {
+    var k = e.key.toLowerCase(); keys[k] = true; audio();
+    if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].indexOf(k) >= 0) e.preventDefault();
+    if (screen === "night" && run && !dawn) {
+      if (k === "escape" || k === "p") { if (helpOpen) helpOpen = false; else paused = !paused; }
+      else if (k === " " && !paused && !helpOpen) { P.setBlade(run, run.player, !run.player.down); sfx("blade"); }
+      else if (k === "f" && run.s.salt) { salting = !salting; flash(salting ? "Salting on" : "Salting off", COL.dim); }
+      else if (k === "m") showMap = !showMap;
+    } else if (screen === "night" && dawn && (k === "enter") && dawn.t > 0.8) afterDawn("garage");
+    else if (k === "escape") helpOpen = false;
+  });
+  window.addEventListener("keyup", function (e) { keys[e.key.toLowerCase()] = false; });
+  window.addEventListener("blur", function () { keys = {}; if (screen === "night" && run && !dawn) paused = true; });
+
+  // hooks for the screenshot tool and tests
+  window.PLOWLIGHT_APP = {
+    edition: ED, game: function () { return g; }, run: function () { return run; }, setGame: function (str) { g = P.load(str); },
+    start: function (di) { startNight(di); msg = null; }, screen: function (s) { if (s) screen = s; return screen; }, help: function (v) { helpOpen = v; }, settings: settings,
+    hover: function (x, y) { mouse.x = x; mouse.y = y; }, pause: function (v) { paused = v; }, keys: keys, cam: cam, salting: function (v) { salting = v; },
+    sim: function (sec, botPlay) { run.player.bot = !!botPlay; for (var t = 0; t < sec && !run.over; t += 1 / 30) { if (botPlay) P.autoDrive(run, run.player, 1 / 30, 1); P.step(run, 1 / 30); run.events.forEach(handle); run.events.length = 0; } cam.x = run.player.x; cam.y = run.player.y; },
+    flash: flash, msgOff: function () { msg = null; }, pick: function (i) { pickD = i; }, zoom: function (z) { zoom = z; }, autopilot: function (v) { autopilot = v; }, hud: function (v) { hideHud = !v; }
+  };
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

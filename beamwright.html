@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>BEAMWRIGHT</title>
+<style>
+  :root{ --ink:#e9e4d6; --dim:#8f8a7c; --brass:#d9a94a; --teal:#5fc6c0; --panel:rgba(14,18,20,.95); --edge:rgba(217,169,74,.28); }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  [hidden]{display:none!important}
+  html,body{height:100%;margin:0}
+  body{background:#0a0d0e;color:var(--ink);font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;
+       display:flex;align-items:center;justify-content:center;overflow:hidden;user-select:none}
+  #wrap{position:relative}
+  canvas{display:block;width:100%;height:100%;touch-action:none}
+  .ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:14px;
+      background:rgba(6,9,10,.88);backdrop-filter:blur(3px);z-index:5}
+  .card{width:min(560px,96%);max-height:96%;overflow:auto;background:var(--panel);border:1px solid var(--edge);
+        border-radius:14px;padding:18px 20px;box-shadow:0 20px 60px rgba(0,0,0,.65)}
+  h1{margin:2px 0 0;text-align:center;font-size:46px;letter-spacing:6px;line-height:1;
+     background:linear-gradient(180deg,#fffbe8,#f3d27a 50%,#d9a94a);-webkit-background-clip:text;background-clip:text;color:transparent;
+     filter:drop-shadow(0 0 14px rgba(255,214,120,.35))}
+  h2{margin:0 0 8px;font-size:20px;letter-spacing:2px;color:var(--brass)}
+  .tag{text-align:center;color:var(--dim);margin:8px 0 14px;font-size:14px;line-height:1.5}
+  p{margin:7px 0;line-height:1.5;font-size:14px}
+  .btn{display:block;width:100%;margin:7px 0;padding:12px 14px;border-radius:10px;cursor:pointer;border:1px solid var(--edge);
+       background:linear-gradient(180deg,#22302f,#141c1c);color:var(--ink);font:inherit;font-size:16px;font-weight:bold;letter-spacing:2px}
+  .btn:hover{border-color:var(--brass)}
+  .btn.go{background:linear-gradient(180deg,#f3d27a,#c08b2c);color:#2a1c06;border-color:#ffe6a8}
+  .btn.buy{background:linear-gradient(180deg,#8bd36b,#3f8f33);color:#0f2208;border-color:#c7f0b4}
+  .btn small{display:block;font-size:11px;font-weight:normal;letter-spacing:1px;opacity:.78;margin-top:2px}
+  .keys{display:grid;grid-template-columns:auto 1fr;gap:5px 10px;font-size:13px;margin:8px 0}
+  .keys b{color:var(--brass);white-space:nowrap}
+  .chap{margin:12px 0 4px;font-size:12px;letter-spacing:2px;color:var(--teal)}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+  .lv{padding:8px 4px;border-radius:8px;border:1px solid var(--edge);background:#141c1c;color:var(--ink);font:inherit;cursor:pointer;text-align:center}
+  .lv b{display:block;font-size:15px}
+  .lv span{font-size:11px;color:var(--dim)}
+  .lv.done{border-color:#6aa36a}
+  .lv.best{border-color:var(--brass);background:#2a2412}
+  .lv:disabled{opacity:.28;cursor:default}
+  .foot{text-align:center;color:var(--dim);font-size:11px;margin-top:10px;letter-spacing:1px}
+  .big{text-align:center;font-size:30px;color:var(--brass);letter-spacing:2px;margin:6px 0}
+  .mid{text-align:center;color:var(--dim);font-size:13px}
+</style>
+
+<div id="wrap">
+  <canvas id="cv"></canvas>
+
+  <div class="ov" id="ovTitle">
+    <div class="card">
+      <h1>BEAMWRIGHT</h1>
+      <div class="tag">Push the mirrors. Bring the light to every lamp.<br>Never stand where the light will be.</div>
+      <button class="btn go" id="btnPlay">CONTINUE<small id="playSub"></small></button>
+      <button class="btn" id="btnLevels">CHOOSE A BOX</button>
+      <button class="btn" id="btnHow">HOW TO PLAY</button>
+      <button class="btn buy" id="btnBuyTitle">GET THE FULL GAME<small>40 boxes &middot; 4 chapters &middot; every par a proven minimum</small></button>
+      <div class="foot" id="titleFoot"></div>
+    </div>
+  </div>
+
+  <div class="ov" id="ovHow" hidden>
+    <div class="card">
+      <h2>HOW TO PLAY</h2>
+      <p>Each box holds a lamp housing that throws a beam of light, and one or more glass lamps. Light every lamp at once and the box is done.</p>
+      <p>You light them by <b>pushing</b> things: mirrors turn the beam, iron shutters stop it, and half-silvered glass splits it in two. You can push one thing at a time, and nothing can be pulled.</p>
+      <p><b>The light burns.</b> You can never step into the beam, and you can never make a move that would send the beam through where you stand. Building the light's path closes your own.</p>
+      <p>Every box has a <b>par</b>: the fewest moves it can possibly be solved in, found by checking every position the box can reach. Match it for a star. Nobody can beat it.</p>
+      <div class="keys">
+        <b>Arrows / WASD</b><span>Move and push</span>
+        <b>Swipe</b><span>Move, on a phone</span>
+        <b>Z / Backspace</b><span>Undo a move (as many as you like)</span>
+        <b>R</b><span>Start the box again</span>
+        <b>Esc</b><span>Boxes</span>
+      </div>
+      <button class="btn go" id="btnHowBack">GOT IT</button>
+    </div>
+  </div>
+
+  <div class="ov" id="ovLevels" hidden>
+    <div class="card">
+      <h2>BOXES</h2>
+      <div class="mid" id="lvTally"></div>
+      <div id="lvBody"></div>
+      <button class="btn buy" id="btnBuyLevels" style="margin-top:12px">GET THE FULL GAME<small>chapters II, III and IV: shutters, twin lamps, half-silvered glass</small></button>
+      <button class="btn" id="btnLevelsBack" style="margin-top:12px">BACK</button>
+    </div>
+  </div>
+
+  <div class="ov" id="ovWin" hidden>
+    <div class="card">
+      <h2 id="wHead">LIT</h2>
+      <div class="big" id="wMoves"></div>
+      <div class="mid" id="wSub"></div>
+      <p class="mid" id="wNote"></p>
+      <button class="btn go" id="btnNext">NEXT BOX</button>
+      <button class="btn" id="btnRetry">TRY FOR FEWER MOVES</button>
+      <button class="btn" id="btnWinLevels">BOXES</button>
+    </div>
+  </div>
+</div>
+
+<script>window.BEAM_EDITION = "demo";</script>
+<script>
+// BEAMWRIGHT - the rules.  Board, beams, moves.  Shared by the game, the solver and the level generator.
+(function (root) {
+  "use strict";
+
+  // static tiles
+  var FLOOR = 0, WALL = 1, EMIT = 2, RECV = 3, FIX_S = 4, FIX_B = 5;   // FIX_S "/" bolted, FIX_B "\" bolted
+  // movable pieces
+  var NONE = 0, MIR_S = 1, MIR_B = 2, BLOCK = 3, SPL_S = 4, SPL_B = 5; // mirror /, mirror \, block, splitter /, splitter \
+  var DX = [0, 1, 0, -1], DY = [-1, 0, 1, 0];                          // 0 up, 1 right, 2 down, 3 left
+  var DIR_CH = "^>v<";
+  var PIECE_CH = { "/": MIR_S, "\\": MIR_B, "B": BLOCK, "s": SPL_S, "z": SPL_B };
+  var PIECE_OUT = [".", "/", "\\", "B", "s", "z"];
+
+  // a "/" mirror turns right into up, up into right, left into down, down into left
+  var REF_S = [1, 0, 3, 2], REF_B = [3, 2, 1, 0];
+
+  function parse(text) {
+    var rows = String(text).replace(/\r/g, "").split("\n").filter(function (r) { return r.length; });
+    var h = rows.length, w = 0;
+    rows.forEach(function (r) { if (r.length > w) w = r.length; });
+    var L = { w: w, h: h, tile: new Uint8Array(w * h), emit: [], recv: [], start: null, pieces: new Uint8Array(w * h) };
+    for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
+      var ch = rows[y][x] || "#", i = y * w + x;
+      if (ch === "#" || ch === " ") L.tile[i] = WALL;
+      else if (DIR_CH.indexOf(ch) >= 0) { L.tile[i] = EMIT; L.emit.push({ i: i, d: DIR_CH.indexOf(ch) }); }
+      else if (ch === "o") { L.tile[i] = RECV; L.recv.push(i); }
+      else if (ch === "1") L.tile[i] = FIX_S;
+      else if (ch === "2") L.tile[i] = FIX_B;
+      else {
+        L.tile[i] = FLOOR;
+        if (ch === "@") L.start = i;
+        else if (PIECE_CH[ch] != null) L.pieces[i] = PIECE_CH[ch];
+      }
+    }
+    if (L.start == null) throw new Error("level has no player");
+    return L;
+  }
+
+  function serialize(L, st) {
+    var out = [];
+    for (var y = 0; y < L.h; y++) {
+      var row = "";
+      for (var x = 0; x < L.w; x++) {
+        var i = y * L.w + x, t = L.tile[i];
+        if (t === WALL) row += "#";
+        else if (t === EMIT) { for (var e = 0; e < L.emit.length; e++) if (L.emit[e].i === i) row += DIR_CH[L.emit[e].d]; }
+        else if (t === RECV) row += "o";
+        else if (t === FIX_S) row += "1";
+        else if (t === FIX_B) row += "2";
+        else if (st.p === i) row += "@";
+        else row += PIECE_OUT[st.pieces[i]];
+      }
+      out.push(row);
+    }
+    return out.join("\n");
+  }
+
+  function initial(L) { return { p: L.start, pieces: L.pieces.slice(), moves: 0 }; }
+
+  // follow every beam from every emitter.  lit[i] = 1 for every cell a beam crosses.
+  function trace(L, pieces, wantSegments) {
+    var n = L.w * L.h, lit = new Uint8Array(n), seen = new Uint8Array(n * 4), hit = 0, recvLit = new Uint8Array(n);
+    var segs = wantSegments ? [] : null;
+    var stack = [];
+    for (var e = 0; e < L.emit.length; e++) stack.push(L.emit[e].i, L.emit[e].d);
+    while (stack.length) {
+      var d = stack.pop(), i = stack.pop();
+      var x = i % L.w, y = (i / L.w) | 0, sx = x, sy = y;
+      for (;;) {
+        x += DX[d]; y += DY[d];
+        if (x < 0 || y < 0 || x >= L.w || y >= L.h) { if (segs) segs.push([sx, sy, x - DX[d] * 0.5, y - DY[d] * 0.5]); break; }
+        var j = y * L.w + x;
+        if (seen[j * 4 + d]) { if (segs) segs.push([sx, sy, x, y]); break; }        // a beam that loops comes to rest
+        seen[j * 4 + d] = 1;
+        var t = L.tile[j], p = pieces[j];
+        if (t === WALL || t === EMIT || p === BLOCK) { if (segs) segs.push([sx, sy, x - DX[d] * 0.5, y - DY[d] * 0.5]); break; }
+        if (t === RECV) { if (!recvLit[j]) { recvLit[j] = 1; hit++; } if (segs) segs.push([sx, sy, x, y]); break; }
+        lit[j] = 1;
+        var turn = -1, pass = false;
+        if (t === FIX_S || p === MIR_S) turn = REF_S[d];
+        else if (t === FIX_B || p === MIR_B) turn = REF_B[d];
+        else if (p === SPL_S) { turn = REF_S[d]; pass = true; }
+        else if (p === SPL_B) { turn = REF_B[d]; pass = true; }
+        if (turn >= 0) {
+          if (segs) segs.push([sx, sy, x, y]);
+          if (pass) stack.push(j, d);           // a half-silvered glass lets half the light straight on
+          d = turn; sx = x; sy = y;
+        }
+      }
+    }
+    return { lit: lit, hit: hit, recvLit: recvLit, segs: segs, allLit: hit === L.recv.length };
+  }
+
+  function solid(L, i) { var t = L.tile[i]; return t === WALL || t === EMIT || t === RECV || t === FIX_S || t === FIX_B; }
+
+  // one step.  Returns the new state, or { refused: reason } and the old state is untouched.
+  function step(L, st, d, ignoreBurn) {
+    var x = st.p % L.w + DX[d], y = ((st.p / L.w) | 0) + DY[d];
+    if (x < 0 || y < 0 || x >= L.w || y >= L.h) return { refused: "wall" };
+    var t = y * L.w + x;
+    if (solid(L, t)) return { refused: "wall" };
+    var pieces = st.pieces, pushed = false;
+    if (pieces[t]) {
+      var ux = x + DX[d], uy = y + DY[d];
+      if (ux < 0 || uy < 0 || ux >= L.w || uy >= L.h) return { refused: "stuck" };
+      var u = uy * L.w + ux;
+      if (solid(L, u) || pieces[u]) return { refused: "stuck" };
+      pieces = pieces.slice();
+      pieces[u] = pieces[t]; pieces[t] = NONE;
+      pushed = true;
+    }
+    var tr = trace(L, pieces, false);
+    if (tr.lit[t] && !ignoreBurn) return { refused: "burn" };     // the light would pass straight through you
+    return { p: t, pieces: pieces, moves: st.moves + 1, pushed: pushed, won: tr.allLit };
+  }
+
+  function isWon(L, st) { return trace(L, st.pieces, false).allLit; }
+
+  // compact key for a position: the player, then every piece as (cell, kind)
+  function key(L, st) {
+    var s = String.fromCharCode(st.p + 32);
+    for (var i = 0; i < st.pieces.length; i++) if (st.pieces[i]) s += String.fromCharCode(i + 32, st.pieces[i] + 32);
+    return s;
+  }
+
+  var api = {
+    FLOOR: FLOOR, WALL: WALL, EMIT: EMIT, RECV: RECV, FIX_S: FIX_S, FIX_B: FIX_B,
+    NONE: NONE, MIR_S: MIR_S, MIR_B: MIR_B, BLOCK: BLOCK, SPL_S: SPL_S, SPL_B: SPL_B,
+    DX: DX, DY: DY, DIR_CH: DIR_CH,
+    parse: parse, serialize: serialize, initial: initial, trace: trace, step: step, isWon: isWon, key: key, solid: solid
+  };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.BEAM = api;
+})(typeof window !== "undefined" ? window : this);
+
+</script>
+<script>
+// BEAMWRIGHT - the forty boxes.  Generated by forge.js, chosen by select.js.  Every par is a proven minimum.
+(function (root) {
+  var LEVELS = [
+    {"id":"L01","chapter":"Mirrors","title":"First Light","rows":["#o#####","#.....#","#...\\.#","#.\\...#","#.....#","#@....#","####^##"],"par":8},
+    {"id":"L02","chapter":"Mirrors","title":"Turnabout","rows":["###v###","#.@...o","#.....#","#.....#","#.\\...#","#.....#","#######"],"par":10},
+    {"id":"L03","chapter":"Mirrors","title":"The Long Way","rows":["#####v##","#...@..#","o......#","#......#","#..#./.#","#......#","#......#","########"],"par":11},
+    {"id":"L04","chapter":"Mirrors","title":"Glancing Blow","rows":["#v######","#.@....o","#......#","#\\..#..#","#......#","#......#","########"],"par":12},
+    {"id":"L05","chapter":"Mirrors","title":"Corner Office","rows":["###v####","#......#","#..../.#","#......#","#......#","o......#","#....@.#","########"],"par":14},
+    {"id":"L06","chapter":"Mirrors","title":"Two Silvers","rows":["####o##","#.....#","#.....<","#@#...#","#.#\\..#","#.....#","#######"],"par":15},
+    {"id":"L07","chapter":"Mirrors","title":"Backlit","rows":["########","#@.....#",">....\\.#","o.....##","#......#","#..../.#","#......#","########"],"par":16},
+    {"id":"L08","chapter":"Mirrors","title":"Hold Still","rows":["#######","#...@.#","#.....#","#.....#","#.....#","#.//#.o","#.....#","#####^#"],"par":18},
+    {"id":"L09","chapter":"Mirrors","title":"Narrow Margin","rows":["#o######","#......#","#.\\...@#",">......#","#/.#...#","#......#","########"],"par":19},
+    {"id":"L10","chapter":"Mirrors","title":"Keeper's Knot","rows":["####o###","#......#","#......#","#.#.\\#.#","#......#","#.\\....<","#.....@#","########"],"par":26},
+    
+  ];
+  if (typeof module !== "undefined" && module.exports) module.exports = LEVELS; else root.BEAM_LEVELS = LEVELS;
+})(typeof window !== "undefined" ? window : this);
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var B = window.BEAM, LEVELS = window.BEAM_LEVELS;
+  var DEMO = window.BEAM_EDITION === "demo";
+  var STORE = "https://kqmigqkqri.itch.io/beamwright";
+  var TOTAL = 40;
+  var cv = document.getElementById("cv"), ctx = cv.getContext("2d"), wrap = document.getElementById("wrap");
+  function $(id) { return document.getElementById(id); }
+
+  // ---------- layout: a 640 x 800 portrait page ----------
+  var W = 640, H = 800, TOP = 92, BOARD = 600, scale = 1, lastW = 0, lastH = 0;
+  function fit() {
+    scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+    var cw = Math.floor(W * scale), ch = Math.floor(H * scale);
+    wrap.style.width = cw + "px"; wrap.style.height = ch + "px";
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+  }
+  window.addEventListener("resize", fit);
+
+  // ---------- saving ----------
+  var KEY = DEMO ? "beam.demo.v1" : "beam.v1";
+  var save = (function () { var d = null; try { d = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {} return d || { best: {}, last: 0 }; })();
+  function persist() { try { localStorage.setItem(KEY, JSON.stringify(save)); } catch (e) {} }
+
+  // ---------- sound ----------
+  var AC = null, hum = null;
+  function audio() {
+    if (AC) { if (AC.state === "suspended") AC.resume(); return AC; }
+    var C = window.AudioContext || window.webkitAudioContext; if (!C) return null;
+    AC = new C(); return AC;
+  }
+  function tone(type, f, dur, vol, to) {
+    if (!audio()) return;
+    var now = AC.currentTime, o = AC.createOscillator(), g = AC.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, now);
+    if (to) o.frequency.exponentialRampToValueAtTime(to, now + dur);
+    g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(vol, now + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    o.connect(g); g.connect(AC.destination); o.start(now); o.stop(now + dur + 0.02);
+  }
+  var SFX = {
+    step: function () { tone("triangle", 180, 0.05, 0.05); },
+    push: function () { tone("sawtooth", 110, 0.09, 0.05, 80); },
+    lamp: function (n) { tone("sine", 660 + n * 220, 0.5, 0.08); },
+    burn: function () { tone("square", 140, 0.18, 0.06, 90); },
+    win: function () { [523, 659, 784, 1046, 1318].forEach(function (f, i) { setTimeout(function () { tone("sine", f, 0.6, 0.09); }, i * 90); }); },
+    undo: function () { tone("triangle", 240, 0.05, 0.04, 160); }
+  };
+
+  // ---------- state ----------
+  var idx = 0, L = null, st = null, history = [], tr = null, anim = null, flash = null, won = false, litBefore = 0;
+
+  function open(i) {
+    idx = i; save.last = i; persist();
+    L = B.parse(LEVELS[i].rows.join("\n"));
+    st = B.initial(L); history = []; won = false; anim = null; flash = null;
+    tr = B.trace(L, st.pieces, true); litBefore = tr.hit;
+    hideAll();
+  }
+  function move(d) {
+    if (!L || won || anim) return;
+    audio();
+    var r = B.step(L, st, d);
+    if (r.refused) {
+      if (r.refused === "burn") {
+        var x = st.p % L.w + B.DX[d], y = ((st.p / L.w) | 0) + B.DY[d];
+        flash = { x: x, y: y, t: 0 }; SFX.burn();
+      }
+      return;
+    }
+    history.push(st);
+    anim = { from: st.p, to: r.p, d: d, t: 0, pushed: r.pushed, pieceFrom: r.pushed ? r.p : -1 };
+    st = r;
+    if (r.pushed) SFX.push(); else SFX.step();
+    tr = B.trace(L, st.pieces, true);
+    if (tr.hit > litBefore) SFX.lamp(tr.hit);
+    litBefore = tr.hit;
+    if (r.won) {
+      won = true;
+      var lv = LEVELS[idx], prev = save.best[lv.id];
+      if (!prev || st.moves < prev) save.best[lv.id] = st.moves;
+      persist();
+      setTimeout(function () { SFX.win(); showWin(); }, 420);
+    }
+  }
+  function undo() {
+    if (!history.length || anim) return;
+    st = history.pop(); won = false; hide("ovWin");
+    tr = B.trace(L, st.pieces, true); litBefore = tr.hit; SFX.undo();
+  }
+  function restart() { if (!L) return; open(idx); }
+
+  // ---------- drawing ----------
+  function cellSize() { return Math.floor(Math.min(BOARD / L.w, BOARD / L.h, 76)); }
+  function origin(cs) { return { x: Math.floor((W - cs * L.w) / 2), y: TOP + Math.floor((BOARD - cs * L.h) / 2) + 6 }; }
+  function rr(x, y, w, h, r) {
+    ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+  function drawMirror(cx, cy, cs, kind, bolted) {
+    var d = cs * 0.34, slash = kind === B.MIR_S || kind === B.SPL_S || kind === "S";
+    if (!bolted) { ctx.fillStyle = "#3a2f22"; rr(cx - cs * 0.4, cy - cs * 0.4, cs * 0.8, cs * 0.8, cs * 0.12); ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,.08)"; ctx.lineWidth = 1; ctx.stroke(); }
+    else { ctx.fillStyle = "#26302f"; rr(cx - cs * 0.42, cy - cs * 0.42, cs * 0.84, cs * 0.84, cs * 0.08); ctx.fill();
+      ctx.fillStyle = "#6b7471"; [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(function (p) { ctx.beginPath(); ctx.arc(cx + p[0] * cs * 0.3, cy + p[1] * cs * 0.3, cs * 0.04, 0, 6.29); ctx.fill(); }); }
+    var split = kind === B.SPL_S || kind === B.SPL_B;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = split ? "rgba(140,220,255,.85)" : "#dfe8ea"; ctx.lineWidth = cs * 0.13;
+    ctx.beginPath();
+    if (slash) { ctx.moveTo(cx - d, cy + d); ctx.lineTo(cx + d, cy - d); } else { ctx.moveTo(cx - d, cy - d); ctx.lineTo(cx + d, cy + d); }
+    ctx.stroke();
+    ctx.strokeStyle = split ? "rgba(255,255,255,.5)" : "#ffffff"; ctx.lineWidth = cs * 0.035; ctx.stroke();
+  }
+  function drawBoard(time) {
+    var cs = cellSize(), o = origin(cs);
+    // floor and walls
+    for (var y = 0; y < L.h; y++) for (var x = 0; x < L.w; x++) {
+      var i = y * L.w + x, t = L.tile[i], px = o.x + x * cs, py = o.y + y * cs;
+      if (t === B.WALL) {
+        ctx.fillStyle = "#1c2526"; ctx.fillRect(px, py, cs, cs);
+        ctx.fillStyle = "rgba(255,255,255,.04)"; ctx.fillRect(px, py, cs, 2);
+      } else {
+        ctx.fillStyle = ((x + y) & 1) ? "#2a3436" : "#2e393b"; ctx.fillRect(px, py, cs, cs);
+      }
+    }
+    // the light, under everything that sits on the floor
+    var lit = tr.lit;
+    for (i = 0; i < lit.length; i++) if (lit[i]) {
+      var lx = o.x + (i % L.w) * cs, ly = o.y + ((i / L.w) | 0) * cs;
+      ctx.fillStyle = "rgba(255,214,120,.10)"; ctx.fillRect(lx, ly, cs, cs);
+    }
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    var flick = 0.85 + 0.15 * Math.sin(time * 9);
+    [[cs * 0.42, "rgba(255,170,60," + (0.12 * flick) + ")"], [cs * 0.2, "rgba(255,210,120,.35)"], [cs * 0.07, "rgba(255,250,225,.95)"]].forEach(function (layer) {
+      ctx.strokeStyle = layer[1]; ctx.lineWidth = layer[0]; ctx.lineCap = "round";
+      tr.segs.forEach(function (s) {
+        ctx.beginPath();
+        ctx.moveTo(o.x + (s[0] + 0.5) * cs, o.y + (s[1] + 0.5) * cs);
+        ctx.lineTo(o.x + (s[2] + 0.5) * cs, o.y + (s[3] + 0.5) * cs);
+        ctx.stroke();
+      });
+    });
+    ctx.restore();
+    // fixed tiles
+    for (y = 0; y < L.h; y++) for (x = 0; x < L.w; x++) {
+      i = y * L.w + x; t = L.tile[i];
+      var cx = o.x + (x + 0.5) * cs, cy = o.y + (y + 0.5) * cs;
+      if (t === B.EMIT) {
+        var e = L.emit.filter(function (q) { return q.i === i; })[0];
+        ctx.fillStyle = "#5a4526"; rr(cx - cs * 0.42, cy - cs * 0.42, cs * 0.84, cs * 0.84, cs * 0.16); ctx.fill();
+        ctx.fillStyle = "#d9a94a"; ctx.beginPath(); ctx.arc(cx, cy, cs * 0.26, 0, 6.29); ctx.fill();
+        ctx.fillStyle = "#fff6d8"; ctx.beginPath(); ctx.arc(cx + B.DX[e.d] * cs * 0.18, cy + B.DY[e.d] * cs * 0.18, cs * 0.13, 0, 6.29); ctx.fill();
+      } else if (t === B.RECV) {
+        var on = tr.recvLit[i];
+        if (on) { var gg = ctx.createRadialGradient(cx, cy, 0, cx, cy, cs * 0.9); gg.addColorStop(0, "rgba(255,230,150,.65)"); gg.addColorStop(1, "rgba(255,200,80,0)"); ctx.fillStyle = gg; ctx.fillRect(cx - cs, cy - cs, cs * 2, cs * 2); }
+        ctx.fillStyle = "#1a2122"; ctx.beginPath(); ctx.arc(cx, cy, cs * 0.38, 0, 6.29); ctx.fill();
+        ctx.fillStyle = on ? "#fff3c4" : "#3d5355"; ctx.beginPath(); ctx.arc(cx, cy, cs * 0.28, 0, 6.29); ctx.fill();
+        ctx.strokeStyle = on ? "#f3d27a" : "#5fc6c0"; ctx.lineWidth = 2; ctx.stroke();
+      } else if (t === B.FIX_S || t === B.FIX_B) drawMirror(cx, cy, cs, t === B.FIX_S ? "S" : "B", true);
+    }
+    // pieces (the one just pushed slides in)
+    var k = anim ? Math.min(1, anim.t / 0.09) : 1;
+    for (i = 0; i < st.pieces.length; i++) {
+      var pc = st.pieces[i]; if (!pc) continue;
+      var gx = i % L.w, gy = (i / L.w) | 0;
+      if (anim && anim.pushed && i === anim.to + B.DX[anim.d] + B.DY[anim.d] * L.w) { gx -= B.DX[anim.d] * (1 - k); gy -= B.DY[anim.d] * (1 - k); }
+      cx = o.x + (gx + 0.5) * cs; cy = o.y + (gy + 0.5) * cs;
+      if (pc === B.BLOCK) {
+        ctx.fillStyle = "#4b4f52"; rr(cx - cs * 0.4, cy - cs * 0.4, cs * 0.8, cs * 0.8, cs * 0.08); ctx.fill();
+        ctx.strokeStyle = "#2b2f31"; ctx.lineWidth = cs * 0.05;
+        for (var s = -1; s <= 1; s++) { ctx.beginPath(); ctx.moveTo(cx - cs * 0.32, cy + s * cs * 0.18); ctx.lineTo(cx + cs * 0.32, cy + s * cs * 0.18); ctx.stroke(); }
+      } else drawMirror(cx, cy, cs, pc, false);
+    }
+    // the keeper
+    var fx = st.p % L.w, fy = (st.p / L.w) | 0;
+    if (anim) { fx -= B.DX[anim.d] * (1 - k); fy -= B.DY[anim.d] * (1 - k); }
+    cx = o.x + (fx + 0.5) * cs; cy = o.y + (fy + 0.5) * cs;
+    ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.beginPath(); ctx.ellipse(cx, cy + cs * 0.3, cs * 0.24, cs * 0.08, 0, 0, 6.29); ctx.fill();
+    ctx.fillStyle = "#5fc6c0"; ctx.beginPath(); ctx.arc(cx, cy + cs * 0.04, cs * 0.24, 0, 6.29); ctx.fill();
+    ctx.fillStyle = "#e9e4d6"; ctx.beginPath(); ctx.arc(cx, cy - cs * 0.16, cs * 0.14, 0, 6.29); ctx.fill();
+    ctx.fillStyle = "#2b2f31"; rr(cx - cs * 0.17, cy - cs * 0.34, cs * 0.34, cs * 0.08, 2); ctx.fill();
+    // a refused move: show where the light would have caught you
+    if (flash) {
+      var a = Math.max(0, 1 - flash.t / 0.6);
+      ctx.fillStyle = "rgba(255,90,60," + (0.45 * a) + ")";
+      ctx.fillRect(o.x + flash.x * cs, o.y + flash.y * cs, cs, cs);
+      if (a <= 0) flash = null;
+    }
+  }
+  function btn(x, y, w, h, label, fn) {
+    ctx.fillStyle = "#162020"; rr(x, y, w, h, 8); ctx.fill();
+    ctx.strokeStyle = "rgba(217,169,74,.35)"; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = "#e9e4d6"; ctx.font = "bold 14px 'Trebuchet MS',sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+    hits.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+  var hits = [];
+  function drawHud() {
+    var lv = LEVELS[idx];
+    ctx.fillStyle = "#0e1314"; ctx.fillRect(0, 0, W, TOP - 6);
+    ctx.fillStyle = "rgba(217,169,74,.25)"; ctx.fillRect(0, TOP - 7, W, 1);
+    ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = "#5fc6c0"; ctx.font = "12px 'Trebuchet MS',sans-serif";
+    ctx.fillText((lv.chapter + "  ·  box " + (idx + 1) + " of " + TOTAL).toUpperCase(), 16, 26);
+    ctx.fillStyle = "#e9e4d6"; ctx.font = "bold 22px 'Trebuchet MS',sans-serif";
+    ctx.fillText(lv.title, 16, 54);
+    ctx.textAlign = "right";
+    ctx.fillStyle = st.moves > lv.par ? "#e9e4d6" : "#f3d27a"; ctx.font = "bold 26px 'Trebuchet MS',sans-serif";
+    ctx.fillText(String(st.moves), W - 16, 50);
+    ctx.fillStyle = "#8f8a7c"; ctx.font = "12px 'Trebuchet MS',sans-serif";
+    ctx.fillText("moves  ·  par " + lv.par + (save.best[lv.id] ? "  ·  best " + save.best[lv.id] : ""), W - 16, 72);
+    ctx.textAlign = "left";
+    var lamps = L.recv.length;
+    ctx.fillStyle = "#8f8a7c";
+    ctx.fillText("lamps lit " + tr.hit + " / " + lamps, 16, 76);
+    // bottom bar
+    var y = H - 92;
+    ctx.fillStyle = "#0e1314"; ctx.fillRect(0, y, W, 92);
+    btn(16, y + 20, 100, 48, "↶ UNDO", undo);
+    btn(124, y + 20, 104, 48, "↻ RESTART", restart);
+    btn(W - 112, y + 20, 96, 48, "BOXES", showLevels);
+    // a small d-pad for touch and mouse, clear of the buttons either side
+    var px = W / 2 + 18, py = y + 4;
+    btn(px, py, 52, 40, "▲", function () { move(0); });
+    btn(px - 56, py + 44, 52, 40, "◀", function () { move(3); });
+    btn(px, py + 44, 52, 40, "▼", function () { move(2); });
+    btn(px + 56, py + 44, 52, 40, "▶", function () { move(1); });
+  }
+  var lastT = performance.now();
+  function frame(now) {
+    var dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
+    if (window.innerWidth !== lastW || window.innerHeight !== lastH) { lastW = window.innerWidth; lastH = window.innerHeight; fit(); }
+    if (anim) { anim.t += dt; if (anim.t >= 0.09) anim = null; }
+    if (flash) flash.t += dt;
+    hits = [];
+    ctx.fillStyle = "#0a0d0e"; ctx.fillRect(0, 0, W, H);
+    if (L) { drawBoard(now / 1000); drawHud(); }
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- input ----------
+  var KEYMAP = { ArrowUp: 0, ArrowRight: 1, ArrowDown: 2, ArrowLeft: 3, w: 0, d: 1, s: 2, a: 3, W: 0, D: 1, S: 2, A: 3 };
+  window.addEventListener("keydown", function (e) {
+    if (KEYMAP[e.key] != null && overlaysHidden()) { e.preventDefault(); move(KEYMAP[e.key]); return; }
+    if ((e.key === "z" || e.key === "Z" || e.key === "Backspace" || e.key === "u") && overlaysHidden()) { e.preventDefault(); undo(); return; }
+    if ((e.key === "r" || e.key === "R") && overlaysHidden()) { restart(); return; }
+    if (e.key === "Escape") { if (!$("ovLevels").hidden) hide("ovLevels"); else showLevels(); }
+  });
+  function local(ev) {
+    var r = cv.getBoundingClientRect(), p = ev.changedTouches ? ev.changedTouches[0] : ev;
+    return { x: (p.clientX - r.left) / r.width * W, y: (p.clientY - r.top) / r.height * H };
+  }
+  var touch0 = null;
+  cv.addEventListener("mousedown", function (e) { audio(); var p = local(e); for (var i = 0; i < hits.length; i++) { var h = hits[i]; if (p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h) { h.fn(); return; } } });
+  cv.addEventListener("touchstart", function (e) { audio(); touch0 = local(e); e.preventDefault(); }, { passive: false });
+  cv.addEventListener("touchend", function (e) {
+    var p = local(e); e.preventDefault();
+    if (!touch0) return;
+    var dx = p.x - touch0.x, dy = p.y - touch0.y;
+    if (Math.abs(dx) < 24 && Math.abs(dy) < 24) {
+      for (var i = 0; i < hits.length; i++) { var h = hits[i]; if (p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h) { h.fn(); break; } }
+    } else move(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 2 : 0));
+    touch0 = null;
+  }, { passive: false });
+
+  // ---------- overlays ----------
+  function show(id) { $(id).hidden = false; }
+  function hide(id) { $(id).hidden = true; }
+  function hideAll() { ["ovTitle", "ovHow", "ovLevels", "ovWin"].forEach(hide); }
+  function overlaysHidden() { return ["ovTitle", "ovHow", "ovLevels", "ovWin"].every(function (id) { return $(id).hidden; }); }
+  function unlocked(i) {
+    // within a chapter, three boxes ahead of the first unsolved one are open; a chapter opens after six of the last are solved
+    var ch = Math.floor(i / 10), solvedHere = 0, solvedPrev = 0;
+    for (var k = ch * 10; k < ch * 10 + 10 && k < LEVELS.length; k++) if (save.best[LEVELS[k].id]) solvedHere++;
+    if (ch > 0) for (k = (ch - 1) * 10; k < ch * 10; k++) if (save.best[LEVELS[k].id]) solvedPrev++;
+    if (ch > 0 && solvedPrev < 6) return false;
+    return (i % 10) < solvedHere + 3;
+  }
+  function showLevels() {
+    var html = "", done = 0, stars = 0, chapters = ["I. Mirrors", "II. Shutters", "III. Twin Lamps", "IV. Half-Silvered"];
+    for (var c = 0; c < 4; c++) {
+      html += '<div class="chap">' + chapters[c].toUpperCase() + "</div><div class=\"grid\">";
+      for (var k = c * 10; k < c * 10 + 10; k++) {
+        var lv = LEVELS[k];
+        if (!lv) { html += '<button class="lv" disabled><b>' + (k + 1) + "</b><span>full game</span></button>"; continue; }
+        var b = save.best[lv.id];
+        if (b) { done++; if (b <= lv.par) stars++; }
+        html += '<button class="lv' + (b ? (b <= lv.par ? " best" : " done") : "") + '" data-i="' + k + '"' + (unlocked(k) ? "" : " disabled") + "><b>" + (k + 1) + "</b><span>" +
+          (b ? (b <= lv.par ? "★ " : "") + b + " / " + lv.par : "par " + lv.par) + "</span></button>";
+      }
+      html += "</div>";
+    }
+    $("lvBody").innerHTML = html;
+    $("lvTally").textContent = "Lit " + done + " of " + TOTAL + "   ·   at par " + stars;
+    Array.prototype.forEach.call(document.querySelectorAll(".lv[data-i]"), function (el) {
+      el.addEventListener("click", function () { open(parseInt(el.getAttribute("data-i"), 10)); });
+    });
+    hideAll(); show("ovLevels");
+  }
+  function showWin() {
+    var lv = LEVELS[idx], atPar = st.moves <= lv.par;
+    $("wHead").textContent = atPar ? "★ LIT AT PAR" : "ALL LAMPS LIT";
+    $("wMoves").textContent = st.moves + " moves";
+    $("wSub").textContent = "par " + lv.par + "  ·  your best " + save.best[lv.id];
+    $("wNote").textContent = atPar ? "That is the fewest moves this box can be solved in. Nobody will do it in fewer." :
+      "This box can be done in " + lv.par + ". That number was found by checking every position the box can reach.";
+    var next = LEVELS[idx + 1];
+    $("btnNext").hidden = !next || !unlocked(idx + 1);
+    show("ovWin");
+  }
+  function bind(id, fn) { var el = $(id); if (el) el.addEventListener("click", function () { audio(); fn(); }); }
+  bind("btnPlay", function () { var i = Math.min(save.last || 0, LEVELS.length - 1); open(i); });
+  bind("btnLevels", showLevels);
+  bind("btnHow", function () { show("ovHow"); });
+  bind("btnHowBack", function () { hide("ovHow"); });
+  bind("btnLevelsBack", function () { hide("ovLevels"); if (!L) show("ovTitle"); });
+  bind("btnNext", function () { open(idx + 1); });
+  bind("btnRetry", function () { restart(); });
+  bind("btnWinLevels", showLevels);
+  
+  bind("btnBuyTitle", function () { window.open(STORE, "_blank"); });
+  bind("btnBuyLevels", function () { window.open(STORE, "_blank"); });
+  
+
+  window.BEAM_APP = {
+    open: open, move: move, undo: undo, state: function () { return { idx: idx, st: st, won: won, hit: tr && tr.hit, moves: st && st.moves }; },
+    showLevels: showLevels, showWin: showWin, save: function () { return save; }, hideAll: hideAll
+  };
+
+  (function () {
+    var done = 0; for (var k in save.best) done++;
+    $("playSub").textContent = done ? "box " + ((save.last || 0) + 1) : (DEMO ? "the first 10 boxes, free" : "40 boxes");
+    $("titleFoot").textContent = done ? "lit " + done + " of " + TOTAL : "every par is a proven minimum";
+  })();
+  fit();
+  requestAnimationFrame(frame);
+})();
+</script>

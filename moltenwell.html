@@ -1,0 +1,1645 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>MOLTENWELL</title>
+<style>
+  :root{ --ink:#f2e8dc; --dim:#9b8f82; --gold:#ffb64a; --ember:#ff6a1f; --cold:#7fd8ff;
+         --panel:rgba(16,12,11,.95); --edge:rgba(255,182,74,.28); }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  [hidden]{display:none!important}
+  html,body{height:100%;margin:0}
+  body{background:#070605;color:var(--ink);font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;
+       display:flex;align-items:center;justify-content:center;overflow:hidden;user-select:none}
+  #wrap{position:relative}
+  canvas{display:block;width:100%;height:100%;touch-action:none;image-rendering:pixelated}
+  .ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:14px;
+      background:rgba(8,6,5,.86);backdrop-filter:blur(3px);z-index:5}
+  .card{width:min(520px,96%);max-height:96%;overflow:auto;background:var(--panel);border:1px solid var(--edge);
+        border-radius:14px;padding:18px 20px;box-shadow:0 20px 60px rgba(0,0,0,.65)}
+  h1{margin:2px 0 0;text-align:center;font-size:46px;letter-spacing:6px;line-height:1;
+     background:linear-gradient(180deg,#fff3dc,#ffb64a 55%,#ff5a1f);-webkit-background-clip:text;background-clip:text;color:transparent;
+     filter:drop-shadow(0 3px 0 #3a1a08)}
+  h2{margin:0 0 8px;font-size:20px;letter-spacing:2px;color:var(--gold)}
+  .tag{text-align:center;color:var(--dim);margin:8px 0 14px;font-size:14px;line-height:1.5}
+  p{margin:7px 0;line-height:1.5;font-size:14px}
+  .btn{display:block;width:100%;margin:7px 0;padding:12px 14px;border-radius:10px;cursor:pointer;border:1px solid var(--edge);
+       background:linear-gradient(180deg,#3a251a,#201510);color:var(--ink);font:inherit;font-size:16px;font-weight:bold;letter-spacing:2px}
+  .btn:hover{border-color:var(--gold)}
+  .btn.go{background:linear-gradient(180deg,#ffb64a,#e2701c);color:#2a1206;border-color:#ffd79a}
+  .btn.buy{background:linear-gradient(180deg,#8bd36b,#3f8f33);color:#0f2208;border-color:#c7f0b4}
+  .btn small{display:block;font-size:11px;font-weight:normal;letter-spacing:1px;opacity:.78;margin-top:2px}
+  .row{display:flex;gap:8px}
+  .heat{display:flex;align-items:center;gap:8px;margin:4px 0}
+  .heat button{width:42px;padding:8px 0;border-radius:8px;border:1px solid var(--edge);background:#201510;color:var(--ink);font:inherit;font-size:16px;cursor:pointer}
+  .heat button:disabled{opacity:.3}
+  .heat .lbl{flex:1;text-align:center;font-size:12px;color:var(--dim)}
+  .heat .lbl b{display:block;color:var(--gold);font-size:15px}
+  .cards{display:grid;gap:8px;margin-top:8px}
+  .up{padding:12px 14px;border-radius:12px;border:1px solid var(--edge);cursor:pointer;background:linear-gradient(180deg,#34241a,#1d1510);text-align:left}
+  .up:hover{border-color:var(--gold);background:linear-gradient(180deg,#48311f,#291d14)}
+  .up .k{font-size:10px;letter-spacing:2px;color:var(--cold)}
+  .up .n{font-size:17px;font-weight:bold;color:var(--gold);margin-top:2px}
+  .up .d{font-size:13px;color:var(--dim);margin-top:3px;line-height:1.35}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:6px 0}
+  td{padding:4px 5px;border-bottom:1px solid rgba(255,182,74,.12);vertical-align:top}
+  td.r{text-align:right;color:var(--gold);white-space:nowrap}
+  .big{text-align:center;font-size:34px;color:var(--gold);letter-spacing:2px;margin:4px 0}
+  .mid{text-align:center;color:var(--dim);font-size:13px}
+  .keys{display:grid;grid-template-columns:auto 1fr;gap:5px 10px;font-size:13px;margin:8px 0}
+  .keys b{color:var(--gold);white-space:nowrap}
+  .foot{text-align:center;color:var(--dim);font-size:11px;margin-top:10px;letter-spacing:1px}
+  .note{color:var(--cold);text-align:center;font-size:13px;margin-top:6px}
+</style>
+
+<div id="wrap">
+  <canvas id="cv"></canvas>
+
+  <div class="ov" id="ovTitle">
+    <div class="card">
+      <h1>MOLTENWELL</h1>
+      <div class="tag">They climb out of the dark.<br>You have sand, water and lava. Pour.</div>
+      <div class="heat" id="heatBox" hidden>
+        <button id="heatDown">&lsaquo;</button>
+        <div class="lbl"><b id="heatName">Depth 0</b><span id="heatDesc"></span></div>
+        <button id="heatUp">&rsaquo;</button>
+      </div>
+      <button class="btn go" id="btnPlay">LIGHT THE HEARTH<small id="playSub">20 waves &middot; saves between waves</small></button>
+      <button class="btn" id="btnResume" hidden>CONTINUE</button>
+      <div class="row">
+        
+        <button class="btn" id="btnHow">HOW TO PLAY</button>
+      </div>
+      <button class="btn" id="btnRecords">RECORDS &amp; REACTIONS</button>
+      <button class="btn buy" id="btnBuyTitle">GET THE FULL GAME<small>20 waves &middot; 6 depths &middot; 2 bosses &middot; endless &middot; daily</small></button>
+      <div class="foot" id="titleFoot"></div>
+    </div>
+  </div>
+
+  <div class="ov" id="ovHow" hidden>
+    <div class="card">
+      <h2>HOW TO PLAY</h2>
+      <p>Monsters climb the well toward your hearth at the top. You cannot build walls or towers &mdash; you pour <b>materials</b>, and they behave like real sand, water and lava.</p>
+      <div class="keys">
+        <b>Hold / drag</b><span>Pour the selected material wherever you point</span>
+        <b>1 &ndash; 8</b><span>Pick a material</span>
+        <b>Space</b><span>Send in the next wave</span>
+        <b>Esc</b><span>Pause</span>
+      </div>
+      <p><b>Pressure</b> (the blue bar) is your only limit. It refills on its own, so pour in bursts.</p>
+      <p>Everything drains into the abyss at the bottom, but it piles up on the rock shelves on the way down. A pool of lava on a shelf keeps burning things for a long time.</p>
+      <p><b>Materials react.</b> Lava and water make stone, which falls and crushes. Lava and sand make glass. Fire runs along oil. Acid eats stone, armour and sand. Ice freezes a whole pool. Find them all in the Reactions list.</p>
+      <p>Monsters are not all the same: emberlings walk through fire, oozers shrug off water, carapaces ignore crushing but melt in acid, and mothlings fly over everything &mdash; but steam scalds them.</p>
+      <button class="btn go" id="btnHowBack">GOT IT</button>
+    </div>
+  </div>
+
+  <div class="ov" id="ovRecords" hidden>
+    <div class="card">
+      <h2>RECORDS &amp; REACTIONS</h2>
+      <div id="recBody"></div>
+      <button class="btn go" id="btnRecBack">BACK</button>
+    </div>
+  </div>
+
+  <div class="ov" id="ovReward" hidden>
+    <div class="card">
+      <h2 id="rwTitle">WAVE CLEARED</h2>
+      <div class="mid" id="rwSub"></div>
+      <div class="cards" id="rwCards"></div>
+    </div>
+  </div>
+
+  <div class="ov" id="ovPause" hidden>
+    <div class="card">
+      <h2>PAUSED</h2>
+      <button class="btn go" id="btnUnpause">BACK TO THE WELL</button>
+      <button class="btn" id="btnPauseHow">HOW TO PLAY</button>
+      <button class="btn" id="btnQuit">SAVE &amp; QUIT</button>
+    </div>
+  </div>
+
+  <div class="ov" id="ovOver" hidden>
+    <div class="card">
+      <h2 id="ovHead">THE HEARTH WENT OUT</h2>
+      <div class="big" id="ovScore"></div>
+      <div class="mid" id="ovSub"></div>
+      <table id="ovTable"></table>
+      <div class="note" id="ovNote"></div>
+      <button class="btn buy" id="btnBuyOver" hidden>GET THE FULL GAME<small>waves 9&ndash;20 &middot; 6 depths &middot; 2 bosses &middot; endless &middot; daily</small></button>
+      <button class="btn go" id="btnAgain">AGAIN</button>
+      
+      <div class="row">
+        <button class="btn" id="btnCopy">COPY RESULT</button>
+        <button class="btn" id="btnMenu">MENU</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>window.MOLTEN_EDITION = "demo";</script>
+<script>
+/* MOLTENWELL - falling-sand defence. Rules only, no DOM.
+   Deterministic: same seed + same commands at the same ticks => same result.
+   The rules never call the random, trig or power helpers (browsers differ in the last bits). */
+(function (root) {
+  "use strict";
+
+  var TICK = 1 / 60;
+  var W = 144, H = 167;              // simulation grid (cells)
+  var HEARTH_Y = 16;                 // monsters that climb above this line reach the hearth
+  var WAVES = 8;              // build.py cuts this to 8 for the free demo
+
+  // ---------- materials ----------
+  // kind: 0 solid, 1 powder, 2 liquid, 3 gas.  dens: heavier sinks through lighter liquid.
+  var EMPTY = 0, WALL = 1, SAND = 2, WATER = 3, LAVA = 4, STONE = 5, OIL = 6,
+      FIRE = 7, ACID = 8, ICE = 9, STEAM = 10, POWDER = 11, GLASS = 12, EMBER = 13;
+  var MATS = [
+    { id: EMPTY,  name: "Air",       kind: 3, dens: 0,  col: 0x000000 },
+    { id: WALL,   name: "Rock",      kind: 0, dens: 99, col: 0x3b3a44 },
+    { id: SAND,   name: "Sand",      kind: 1, dens: 6,  col: 0xd9b26a, cost: 1,  pour: true },
+    { id: WATER,  name: "Water",     kind: 2, dens: 3,  col: 0x3f7fd6, cost: 1,  pour: true },
+    { id: LAVA,   name: "Lava",      kind: 2, dens: 5,  col: 0xff6a1f, cost: 3,  pour: true, hot: true },
+    { id: STONE,  name: "Stone",     kind: 0, dens: 99, col: 0x6b6b73 },
+    { id: OIL,    name: "Oil",       kind: 2, dens: 2,  col: 0x5a4632, cost: 2,  pour: true, burns: true },
+    { id: FIRE,   name: "Fire",      kind: 3, dens: 0,  col: 0xffb12e, cost: 2,  pour: true, hot: true },
+    { id: ACID,   name: "Acid",      kind: 2, dens: 3,  col: 0x8dff57, cost: 3,  pour: true },
+    { id: ICE,    name: "Ice",       kind: 0, dens: 99, col: 0x9fe8ff, cost: 3,  pour: true, cold: true },
+    { id: STEAM,  name: "Steam",     kind: 3, dens: 0,  col: 0xc9d8e8 },
+    { id: POWDER, name: "Blackpowder", kind: 1, dens: 5, col: 0x4a4a52, cost: 3, pour: true, burns: true },
+    { id: GLASS,  name: "Glass",     kind: 0, dens: 99, col: 0x89d8d0 },
+    { id: EMBER,  name: "Embers",    kind: 1, dens: 4,  col: 0xff8c3a, hot: true }
+  ];
+  var POURABLE = [SAND, WATER, LAVA, OIL, FIRE, ACID, ICE, POWDER];
+  function matName(m) { return MATS[m].name; }
+
+  // reactions the player can discover (for the codex)
+  var REACTIONS = [
+    { id: "stone",  a: LAVA, b: WATER,  name: "Lava + Water",      out: "Stone (and a burst of steam) - it sets hard, crushing whatever was standing there" },
+    { id: "glass",  a: LAVA, b: SAND,   name: "Lava + Sand",       out: "Glass - a hard, clear wall" },
+    { id: "ignite", a: LAVA, b: OIL,    name: "Lava + Oil",        out: "Fire - oil carries flame everywhere it has run" },
+    { id: "blast",  a: FIRE, b: POWDER, name: "Fire + Blackpowder",out: "Explosion - clears a crater and everything in it" },
+    { id: "melt",   a: LAVA, b: ICE,    name: "Lava + Ice",        out: "Water and steam" },
+    { id: "douse",  a: WATER, b: FIRE,  name: "Water + Fire",      out: "Steam - and the fire is gone" },
+    { id: "freeze", a: ICE,  b: WATER,  name: "Ice + Water",       out: "More ice - freeze a whole pool" },
+    { id: "dilute", a: ACID, b: WATER,  name: "Acid + Water",      out: "Plain water - acid is washed away" },
+    { id: "etch",   a: ACID, b: STONE,  name: "Acid + Stone",      out: "Acid eats stone, glass and sand away" },
+    { id: "scald",  a: STEAM, b: 0,     name: "Steam",             out: "Rises and scalds anything with wings" },
+    { id: "ember",  a: EMBER, b: 0,     name: "Embers",            out: "What fire leaves behind - still hot, and it falls" },
+    { id: "burn",   a: FIRE, b: OIL,    name: "Fire + Oil",        out: "The whole slick goes up at once" }
+  ];
+
+  // ---------- monsters ----------
+  var MONSTERS = {
+    creep:    { name: "Creep",     hp: 14,  spd: 9.0,  r: 2.2, gold: 1, pts: 10, col: 0x7fd36b },
+    scuttler: { name: "Scuttler",  hp: 8,   spd: 15.0, r: 1.8, gold: 1, pts: 12, col: 0xffe066 },
+    brute:    { name: "Brute",     hp: 60,  spd: 6.5,  r: 3.4, gold: 3, pts: 40, col: 0xd9694a, dig: 3 },
+    emberling:{ name: "Emberling", hp: 20,  spd: 10.5,  r: 2.2, gold: 2, pts: 25, col: 0xff8c3a, fireImmune: true },
+    oozer:    { name: "Oozer",     hp: 26,  spd: 8.0,  r: 2.6, gold: 2, pts: 25, col: 0x4aa3d9, waterImmune: true },
+    carapace: { name: "Carapace",  hp: 44,  spd: 7.0,  r: 3.0, gold: 3, pts: 35, col: 0xb0a6d9, armour: 0.5, crushImmune: true },
+    flyer:    { name: "Mothling",  hp: 12,  spd: 11.0,  r: 2.2, gold: 2, pts: 20, col: 0xd98cd9, flies: true }
+
+  };
+
+  // ---------- upgrades ----------
+  var UPGRADES = [
+    { id: "u_oil",    kind: "unlock", mat: OIL,    name: "Oil Barrels",    desc: "Pour Oil: it spreads thin and catches fire from anything hot." },
+    { id: "u_fire",   kind: "unlock", mat: FIRE,   name: "Torch",          desc: "Pour Fire directly. Cheap, and it loves oil." },
+    { id: "u_acid",   kind: "unlock", mat: ACID,   name: "Acid Flask",     desc: "Pour Acid: eats armour, stone and sand alike." },
+    { id: "u_ice",    kind: "unlock", mat: ICE,    name: "Frostcask",      desc: "Pour Ice: a solid wall that freezes water and slows everything." },
+    { id: "u_powder", kind: "unlock", mat: POWDER, name: "Blackpowder",    desc: "Pour Blackpowder: harmless until something lights it." },
+    { id: "tank",   kind: "stack", max: 4, name: "Bigger Tank",    desc: "+40 pressure capacity." },
+    { id: "pump",   kind: "stack", max: 4, name: "Faster Pump",    desc: "+30% pressure regained per second." },
+    { id: "nozzle", kind: "stack", max: 3, name: "Wide Nozzle",    desc: "+1 pour radius." },
+    { id: "heat",   kind: "stack", max: 3, name: "Deep Heat",      desc: "Lava and fire burn 35% hotter." },
+    { id: "etch",   kind: "stack", max: 3, name: "Strong Acid",    desc: "Acid eats 40% faster." },
+    { id: "crush",  kind: "stack", max: 3, name: "Heavy Stone",    desc: "Falling stone and sand crush 50% harder." },
+    { id: "hearth", kind: "stack", max: 3, name: "Banked Fire",    desc: "+20 hearth health, and repair 20 now." },
+    { id: "tithe",  kind: "stack", max: 3, name: "Soul Tithe",     desc: "+2 pressure for every monster that dies." },
+    { id: "gold",   kind: "stack", max: 3, name: "Gilded Ash",     desc: "+1 ember (gold) from every kill." },
+    { id: "r_shards", kind: "relic", name: "Shatterstone", desc: "Stone that forms in water explodes into shards." },
+    { id: "r_steam",  kind: "relic", name: "Scalding Veil", desc: "Steam does triple damage and lingers twice as long." },
+    { id: "r_slick",  kind: "relic", name: "Everburn",      desc: "Fire never goes out on its own while it has oil to eat." },
+    { id: "r_frost",  kind: "relic", name: "Deep Winter",   desc: "Frozen monsters take double damage from everything." },
+    { id: "r_well",   kind: "relic", name: "Hungry Well",   desc: "Every monster that dies refunds a little pressure and ember." }
+  ];
+  function upg(id) { for (var i = 0; i < UPGRADES.length; i++) if (UPGRADES[i].id === id) return UPGRADES[i]; return null; }
+  function lv(g, id) { return g.up[id] || 0; }
+
+  var HEAT = [
+    { name: "Depth 0", desc: "The standard descent." },
+
+  ];
+
+  // ---------- deterministic helpers ----------
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function makeRng(seed) {
+    var f = mulberry32(seed), o = function () { o.s = (o.s + 1) | 0; return f(); };
+    o.s = 0; o.seed = seed;
+    return o;
+  }
+  function resumeRng(seed, calls) { var r = makeRng(seed); for (var i = 0; i < calls; i++) r(); return r; }
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+  function tri(p) { p = p - Math.floor(p); return p < 0.5 ? p * 4 - 1 : 3 - p * 4; }
+
+  // ---------- creation ----------
+  function newGame(seed, opts) {
+    opts = opts || {};
+    var heat = clamp(opts.heat | 0, 0, HEAT.length - 1);
+    var g = {
+      seed: seed >>> 0, rng: makeRng(seed >>> 0), heat: heat, mode: opts.mode || "run",
+      W: W, H: H, mat: new Uint8Array(W * H), aux: new Uint8Array(W * H), moved: new Uint8Array(W * H),
+      frame: 0, t: 0, wave: 0, phase: "build",      // build | wave | reward | over
+      hearth: 120, hearthMax: 120,
+      pressure: 160, pressureMax: 160, pourCd: 0,
+      ember: 0, score: 0, kills: 0, over: false, won: false,
+      up: {}, unlocked: { 2: true, 3: true, 4: true }, relics: {}, found: {},
+      mons: [], nextId: 1, spawns: [], spawnT: 0,
+      events: [], offered: null, poured: 0, sel: SAND,
+      stats: { poured: 0, reactions: 0, crushed: 0, burned: 0 }
+    };
+    if (heat >= 5) { g.hearth = 60; }
+    terrain(g, 1);
+    return g;
+  }
+
+  // the well: rock walls with shelves jutting in, open at the bottom so everything drains away
+  function terrain(g, act) {
+    g.terrainCalls = g.rng.s;                 // where in the sequence this well was dug
+    var m = g.mat, x, y;
+    m.fill(EMPTY);
+    g.aux.fill(0);
+    var wall = 5 + (act - 1);
+    for (y = 0; y < H; y++) {
+      for (x = 0; x < wall; x++) { m[y * W + x] = WALL; m[y * W + (W - 1 - x)] = WALL; }
+    }
+    // the hearth floor at the top, with a gap the monsters try to climb through
+    for (y = HEARTH_Y - 3; y < HEARTH_Y; y++) for (x = wall; x < W - wall; x++) m[y * W + x] = WALL;
+    var gap = 10 + Math.floor(g.rng() * 10), gx = wall + 6 + Math.floor(g.rng() * (W - 2 * wall - gap - 12));
+    for (y = HEARTH_Y - 3; y < HEARTH_Y; y++) for (x = gx; x < gx + gap; x++) m[y * W + x] = EMPTY;
+    g.gapX = gx + gap / 2;
+    // shelves: material collects on them, and monsters climb around them
+    var shelves = 5 + act, i;
+    for (i = 0; i < shelves; i++) {
+      var sy = HEARTH_Y + 14 + Math.floor(g.rng() * (H - HEARTH_Y - 34));
+      var side = g.rng() < 0.5;
+      var len = 16 + Math.floor(g.rng() * 34);
+      var th = 2 + Math.floor(g.rng() * 3);
+      for (y = sy; y < sy + th && y < H; y++) {
+        for (x = 0; x < len; x++) {
+          var px = side ? wall + x : W - 1 - wall - x;
+          if (px > wall && px < W - wall) m[y * W + px] = WALL;
+        }
+      }
+      // a lip on the outer end, so the shelf is a basin: pools sit here instead of draining away
+      var lip = 3 + Math.floor(g.rng() * 4), lx = side ? wall + len - 1 : W - 1 - wall - (len - 1);
+      for (y = sy - lip; y < sy; y++) {
+        if (y < HEARTH_Y + 2 || y >= H) continue;
+        for (x = 0; x < 2; x++) {
+          var qx = side ? lx - x : lx + x;
+          if (qx > wall && qx < W - wall) m[y * W + qx] = WALL;
+        }
+      }
+    }
+    // the abyss: the last rows swallow everything
+    for (y = H - 3; y < H; y++) for (x = 0; x < W; x++) m[y * W + x] = EMPTY;
+    g.act = act;
+  }
+
+  // ---------- pouring ----------
+  function pourCost(g, mat, r) {
+    var base = MATS[mat].cost || 1;
+    var cells = (2 * r + 1) * (2 * r + 1) * 0.55;
+    var c = base * cells * 0.11;
+    if (g.heat >= 3) c *= 1.25;
+    return c;
+  }
+  function pourRadius(g) { return 2 + lv(g, "nozzle"); }
+  var POUR_CD = 3;                        // frames between two squeezes of the nozzle
+  function pour(g, mat, cx, cy, force) {
+    if (g.over || g.phase === "reward") return false;
+    if (!g.unlocked[mat] && !force) return false;
+    var r = pourRadius(g);
+    var cost = pourCost(g, mat, r);
+    if (!force && (g.pourCd > 0 || g.pressure < cost)) return false;
+    if (!force) { g.pressure -= cost; g.pourCd = POUR_CD; }
+    var put = 0;
+    for (var y = -r; y <= r; y++) for (var x = -r; x <= r; x++) {
+      if (x * x + y * y > r * r + 1) continue;
+      var px = Math.round(cx) + x, py = Math.round(cy) + y;
+      if (px < 1 || px >= W - 1 || py < 1 || py >= H - 1) continue;
+      var i = py * W + px;
+      if (g.mat[i] === EMPTY || (MATS[g.mat[i]].kind === 3 && mat !== FIRE)) {
+        g.mat[i] = mat;
+        g.aux[i] = mat === FIRE ? 40 + Math.floor(g.rng() * 30) : (mat === STEAM ? 90 : 0);
+        put++;
+      }
+    }
+    g.poured += put; g.stats.poured += put;
+    if (put) g.events.push({ k: "pour", mat: mat, x: cx, y: cy });
+    return put > 0;
+  }
+
+  // ---------- the sand simulation ----------
+  function idx(x, y) { return y * W + x; }
+  function isSolid(m) { return m === WALL || m === STONE || m === GLASS || m === ICE; }
+  function found(g, id) {
+    if (!g.found[id]) { g.found[id] = 1; g.stats.reactions++; g.events.push({ k: "found", id: id }); }
+  }
+
+  function simulate(g) {
+    var m = g.mat, aux = g.aux, moved = g.moved, rng = g.rng;
+    moved.fill(0);
+    var leftFirst = (g.frame & 1) === 0;
+    for (var y = H - 1; y >= 0; y--) {
+      for (var k = 0; k < W; k++) {
+        var x = leftFirst ? k : W - 1 - k;
+        var i = y * W + x;
+        var mt = m[i];
+        if (mt === EMPTY || mt === WALL || moved[i]) continue;
+        switch (mt) {
+          case SAND: case POWDER: case EMBER: powder(g, x, y, i, mt); break;
+          case WATER: case OIL: case ACID: liquid(g, x, y, i, mt); break;
+          case LAVA: lava(g, x, y, i); break;
+          case FIRE: fire(g, x, y, i); break;
+          case STEAM: gas(g, x, y, i); break;
+          case ICE: ice(g, x, y, i); break;
+          case STONE: case GLASS: break;
+        }
+      }
+    }
+    // the abyss eats whatever reaches the bottom
+    for (var x2 = 0; x2 < W; x2++) {
+      var bi = (H - 1) * W + x2;
+      if (m[bi] !== EMPTY && m[bi] !== WALL) m[bi] = EMPTY;
+    }
+    g.frame++;
+  }
+
+  function swap(g, a, b) {
+    var t = g.mat[a]; g.mat[a] = g.mat[b]; g.mat[b] = t;
+    var u = g.aux[a]; g.aux[a] = g.aux[b]; g.aux[b] = u;
+    g.moved[b] = 1;
+  }
+  function canSink(g, from, to) {
+    var a = g.mat[from], b = g.mat[to];
+    if (b === EMPTY) return true;
+    if (isSolid(b) || b === WALL) return false;
+    return MATS[a].dens > MATS[b].dens;
+  }
+
+  function powder(g, x, y, i, mt) {
+    if (mt === EMBER) {
+      if (g.aux[i] > 0) g.aux[i]--; else { g.mat[i] = EMPTY; return; }
+      burnNeighbours(g, x, y, 0.25);
+    }
+    var below = i + W;
+    if (y + 1 < H && canSink(g, i, below)) { crushCheck(g, x, y + 1, mt); swap(g, i, below); return; }
+    var dir = g.rng() < 0.5 ? -1 : 1;
+    for (var s = 0; s < 2; s++) {
+      var nx = x + (s === 0 ? dir : -dir);
+      if (nx < 1 || nx >= W - 1 || y + 1 >= H) continue;
+      var d = (y + 1) * W + nx;
+      if (canSink(g, i, d)) { swap(g, i, d); return; }
+    }
+  }
+
+  function liquid(g, x, y, i, mt) {
+    if (mt === ACID) acid(g, x, y, i);
+    if (g.mat[i] !== mt) return;
+    var below = i + W;
+    if (y + 1 < H && canSink(g, i, below)) { swap(g, i, below); return; }
+    var dir = g.rng() < 0.5 ? -1 : 1, s, nx, d;
+    for (s = 0; s < 2; s++) {
+      nx = x + (s === 0 ? dir : -dir);
+      if (nx < 1 || nx >= W - 1 || y + 1 >= H) continue;
+      d = (y + 1) * W + nx;
+      if (canSink(g, i, d)) { swap(g, i, d); return; }
+    }
+    // spread sideways, further for thin liquids
+    var reach = mt === OIL ? 4 : (mt === LAVA ? 2 : 3);
+    for (s = 1; s <= reach; s++) {
+      nx = x + dir * s;
+      if (nx < 1 || nx >= W - 1) break;
+      d = y * W + nx;
+      if (g.mat[d] === EMPTY) { swap(g, i, d); return; }
+      if (g.mat[d] !== mt) break;
+    }
+  }
+
+  function lava(g, x, y, i) {
+    // reactions first: water, ice, sand, oil, powder
+    var n = [i - W, i + W, i - 1, i + 1], j, t;
+    for (var q = 0; q < 4; q++) {
+      j = n[q];
+      if (j < 0 || j >= W * H) continue;
+      t = g.mat[j];
+      if (t === WATER) {
+        g.mat[i] = STONE; g.mat[j] = STEAM; g.aux[j] = 70;
+        found(g, "stone");
+        if (g.relics.r_shards) shatter(g, x, y);
+        crushCheck(g, x, y, STONE);
+        g.events.push({ k: "react", id: "stone", x: x, y: y });
+        return;
+      }
+      if (t === ICE) { g.mat[j] = WATER; g.mat[i] = STONE; found(g, "melt"); return; }
+      if (t === SAND) { g.mat[j] = GLASS; found(g, "glass"); g.events.push({ k: "react", id: "glass", x: x, y: y }); }
+      if (t === OIL) { g.mat[j] = FIRE; g.aux[j] = 70; found(g, "ignite"); }
+      if (t === POWDER) { explode(g, x, y, 7); found(g, "blast"); return; }
+    }
+    liquid(g, x, y, i, LAVA);
+  }
+
+  function fire(g, x, y, i) {
+    var life = g.aux[i];
+    burnNeighbours(g, x, y, 1);
+    if (g.mat[i] !== FIRE) return;
+    // water above or beside puts it out
+    var n = [i - W, i + W, i - 1, i + 1];
+    for (var q = 0; q < 4; q++) {
+      var j = n[q];
+      if (j < 0 || j >= W * H) continue;
+      if (g.mat[j] === WATER) { g.mat[i] = STEAM; g.aux[i] = 60; g.mat[j] = STEAM; g.aux[j] = 60; found(g, "douse"); return; }
+      if (g.mat[j] === ICE) { g.mat[j] = WATER; found(g, "douse"); }
+      if (g.mat[j] === POWDER) { explode(g, x, y, 7); found(g, "blast"); return; }
+    }
+    var feeding = false;
+    for (q = 0; q < 4; q++) { var j2 = n[q]; if (j2 >= 0 && j2 < W * H && (g.mat[j2] === OIL)) feeding = true; }
+    if (!(g.relics.r_slick && feeding)) {
+      if (life > 0) g.aux[i] = life - 1;
+      else { g.mat[i] = g.rng() < 0.25 ? EMBER : EMPTY; g.aux[i] = 30; return; }
+    }
+    gas(g, x, y, i);
+  }
+
+  function burnNeighbours(g, x, y, chance) {
+    var n = [idx(x, y - 1), idx(x, y + 1), idx(x - 1, y), idx(x + 1, y)];
+    for (var q = 0; q < 4; q++) {
+      var j = n[q];
+      if (j < 0 || j >= W * H) continue;
+      var t = g.mat[j];
+      if ((t === OIL || t === POWDER) && g.rng() < chance * 0.5) {
+        if (t === POWDER) { explode(g, (j % W), Math.floor(j / W), 7); found(g, "blast"); }
+        else { g.mat[j] = FIRE; g.aux[j] = 50 + Math.floor(g.rng() * 30); found(g, "burn"); }
+      }
+    }
+  }
+
+  function gas(g, x, y, i) {
+    var up = i - W;
+    if (y - 1 >= 0 && (g.mat[up] === EMPTY)) { swap(g, i, up); return; }
+    var dir = g.rng() < 0.5 ? -1 : 1;
+    for (var s = 0; s < 2; s++) {
+      var nx = x + (s === 0 ? dir : -dir);
+      if (nx < 1 || nx >= W - 1) continue;
+      var d = (y - 1 >= 0 ? (y - 1) * W + nx : -1);
+      if (d >= 0 && g.mat[d] === EMPTY) { swap(g, i, d); return; }
+      var side = y * W + nx;
+      if (g.mat[side] === EMPTY) { swap(g, i, side); return; }
+    }
+    if (g.mat[i] === STEAM) {
+      if (g.aux[i] > 0) g.aux[i]--;
+      else g.mat[i] = EMPTY;
+    }
+  }
+
+  function ice(g, x, y, i) {
+    var n = [i - W, i + W, i - 1, i + 1], melt = false;
+    for (var q = 0; q < 4; q++) {
+      var j = n[q];
+      if (j < 0 || j >= W * H) continue;
+      var t = g.mat[j];
+      if (t === LAVA || t === FIRE) melt = true;
+      if (t === WATER && g.rng() < 0.08) { g.mat[j] = ICE; found(g, "freeze"); }
+    }
+    if (melt) { g.mat[i] = WATER; found(g, "melt"); }
+  }
+
+  function acid(g, x, y, i) {
+    var n = [i - W, i + W, i - 1, i + 1];
+    var power = 0.10 * (1 + 0.4 * lv(g, "etch"));
+    for (var q = 0; q < 4; q++) {
+      var j = n[q];
+      if (j < 0 || j >= W * H) continue;
+      var t = g.mat[j];
+      if (t === WATER) { g.mat[i] = WATER; found(g, "dilute"); return; }
+      if ((t === STONE || t === SAND || t === GLASS || t === ICE) && g.rng() < power) {
+        g.mat[j] = EMPTY;                                   // the rock of the well itself is not touched
+        found(g, "etch");
+        if (g.rng() < 0.4) { g.mat[i] = EMPTY; return; }
+      }
+    }
+  }
+
+  function shatter(g, x, y) {
+    for (var q = 0; q < 6; q++) {
+      var nx = x + Math.floor(g.rng() * 7) - 3, ny = y + Math.floor(g.rng() * 5) - 2;
+      if (nx < 1 || nx >= W - 1 || ny < 1 || ny >= H - 1) continue;
+      var j = ny * W + nx;
+      if (g.mat[j] === EMPTY) { g.mat[j] = SAND; }
+    }
+    damageArea(g, x, y, 5, 12 * (1 + 0.5 * lv(g, "crush")), "crush");
+  }
+
+  function explode(g, x, y, r) {
+    for (var yy = -r; yy <= r; yy++) for (var xx = -r; xx <= r; xx++) {
+      if (xx * xx + yy * yy > r * r) continue;
+      var nx = x + xx, ny = y + yy;
+      if (nx < 1 || nx >= W - 1 || ny < 1 || ny >= H - 1) continue;
+      var j = ny * W + nx;
+      var t = g.mat[j];
+      if (t === WALL) continue;
+      g.mat[j] = g.rng() < 0.35 ? FIRE : EMPTY;
+      g.aux[j] = 40;
+    }
+    damageArea(g, x, y, r + 2, 55, "blast");
+    g.events.push({ k: "explode", x: x, y: y, r: r });
+  }
+
+  // a solid forming on top of a monster crushes it
+  function crushCheck(g, x, y, mt) {
+    if (mt !== STONE && mt !== SAND && mt !== GLASS) return;
+    for (var i = 0; i < g.mons.length; i++) {
+      var mo = g.mons[i], d = MONSTERS[mo.type];
+      if (d.crushImmune || d.flies) continue;
+      var dx = mo.x - x, dy = mo.y - y;
+      if (dx < 0) dx = -dx;
+      if (dy < 0) dy = -dy;
+      if (dx <= d.r && dy <= d.r + 1) {
+        hurt(g, mo, (mt === STONE ? 9 : 3) * (1 + 0.5 * lv(g, "crush")), "crush");
+        g.stats.crushed++;
+      }
+    }
+  }
+
+  function damageArea(g, x, y, r, dmg, src) {
+    for (var i = g.mons.length - 1; i >= 0; i--) {
+      var mo = g.mons[i];
+      var dx = mo.x - x, dy = mo.y - y;
+      if (dx * dx + dy * dy <= r * r) hurt(g, mo, dmg, src);
+    }
+  }
+
+  // ---------- monsters ----------
+  function hurt(g, mo, dmg, src) {
+    var d = MONSTERS[mo.type];
+    if (d.fireImmune && (src === "fire" || src === "lava")) return;
+    if (d.waterImmune && src === "water") return;
+    if (d.armour && src !== "acid") dmg *= (1 - d.armour);
+    if (g.relics.r_frost && mo.freeze > 0) dmg *= 2;
+    mo.hp -= dmg;
+    mo.hitT = 0.12;
+    if (mo.hp <= 0) kill(g, mo, src);
+  }
+  function kill(g, mo, src) {
+    var i = g.mons.indexOf(mo);
+    if (i < 0) return;
+    g.mons.splice(i, 1);
+    var d = MONSTERS[mo.type];
+    g.kills++;
+    g.ember += d.gold + lv(g, "gold");
+    g.score += d.pts;
+    g.pressure = clamp(g.pressure + lv(g, "tithe") * 2 + (g.relics.r_well ? 3 : 0), 0, pressureMax(g));
+    g.events.push({ k: "kill", x: mo.x, y: mo.y, type: mo.type, src: src });
+    if (d.boss) g.events.push({ k: "bossDown" });
+  }
+
+  function pressureMax(g) { return 160 + 50 * lv(g, "tank"); }
+  function regen(g) { return 18 * (1 + 0.3 * lv(g, "pump")); }
+
+  function spawn(g, type, x) {
+    var d = MONSTERS[type];
+    var hp = d.hp * (1 + 0.16 * (g.wave - 1)) * (g.heat >= 1 ? 1.25 : 1);
+    var mo = {
+      id: g.nextId++, type: type, x: x, y: H - 6, hp: hp, maxHp: hp,
+      freeze: 0, burn: 0, acid: 0, hitT: 0, dir: g.rng() < 0.5 ? -1 : 1, wob: g.rng(), blockT: 0, turnT: 0
+    };
+    g.mons.push(mo);
+    return mo;
+  }
+
+  function moveMonsters(g) {
+    var speedMul = (g.heat >= 2 ? 1.25 : 1);
+    for (var i = g.mons.length - 1; i >= 0; i--) {
+      var mo = g.mons[i], d = MONSTERS[mo.type];
+      if (mo.hitT > 0) mo.hitT -= TICK;
+      // what is it standing in?
+      var cx = Math.round(mo.x), cy = Math.round(mo.y);
+      var inLava = 0, inFire = 0, inAcid = 0, inWater = 0, inSand = 0, inSteam = 0, inIce = 0;
+      for (var yy = -1; yy <= 1; yy++) for (var xx = -1; xx <= 1; xx++) {
+        var px = clamp(cx + xx * Math.round(d.r * 0.7), 0, W - 1), py = clamp(cy + yy * Math.round(d.r * 0.7), 0, H - 1);
+        var t = g.mat[py * W + px];
+        if (t === LAVA) inLava++;
+        else if (t === FIRE || t === EMBER) inFire++;
+        else if (t === ACID) inAcid++;
+        else if (t === WATER) inWater++;
+        else if (t === SAND || t === POWDER) inSand++;
+        else if (t === STEAM) inSteam++;
+        else if (t === ICE) inIce++;
+      }
+      var heatMul = 1 + 0.35 * lv(g, "heat");
+      var etchMul = 1 + 0.4 * lv(g, "etch");
+      // fire and acid stick to a monster: a splash keeps burning long after the lava has drained away
+      if (inLava) { hurt(g, mo, 26 * heatMul * TICK * inLava, "lava"); if (!d.fireImmune) mo.burn = Math.max(mo.burn, 3.2); }
+      if (inFire) { hurt(g, mo, 9 * heatMul * TICK * inFire, "fire"); if (!d.fireImmune) mo.burn = Math.max(mo.burn, 2.2); }
+      if (inAcid) { hurt(g, mo, 14 * etchMul * TICK * inAcid, "acid"); mo.acid = Math.max(mo.acid, 3.2); }
+      if (inWater) { mo.burn = 0; if (!d.waterImmune) hurt(g, mo, 1.2 * TICK * inWater, "water"); }
+      if (mo.burn > 0) { mo.burn -= TICK; hurt(g, mo, 11 * heatMul * TICK, "fire"); }
+      if (mo.acid > 0) { mo.acid -= TICK; hurt(g, mo, 9 * etchMul * TICK, "acid"); }
+      if (g.mons.indexOf(mo) < 0) continue;
+      if (inSteam && d.flies) hurt(g, mo, (g.relics.r_steam ? 9 : 3) * TICK * inSteam, "steam");
+      if (inIce) mo.freeze = 0.6;
+      if (g.mons.indexOf(mo) < 0) continue;
+      if (mo.freeze > 0) mo.freeze -= TICK;
+
+      var slow = 1;
+      if (mo.freeze > 0) slow *= 0.35;
+      if (inWater && !d.waterImmune) slow *= 0.55;
+      if (inSand) slow *= 0.5;
+      var v = d.spd * speedMul * slow * TICK;
+
+      if (d.flies) {
+        mo.wob += TICK;
+        mo.x = clamp(mo.x + tri(mo.wob * 0.5) * 6 * TICK, 7, W - 8);
+        mo.y -= v;
+      } else {
+        // climb: if the way up is blocked, dig or step aside
+        var ahead = blocked(g, mo.x, mo.y - d.r - 1, d.r);
+        if (ahead) {
+          mo.blockT += TICK;
+          if (d.dig || mo.blockT > 5) {                 // burrowers chew through; anything stuck long enough does too
+            dig(g, mo.x, mo.y - d.r - 1, d.r, (d.dig || 1.5) * TICK * 12);
+            mo.y -= v * 0.25;
+          } else {
+            if (mo.turnT <= 0) { mo.dir = openSide(g, mo.x, mo.y - d.r - 1, d.r); mo.turnT = 1.4; }
+            mo.turnT -= TICK;
+            mo.x = clamp(mo.x + mo.dir * d.spd * 1.1 * slow * TICK, 7, W - 8);
+            if (!blocked(g, mo.x, mo.y - d.r - 1, d.r)) mo.y -= v * 0.5;
+          }
+        } else {
+          mo.y -= v;
+          mo.blockT = 0;
+          // drift toward the gap in the hearth floor
+          if (mo.y < HEARTH_Y + 26) {
+            var tx = g.gapX;
+            mo.x += clamp(tx - mo.x, -1, 1) * d.spd * 0.5 * slow * TICK;
+          }
+        }
+      }
+      if (mo.y <= HEARTH_Y - 2) {
+        g.mons.splice(i, 1);
+        var dmg = d.boss ? 25 : Math.round(4 + d.hp * 0.06);
+        g.hearth -= dmg;
+        g.events.push({ k: "breach", x: mo.x, dmg: dmg });
+      }
+    }
+  }
+
+  function blocked(g, x, y, r) {
+    var cx = Math.round(x), cy = Math.round(y), rr = Math.max(1, Math.round(r));
+    var hits = 0, total = 0;
+    for (var xx = -rr; xx <= rr; xx++) {
+      var px = clamp(cx + xx, 0, W - 1), py = clamp(cy, 0, H - 1);
+      total++;
+      if (isSolid(g.mat[py * W + px])) hits++;
+    }
+    return hits * 2 > total;          // only a mostly-blocked ceiling stops a climber
+  }
+  // which way is there more room to climb?
+  function openSide(g, x, y, r) {
+    var cx = Math.round(x), cy = clamp(Math.round(y), 0, H - 1), left = 0, right = 0;
+    for (var d = 1; d <= 24; d++) {
+      var lx = clamp(cx - d, 0, W - 1), rx = clamp(cx + d, 0, W - 1);
+      if (!isSolid(g.mat[cy * W + lx]) && !isSolid(g.mat[clamp(cy - 2, 0, H - 1) * W + lx])) left++;
+      if (!isSolid(g.mat[cy * W + rx]) && !isSolid(g.mat[clamp(cy - 2, 0, H - 1) * W + rx])) right++;
+    }
+    return right >= left ? 1 : -1;
+  }
+  function dig(g, x, y, r, power) {
+    var cx = Math.round(x), cy = Math.round(y), rr = Math.max(1, Math.round(r));
+    for (var xx = -rr; xx <= rr; xx++) {
+      var px = clamp(cx + xx, 1, W - 2), py = clamp(cy, 1, H - 2);
+      var j = py * W + px;
+      if (isSolid(g.mat[j]) && g.mat[j] !== WALL && g.rng() < power * 0.08) g.mat[j] = EMPTY;
+    }
+  }
+
+  // ---------- waves ----------
+  function startWave(g) {
+    if (g.over || g.phase !== "build") return false;
+    g.wave++;
+    g.phase = "wave";
+    g.spawns = planWave(g, g.wave);
+    g.spawnT = 0;
+    g.events.push({ k: "wave", n: g.wave });
+    return true;
+  }
+  function planWave(g, n) {
+    var list = [], t = 0.8, i, groups = 3 + Math.floor(n * 0.95);
+    if (n === 1) {
+      for (i = 0; i < 8; i++) list.push({ at: 0.8 + i * 1.6, type: "creep", x: 20 + Math.floor(g.rng() * (W - 40)) });
+      return list;
+    }
+    for (i = 0; i < groups; i++) {
+      var roll = g.rng(), type = "creep";
+      if (n >= 2 && roll < 0.2) type = "scuttler";
+      else if (n >= 4 && roll < 0.32) type = "brute";
+      else if (n >= 5 && roll < 0.46) type = "emberling";
+      else if (n >= 6 && roll < 0.58) type = "flyer";
+      else if (n >= 8 && roll < 0.70) type = "oozer";
+      else if (n >= 9 && roll < 0.82) type = "carapace";
+      if (g.heat >= 4 && g.rng() < 0.3) type = g.rng() < 0.5 ? "carapace" : "brute";
+      var count = 1 + Math.floor(g.rng() * (n < 5 ? 3 : 5));
+      for (var c = 0; c < count; c++) {
+        list.push({ at: t + c * 0.45, type: type, x: 16 + Math.floor(g.rng() * (W - 32)) });
+      }
+      t += 1.9 - Math.min(1.0, n * 0.05) + g.rng() * 1.0;
+    }
+
+    list.sort(function (a, b) { return a.at - b.at || a.x - b.x; });
+    return list;
+  }
+
+  function endWave(g) {
+    var bonus = 8 + g.wave * 2;
+    g.ember += bonus;
+    g.events.push({ k: "waveClear", n: g.wave, bonus: bonus });
+    if (g.mode === "run" && g.wave >= WAVES) {
+      g.won = true; g.over = true; g.phase = "over";
+      g.events.push({ k: "win" });
+      return;
+    }
+    if (g.wave === 8 || g.wave === 15) {                 // deeper, fresh terrain
+      terrain(g, g.wave === 8 ? 2 : 3);
+      g.mons.length = 0;
+      g.events.push({ k: "descend", act: g.act });
+    }
+    g.phase = "reward";
+    g.offered = offer(g);
+  }
+
+  // ---------- rewards ----------
+  function available(g, u) {
+    if (u.kind === "unlock") return !g.unlocked[u.mat];
+    if (u.kind === "relic") return !g.relics[u.id];
+    return lv(g, u.id) < u.max;
+  }
+  function offer(g) {
+    var unlocks = [], others = [], i;
+    for (i = 0; i < UPGRADES.length; i++) {
+      var u = UPGRADES[i];
+      if (!available(g, u)) continue;
+      (u.kind === "unlock" ? unlocks : others).push(u.id);
+    }
+    var out = [];
+    if (unlocks.length && g.wave <= 9) {
+      var k0 = Math.floor(g.rng() * unlocks.length);
+      if (k0 >= unlocks.length) k0 = unlocks.length - 1;
+      out.push(unlocks[k0]); unlocks.splice(k0, 1);
+    }
+    var pool = unlocks.concat(others);
+    while (out.length < 3 && pool.length) {
+      var k = Math.floor(g.rng() * pool.length);
+      if (k >= pool.length) k = pool.length - 1;
+      out.push(pool[k]); pool.splice(k, 1);
+    }
+    while (out.length < 3) out.push("tank");
+    return out;
+  }
+  function choose(g, id) {
+    if (g.phase !== "reward" || !g.offered || g.offered.indexOf(id) < 0) return false;
+    var u = upg(id);
+    if (u.kind === "unlock") { g.unlocked[u.mat] = true; g.sel = u.mat; }
+    else if (u.kind === "relic") g.relics[u.id] = true;
+    else g.up[id] = lv(g, id) + 1;
+    if (id === "hearth") { g.hearthMax += 20; g.hearth = Math.min(g.hearthMax, g.hearth + 20); }
+    if (id === "tank") g.pressure = pressureMax(g);
+    g.offered = null;
+    g.phase = "build";
+    g.events.push({ k: "choose", id: id });
+    return true;
+  }
+
+
+  // ---------- step ----------
+  function step(g, input) {
+    input = input || {};
+    g.events.length = 0;
+    if (g.over) return g;
+    if (g.pourCd > 0) g.pourCd--;
+    if (input.pour) pour(g, input.pour.mat, input.pour.x, input.pour.y);
+    g.t += TICK;
+    g.pressure = clamp(g.pressure + regen(g) * TICK, 0, pressureMax(g));
+
+    simulate(g);
+
+    if (g.phase === "wave") {
+      g.spawnT += TICK;
+      while (g.spawns.length && g.spawns[0].at <= g.spawnT) {
+        var s = g.spawns.shift();
+        spawn(g, s.type, s.x);
+      }
+      // the bosses keep summoning
+      for (var i = 0; i < g.mons.length; i++) {
+        var mo = g.mons[i], d = MONSTERS[mo.type];
+        if (!d.spawns) continue;
+        mo.sum = (mo.sum || 0) + TICK;
+        if (mo.sum > 3.5) { mo.sum = 0; spawn(g, d.spawns, clamp(mo.x + (g.rng() < 0.5 ? -6 : 6), 10, W - 11)); }
+      }
+    }
+    moveMonsters(g);
+
+    if (g.hearth <= 0) {
+      g.hearth = 0; g.over = true; g.won = false; g.phase = "over";
+      g.events.push({ k: "lose" });
+      return g;
+    }
+    if (g.phase === "wave" && g.spawns.length === 0 && g.mons.length === 0) endWave(g);
+    return g;
+  }
+
+  // ---------- save / resume (between waves) ----------
+  // the well itself is stored run-length encoded, so a resumed run finds every dam and pool
+  // exactly where it was left
+  function packGrid(m) {
+    var out = [], cur = m[0], n = 0;
+    for (var i = 0; i < m.length; i++) {
+      if (m[i] === cur) { n++; continue; }
+      out.push(cur, n); cur = m[i]; n = 1;
+    }
+    out.push(cur, n);
+    return out;
+  }
+  function unpackGrid(arr, m) {
+    if (!arr || !arr.length) return false;
+    var i = 0, p = 0;
+    for (; i < arr.length; i += 2) {
+      var v = arr[i], n = arr[i + 1];
+      for (var k = 0; k < n && p < m.length; k++) m[p++] = v;
+    }
+    return p === m.length;
+  }
+  function save(g) {
+    return {
+      v: 1, seed: g.seed, rng: g.rng.s, heat: g.heat, mode: g.mode, wave: g.wave, phase: g.phase,
+      hearth: g.hearth, hearthMax: g.hearthMax, ember: g.ember, score: g.score, kills: g.kills,
+      up: g.up, unlocked: g.unlocked, relics: g.relics, found: g.found, offered: g.offered,
+      act: g.act, terrainCalls: g.terrainCalls, stats: g.stats,
+      pressure: g.pressure, grid: packGrid(g.mat)
+    };
+  }
+  function load(o) {
+    if (!o || o.v !== 1 || (o.phase !== "build" && o.phase !== "reward")) return null;
+    var g = newGame(o.seed, { heat: o.heat, mode: o.mode });
+    g.wave = o.wave; g.phase = o.phase; g.hearth = o.hearth; g.hearthMax = o.hearthMax;
+    g.ember = o.ember; g.score = o.score; g.kills = o.kills; g.up = o.up || {};
+    g.unlocked = o.unlocked || { 2: true, 3: true, 4: true }; g.relics = o.relics || {};
+    g.found = o.found || {}; g.offered = o.offered || null; g.stats = o.stats || g.stats;
+    g.rng = resumeRng(o.seed, o.terrainCalls || 0);
+    terrain(g, o.act || 1);                    // the same well, dug from the same point
+    g.rng = resumeRng(o.seed, o.rng);
+    if (!unpackGrid(o.grid, g.mat)) return null;      // put every grain back where it was
+    g.aux.fill(0);
+    g.pressure = o.pressure == null ? pressureMax(g) : o.pressure;
+    g.pourCd = 0;
+    return g;
+  }
+
+  function shareText(g) {
+    return "MOLTENWELL  " + (g.won ? "held the hearth" : "the hearth went out on wave " + g.wave) +
+      (g.heat ? " (Depth " + g.heat + ")" : "") + "\n" +
+      g.score + " pts · " + g.kills + " burned, drowned and crushed · " +
+      Object.keys(g.found).length + "/" + REACTIONS.length + " reactions found";
+  }
+
+  var api = {
+    TICK: TICK, W: W, H: H, HEARTH_Y: HEARTH_Y, WAVES: WAVES,
+    EMPTY: EMPTY, WALL: WALL, SAND: SAND, WATER: WATER, LAVA: LAVA, STONE: STONE, OIL: OIL,
+    FIRE: FIRE, ACID: ACID, ICE: ICE, STEAM: STEAM, POWDER: POWDER, GLASS: GLASS, EMBER: EMBER,
+    MATS: MATS, POURABLE: POURABLE, REACTIONS: REACTIONS, MONSTERS: MONSTERS, UPGRADES: UPGRADES, HEAT: HEAT,
+    newGame: newGame, step: step, pour: pour, startWave: startWave, choose: choose,
+    
+    save: save, load: load, shareText: shareText, terrain: terrain, spawn: spawn, explode: explode,
+    pressureMax: pressureMax, pourCost: pourCost, pourRadius: pourRadius, matName: matName, upg: upg,
+    makeRng: makeRng, clamp: clamp, isSolid: isSolid, planWave: planWave
+  };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.MOLTEN = api;
+})(typeof window !== "undefined" ? window : this);
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var E = window.MOLTEN;
+  var DEMO = window.MOLTEN_EDITION === "demo";
+  var DEMO_WAVES = E.WAVES;        // the demo build stops the run at wave 8
+  var STORE = "https://kqmigqkqri.itch.io/moltenwell";
+  var cv = document.getElementById("cv"), ctx = cv.getContext("2d"), wrap = document.getElementById("wrap");
+
+  // ---------- layout ----------
+  var CELL = 4, BW = E.W * CELL, BH = E.H * CELL;        // 576 x 668
+  var HUD = 58, TRAY = 74, W = BW, H = HUD + BH + TRAY;  // 576 x 800
+  var scale = 1;
+  function fit() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H);
+    var cw = Math.floor(W * scale), ch = Math.floor(H * scale);
+    wrap.style.width = cw + "px"; wrap.style.height = ch + "px";
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+  }
+  window.addEventListener("resize", fit);
+  window.addEventListener("orientationchange", fit);
+  var lastVW = 0, lastVH = 0;
+  function fitIfChanged() {
+    if (window.innerWidth !== lastVW || window.innerHeight !== lastVH) {
+      lastVW = window.innerWidth; lastVH = window.innerHeight; fit();
+    }
+  }
+
+  // ---------- storage ----------
+  var store = (function () {
+    var ok = true;
+    try { localStorage.setItem("__e", "1"); localStorage.removeItem("__e"); } catch (e) { ok = false; }
+    return {
+      get: function (k, d) { if (!ok) return d; try { var v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+      set: function (k, v) { if (!ok) return; try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+      del: function (k) { if (!ok) return; try { localStorage.removeItem(k); } catch (e) {} }
+    };
+  })();
+  var KEY = DEMO ? "molten.demo" : "molten";
+  var rec = store.get(KEY + ".rec", null) ||
+    { best: 0, bestWave: 0, runs: 0, wins: 0, kills: 0, depth: 0, found: {}, seen: {}, poured: 0 };
+  function saveRec() { store.set(KEY + ".rec", rec); }
+  var heatSel = 0;
+
+  // ---------- audio ----------
+  var AC = null, master = null, musicGain = null, noiseBuf = null;
+  var sfxOn = store.get(KEY + ".sfx", true), musicOn = store.get(KEY + ".music", true);
+  var hiss = null, hissGain = null;
+  function audio() {
+    if (AC) { if (AC.state === "suspended") AC.resume(); return AC; }
+    var C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return null;
+    AC = new C();
+    master = AC.createGain(); master.gain.value = 0.85; master.connect(AC.destination);
+    musicGain = AC.createGain(); musicGain.gain.value = musicOn ? 0.16 : 0; musicGain.connect(master);
+    startMusic();
+    return AC;
+  }
+  function noise() {
+    if (noiseBuf) return noiseBuf;
+    var n = Math.floor(AC.sampleRate * 0.4);
+    noiseBuf = AC.createBuffer(1, n, AC.sampleRate);
+    var d = noiseBuf.getChannelData(0);
+    for (var i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    return noiseBuf;
+  }
+  function tone(type, f, dur, vol, to) {
+    if (!sfxOn || !audio()) return;
+    var now = AC.currentTime, o = AC.createOscillator(), gn = AC.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, now);
+    if (to) o.frequency.exponentialRampToValueAtTime(Math.max(30, to), now + dur);
+    gn.gain.setValueAtTime(0.0001, now);
+    gn.gain.exponentialRampToValueAtTime(vol, now + 0.012);
+    gn.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    o.connect(gn); gn.connect(master); o.start(now); o.stop(now + dur + 0.02);
+  }
+  function burst(dur, vol, hz, q) {
+    if (!sfxOn || !audio()) return;
+    var now = AC.currentTime, src = AC.createBufferSource(); src.buffer = noise();
+    var f = AC.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = hz; f.Q.value = q || 1;
+    var gn = AC.createGain();
+    gn.gain.setValueAtTime(vol, now); gn.gain.exponentialRampToValueAtTime(0.001, now + dur);
+    src.connect(f); f.connect(gn); gn.connect(master); src.start(now); src.stop(now + dur + 0.02);
+  }
+  function pourSound(on, mat) {
+    if (!audio()) return;
+    if (on && !hiss) {
+      hiss = AC.createBufferSource(); hiss.buffer = noise(); hiss.loop = true;
+      var f = AC.createBiquadFilter(); f.type = "bandpass";
+      f.frequency.value = mat === E.LAVA ? 420 : (mat === E.SAND ? 1700 : 950); f.Q.value = 0.9;
+      hissGain = AC.createGain(); hissGain.gain.value = sfxOn ? 0.09 : 0;
+      hiss.connect(f); f.connect(hissGain); hissGain.connect(master); hiss.start();
+    } else if (!on && hiss) { try { hiss.stop(); } catch (e) {} hiss = null; hissGain = null; }
+  }
+  var SFX = {
+    kill: function () { burst(0.1, 0.16, 500 + Math.random() * 300, 1.2); },
+    sizzle: function () { burst(0.3, 0.2, 2600, 0.7); },
+    blast: function () { burst(0.45, 0.5, 220, 0.6); tone("sawtooth", 150, 0.4, 0.22, 40); },
+    breach: function () { tone("sawtooth", 140, 0.35, 0.18, 70); burst(0.25, 0.3, 300, 0.8); },
+    pick: function () { tone("sine", 680, 0.12, 0.12, 1020); },
+    wave: function () { tone("sawtooth", 110, 0.5, 0.1); tone("sawtooth", 165, 0.5, 0.07); },
+    clear: function () { [523, 659, 784].forEach(function (f, i) { setTimeout(function () { tone("triangle", f, 0.22, 0.12); }, i * 90); }); },
+    win: function () { [523, 659, 784, 1046, 1318].forEach(function (f, i) { setTimeout(function () { tone("triangle", f, 0.3, 0.13); }, i * 130); }); },
+    lose: function () { [330, 262, 196, 147].forEach(function (f, i) { setTimeout(function () { tone("triangle", f, 0.45, 0.13); }, i * 180); }); },
+    found: function () { [784, 1046].forEach(function (f, i) { setTimeout(function () { tone("sine", f, 0.2, 0.1); }, i * 110); }); },
+    boss: function () { tone("sawtooth", 70, 1.4, 0.2, 48); burst(1.0, 0.25, 160, 0.6); }
+  };
+  var musicTimer = null, mstep = 0;
+  var ROOT = [0, 0, -5, -5, -7, -7, -3, -3], LEAD = [12, 15, 19, 15, 17, 14, 12, 10];
+  function startMusic() {
+    if (musicTimer) clearInterval(musicTimer);
+    musicTimer = setInterval(function () {
+      if (!AC || !musicOn || AC.state !== "running") return;
+      var now = AC.currentTime, i = mstep++;
+      var base = 55 * Math.pow(2, ROOT[i % 8] / 12);
+      var o = AC.createOscillator(), gn = AC.createGain();
+      o.type = "triangle"; o.frequency.value = base;
+      gn.gain.setValueAtTime(0.0001, now); gn.gain.exponentialRampToValueAtTime(0.4, now + 0.03);
+      gn.gain.exponentialRampToValueAtTime(0.0001, now + 0.7);
+      o.connect(gn); gn.connect(musicGain); o.start(now); o.stop(now + 0.72);
+      if (g && g.phase === "wave" && i % 2 === 0) {
+        var l = AC.createOscillator(), lg = AC.createGain();
+        l.type = "sine"; l.frequency.value = base * 4 * Math.pow(2, LEAD[(i >> 1) % 8] / 12) / 4;
+        lg.gain.setValueAtTime(0.0001, now); lg.gain.exponentialRampToValueAtTime(0.09, now + 0.04);
+        lg.gain.exponentialRampToValueAtTime(0.0001, now + 0.5);
+        l.connect(lg); lg.connect(musicGain); l.start(now); l.stop(now + 0.52);
+      }
+    }, 420);
+  }
+
+  // ---------- state ----------
+  var g = null, paused = false, pointer = null, daily = false, armed = null;
+  var parts = [], texts = [], shake = 0, flash = 0, flashCol = "#ff6a1f", trayHits = [], hoverTray = -1;
+  var img = null, buf = null, offscreen = null, octx = null;
+
+  var GW = E.W >> 2, GH = (E.H >> 2) + 1, glowC = null, glowX = null, glowImg = null, glowBuf = null;
+  function setupBuffers() {
+    offscreen = document.createElement("canvas");
+    offscreen.width = E.W; offscreen.height = E.H;
+    octx = offscreen.getContext("2d");
+    img = octx.createImageData(E.W, E.H);
+    buf = new Uint32Array(img.data.buffer);
+    glowC = document.createElement("canvas");
+    glowC.width = GW; glowC.height = GH;
+    glowX = glowC.getContext("2d");
+    glowImg = glowX.createImageData(GW, GH);
+    glowBuf = new Uint32Array(glowImg.data.buffer);
+  }
+
+  // ---------- rendering ----------
+  var COLS = new Uint32Array(16), COLS2 = new Uint32Array(16);
+  (function () {
+    for (var i = 0; i < E.MATS.length; i++) {
+      var c = E.MATS[i].col;
+      var r = (c >> 16) & 255, gg = (c >> 8) & 255, b = c & 255;
+      COLS[i] = (255 << 24) | (b << 16) | (gg << 8) | r;
+      var f = (i === 2 || i === 11 || i === 5 || i === 12) ? 0.82 : 0.92;   // grain on the dry things, less on liquids
+      COLS2[i] = (255 << 24) | ((b * f | 0) << 16) | ((gg * f | 0) << 8) | (r * f | 0);
+    }
+  })();
+
+  function drawWell(time) {
+    var mat = g.mat, aux = g.aux, n = E.W * E.H;
+    for (var i = 0; i < n; i++) {
+      var m = mat[i];
+      if (m === E.EMPTY) { buf[i] = 0; continue; }
+      // a per-cell speckle so sand and rock are grainy instead of flat
+      var hsh = (i * 2654435761) >>> 0;
+      buf[i] = ((hsh >>> 19) & 1) ? COLS[m] : COLS2[m];
+      if (m === E.FIRE) buf[i] = (aux[i] & 8) ? 0xff2ec0ff : COLS[m];
+      // lava and embers glimmer: a quarter of the cells light up, shifting a few times a second
+      else if (m === E.LAVA || m === E.EMBER) buf[i] = ((((hsh >>> 11) + (g.frame >> 2)) & 3) === 0) ? 0xff5ac4ff : COLS[m];
+      else if (m === E.WATER || m === E.ACID || m === E.OIL) buf[i] = ((((hsh >>> 9) + (g.frame >> 3)) & 15) === 0) ? COLS[E.STEAM] : buf[i];
+    }
+    octx.putImageData(img, 0, 0);
+    // the shaft itself: warm near the hearth, black towards the abyss
+    var bg = ctx.createLinearGradient(0, HUD, 0, HUD + BH);
+    bg.addColorStop(0, "#241711"); bg.addColorStop(0.18, "#15100d");
+    bg.addColorStop(0.75, "#0b0908"); bg.addColorStop(1, "#000000");
+    ctx.fillStyle = bg; ctx.fillRect(0, HUD, BW, BH);
+    ctx.drawImage(offscreen, 0, HUD, BW, BH);
+    drawGlow();
+  }
+
+  // everything hot lights the rock around it
+  function drawGlow() {
+    glowBuf.fill(0);
+    var mat = g.mat, heat = new Uint16Array(GW * GH), any = 0;
+    for (var y = 0; y < E.H; y++) {
+      var row = y * E.W, gy = (y >> 2) * GW;
+      for (var x = 0; x < E.W; x++) {
+        var m = mat[row + x];
+        if (m === E.LAVA) { heat[gy + (x >> 2)] += 10; any = 1; }
+        else if (m === E.FIRE) { heat[gy + (x >> 2)] += 14; any = 1; }
+        else if (m === E.EMBER) { heat[gy + (x >> 2)] += 5; any = 1; }
+      }
+    }
+    if (!any) return;
+    for (var i = 0; i < heat.length; i++) {
+      var v = heat[i]; if (!v) continue;
+      if (v > 110) v = 110;
+      var r = Math.min(255, v * 2.2) | 0, gg = Math.min(190, v * 1.0) | 0, b = Math.min(70, v * 0.25) | 0;
+      glowBuf[i] = (255 << 24) | (b << 16) | (gg << 8) | r;
+    }
+    glowX.putImageData(glowImg, 0, 0);
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = 0.55;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(glowC, -6, HUD - 6, BW + 12, BH + 12);
+    ctx.restore();
+    ctx.imageSmoothingEnabled = false;
+  }
+
+  function drawMonster(mo, time) {
+    var d = E.MONSTERS[mo.type];
+    var x = mo.x * CELL, y = HUD + mo.y * CELL, r = d.r * CELL;
+    var c = "#" + ("000000" + d.col.toString(16)).slice(-6);
+    ctx.save();
+    if (mo.freeze > 0) ctx.globalAlpha = 0.9;
+    ctx.fillStyle = mo.hitT > 0 ? "#fff" : (mo.freeze > 0 ? "#bfe9ff" : c);
+    ctx.beginPath(); ctx.ellipse(x, y, r, r * 0.92, 0, 0, 6.2832); ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,.5)"; ctx.lineWidth = 1.5; ctx.stroke();
+    if (mo.burn > 0) {
+      ctx.fillStyle = "rgba(255,140,40,.7)";
+      for (var k = 0; k < 3; k++) {
+        var a = time * 7 + k * 2.1;
+        ctx.beginPath(); ctx.arc(x + Math.sin(a) * r * 0.6, y - r - 2 - (a % 1) * 5, 2.4, 0, 6.2832); ctx.fill();
+      }
+    }
+    if (mo.acid > 0) { ctx.strokeStyle = "rgba(141,255,87,.8)"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, r + 2, 0, 6.2832); ctx.stroke(); }
+    // eyes, so they read as creatures
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(x - r * 0.33, y - r * 0.2, r * 0.26, 0, 6.2832); ctx.arc(x + r * 0.33, y - r * 0.2, r * 0.26, 0, 6.2832); ctx.fill();
+    ctx.fillStyle = "#1a1008";
+    ctx.beginPath(); ctx.arc(x - r * 0.3, y - r * 0.12, r * 0.12, 0, 6.2832); ctx.arc(x + r * 0.36, y - r * 0.12, r * 0.12, 0, 6.2832); ctx.fill();
+    if (d.flies) {
+      ctx.fillStyle = "rgba(255,255,255,.35)";
+      var w = Math.sin(time * 22) * r * 0.5;
+      ctx.beginPath(); ctx.ellipse(x - r, y - r * 0.4, r * 0.8, r * 0.35 + w * 0.2, 0.5, 0, 6.2832); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(x + r, y - r * 0.4, r * 0.8, r * 0.35 + w * 0.2, -0.5, 0, 6.2832); ctx.fill();
+    }
+    if (d.boss) {
+      ctx.fillStyle = "#ffd98a"; ctx.font = "bold 11px sans-serif"; ctx.textAlign = "center";
+      ctx.fillText(d.name.toUpperCase(), x, y - r - 15);
+      var bw = r * 2.4, k2 = Math.max(0, mo.hp / mo.maxHp);
+      ctx.fillStyle = "rgba(0,0,0,.6)"; ctx.fillRect(x - bw / 2, y - r - 7, bw, 5);
+      ctx.fillStyle = "#ff5a3c"; ctx.fillRect(x - bw / 2, y - r - 7, bw * k2, 5);
+    } else if (mo.hp < mo.maxHp) {
+      var bw2 = r * 2, k3 = Math.max(0, mo.hp / mo.maxHp);
+      ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(x - bw2 / 2, y - r - 5, bw2, 3);
+      ctx.fillStyle = k3 > 0.5 ? "#8bd36b" : "#ffb64a"; ctx.fillRect(x - bw2 / 2, y - r - 5, bw2 * k3, 3);
+    }
+    ctx.restore();
+  }
+
+  function drawHearth(time) {
+    var y = HUD + E.HEARTH_Y * CELL;
+    var grd = ctx.createLinearGradient(0, y - 46, 0, y);
+    grd.addColorStop(0, "rgba(255,150,40,0)"); grd.addColorStop(1, "rgba(255,140,40,.22)");
+    ctx.fillStyle = grd; ctx.fillRect(0, y - 46, BW, 46);
+    // the fire itself, sitting over the gap the monsters climb for
+    var hx = g.gapX * CELL, k = g.hearth / g.hearthMax;
+    for (var i = 0; i < 9; i++) {
+      var a = time * 3 + i, h = (12 + Math.sin(a * 2.3) * 7) * (0.4 + k * 0.6);
+      ctx.fillStyle = i % 2 ? "rgba(255,190,60,.75)" : "rgba(255,90,30,.7)";
+      ctx.beginPath();
+      ctx.ellipse(hx + Math.sin(a) * 12, y - 12 - h * 0.4, 5 + Math.cos(a) * 2, h, 0, 0, 6.2832);
+      ctx.fill();
+    }
+    ctx.fillStyle = "#2a1a12"; ctx.fillRect(hx - 26, y - 10, 52, 10);
+    ctx.fillStyle = "#59392a"; ctx.fillRect(hx - 30, y - 12, 60, 4);
+  }
+
+  function drawHud(time) {
+    ctx.fillStyle = "#15100d"; ctx.fillRect(0, 0, W, HUD);
+    ctx.fillStyle = "rgba(255,182,74,.18)"; ctx.fillRect(0, HUD - 2, W, 2);
+    ctx.textBaseline = "middle"; ctx.textAlign = "left";
+    // hearth health
+    var k = Math.max(0, g.hearth / g.hearthMax);
+    ctx.fillStyle = "#3a241a"; ctx.fillRect(12, 12, 150, 12);
+    ctx.fillStyle = k > 0.5 ? "#ffb64a" : (k > 0.25 ? "#ff8a3a" : "#ff4d3a");
+    ctx.fillRect(12, 12, 150 * k, 12);
+    ctx.strokeStyle = "rgba(255,182,74,.5)"; ctx.lineWidth = 1; ctx.strokeRect(12.5, 12.5, 149, 11);
+    ctx.fillStyle = "#f2e8dc"; ctx.font = "bold 12px 'Trebuchet MS',sans-serif";
+    ctx.fillText("HEARTH " + Math.ceil(g.hearth), 16, 18);
+    // pressure
+    var p = g.pressure / E.pressureMax(g);
+    ctx.fillStyle = "#16283a"; ctx.fillRect(12, 32, 150, 12);
+    ctx.fillStyle = "#4aa3d9"; ctx.fillRect(12, 32, 150 * p, 12);
+    ctx.strokeStyle = "rgba(127,216,255,.5)"; ctx.strokeRect(12.5, 32.5, 149, 11);
+    ctx.fillStyle = "#dff0ff"; ctx.fillText("PRESSURE " + Math.round(g.pressure), 16, 38);
+    // wave + ember
+    ctx.textAlign = "center"; ctx.fillStyle = "#f2e8dc"; ctx.font = "bold 16px 'Trebuchet MS',sans-serif";
+    var cap = DEMO ? DEMO_WAVES : E.WAVES;
+    var wv = g.wave === 0 ? "READY" : (g.mode === "endless" ? "WAVE " + g.wave : "WAVE " + g.wave + " / " + cap);
+    ctx.fillText(wv, W / 2 + 30, 17);
+    ctx.font = "12px 'Trebuchet MS',sans-serif"; ctx.fillStyle = "#9b8f82";
+    ctx.fillText(g.phase === "wave" ? (g.spawns.length + g.mons.length) + " left" : (g.phase === "build" ? "build phase" : ""), W / 2 + 30, 36);
+    ctx.textAlign = "right"; ctx.fillStyle = "#ffb64a"; ctx.font = "bold 14px 'Trebuchet MS',sans-serif";
+    ctx.fillText("◆ " + g.ember, W - 118, 17);
+    ctx.fillStyle = "#9b8f82"; ctx.font = "12px 'Trebuchet MS',sans-serif";
+    ctx.fillText(g.score + " pts" + (g.heat ? "  ·  Depth " + g.heat : "") + (daily ? "  ·  Daily" : ""), W - 118, 36);
+    hudBtn(W - 104, 10, 30, 30, "II", togglePause);
+    hudBtn(W - 68, 10, 30, 30, sfxOn ? "♪" : "×", function () {
+      sfxOn = !sfxOn; musicOn = sfxOn; store.set(KEY + ".sfx", sfxOn); store.set(KEY + ".music", musicOn);
+      if (musicGain) musicGain.gain.value = musicOn ? 0.16 : 0;
+      if (hissGain) hissGain.gain.value = sfxOn ? 0.09 : 0;
+    });
+    hudBtn(W - 32, 10, 30, 30, "?", function () { show("ovHow"); });
+  }
+  function hudBtn(x, y, w, h, label, fn) {
+    ctx.fillStyle = "#2a1c14"; roundRect(x, y, w, h, 7); ctx.fill();
+    ctx.strokeStyle = "rgba(255,182,74,.3)"; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = "#f2e8dc"; ctx.font = "bold 13px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+    trayHits.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r); ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
+  }
+
+  function drawTray(time) {
+    var y = HUD + BH;
+    ctx.fillStyle = "#15100d"; ctx.fillRect(0, y, W, TRAY);
+    var mats = E.POURABLE.filter(function (m) { return g.unlocked[m]; });
+    var bw = Math.min(62, (W - 150) / Math.max(1, mats.length) - 4);
+    var x = 8;
+    mats.forEach(function (m, i) {
+      var sel = g.sel === m, cost = E.pourCost(g, m, E.pourRadius(g)), can = g.pressure >= cost;
+      ctx.fillStyle = sel ? "#ffb64a" : "#241a13"; roundRect(x, y + 6, bw, 58, 8); ctx.fill();
+      ctx.strokeStyle = sel ? "#ffe3b0" : "rgba(255,182,74,.22)"; ctx.lineWidth = sel ? 2 : 1; ctx.stroke();
+      ctx.globalAlpha = can ? 1 : 0.45;
+      ctx.fillStyle = "#" + ("000000" + E.MATS[m].col.toString(16)).slice(-6);
+      roundRect(x + bw / 2 - 11, y + 13, 22, 22, 4); ctx.fill();
+      ctx.fillStyle = sel ? "#3a1c06" : "#f2e8dc"; ctx.font = "bold 10px 'Trebuchet MS',sans-serif"; ctx.textAlign = "center";
+      ctx.fillText(E.MATS[m].name.toUpperCase(), x + bw / 2, y + 44);
+      ctx.fillStyle = sel ? "#3a1c06" : (can ? "#7fd8ff" : "#6f6257");
+      ctx.fillText(Math.round(cost) + "p", x + bw / 2, y + 56);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = sel ? "rgba(58,28,6,.7)" : "#6f6257"; ctx.font = "9px sans-serif"; ctx.textAlign = "left";
+      ctx.fillText(String(i + 1), x + 5, y + 14);
+      trayHits.push({ x: x, y: y + 6, w: bw, h: 58, fn: function () { g.sel = m; } });
+      x += bw + 4;
+    });
+    if (g.phase === "build") {
+      var sw = 132, sx = W - sw - 8, sy = y + 10;
+      var pulse = 0.5 + 0.5 * Math.sin(time * 4);
+      ctx.fillStyle = "#ffb64a"; roundRect(sx, sy, sw, 50, 12); ctx.fill();
+      ctx.strokeStyle = "rgba(255,240,200," + (0.4 + pulse * 0.5) + ")"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = "#2a1206"; ctx.font = "bold 14px 'Trebuchet MS',sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("WAVE " + (g.wave + 1) + "  ▶", sx + sw / 2, sy + 25);
+      trayHits.push({ x: sx, y: sy, w: sw, h: 50, fn: beginWave });
+    }
+  }
+
+  function draw(time, dt) {
+    trayHits = [];
+    ctx.save();
+    if (shake > 0.2) { ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake); shake *= 0.88; } else shake = 0;
+    ctx.fillStyle = "#070605"; ctx.fillRect(-20, -20, W + 40, H + 40);
+    if (!g) { ctx.restore(); return; }
+    drawWell(time);
+    drawHearth(time);
+    for (var i = 0; i < g.mons.length; i++) drawMonster(g.mons[i], time);
+    // pour preview
+    if (!paused && g.phase !== "reward" && pointer && pointer.in) {
+      var r = E.pourRadius(g) * CELL;
+      ctx.strokeStyle = "rgba(255,255,255,.5)"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(pointer.px, pointer.py, r + 2, 0, 6.2832); ctx.stroke();
+    }
+    for (i = parts.length - 1; i >= 0; i--) {
+      var p = parts[i]; p.t += dt;
+      if (p.t > p.life) { parts.splice(i, 1); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 240 * dt;
+      ctx.globalAlpha = 1 - p.t / p.life; ctx.fillStyle = p.col;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.2832); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    for (i = texts.length - 1; i >= 0; i--) {
+      var tx = texts[i]; tx.t += dt;
+      if (tx.t > tx.life) { texts.splice(i, 1); continue; }
+      ctx.globalAlpha = 1 - tx.t / tx.life;
+      ctx.font = "bold " + (tx.big ? 19 : 12) + "px 'Trebuchet MS',sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.lineWidth = 3; ctx.strokeStyle = "rgba(10,6,4,.85)";
+      ctx.strokeText(tx.text, tx.x, tx.y - tx.t * 22); ctx.fillStyle = tx.col;
+      ctx.fillText(tx.text, tx.x, tx.y - tx.t * 22);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    if (flash > 0) { ctx.globalAlpha = flash * 0.35; ctx.fillStyle = flashCol; ctx.fillRect(0, HUD, W, BH); ctx.globalAlpha = 1; flash = Math.max(0, flash - dt * 2.4); }
+    drawHud(time);
+    drawTray(time);
+  }
+
+  // ---------- events ----------
+  function say(text, col, x, y, big) {
+    texts.push({ text: text, col: col || "#fff", x: x == null ? W / 2 : x, y: y == null ? HUD + 120 : y, t: 0, life: big ? 1.6 : 0.9, big: !!big });
+  }
+  function pop(x, y, col, n, spd) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * 6.2832, s = (0.3 + Math.random()) * (spd || 120);
+      parts.push({ x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 40, t: 0, life: 0.3 + Math.random() * 0.4, col: col, r: 1.4 + Math.random() * 2.2 });
+    }
+  }
+  function drain() {
+    for (var i = 0; i < g.events.length; i++) {
+      var e = g.events[i], x, y;
+      switch (e.k) {
+        case "kill":
+          x = e.x * CELL; y = HUD + e.y * CELL;
+          pop(x, y, "#" + ("000000" + E.MONSTERS[e.type].col.toString(16)).slice(-6), 10, 140);
+          SFX.kill();
+          rec.kills++;
+          if (!rec.seen[e.type]) { rec.seen[e.type] = 1; saveRec(); }
+          break;
+        case "react":
+          x = e.x * CELL; y = HUD + e.y * CELL;
+          pop(x, y, "#dff0ff", 4, 70);
+          break;
+        case "found":
+          var rr = null;
+          for (var q = 0; q < E.REACTIONS.length; q++) if (E.REACTIONS[q].id === e.id) rr = E.REACTIONS[q];
+          if (rr) { say("DISCOVERED: " + rr.name, "#8dff57", W / 2, HUD + 80, true); SFX.found(); }
+          rec.found[e.id] = 1; saveRec();
+          break;
+        case "explode":
+          flash = 0.6; flashCol = "#ffb64a"; shake = 12;
+          pop(e.x * CELL, HUD + e.y * CELL, "#ffb64a", 26, 260);
+          SFX.blast();
+          break;
+        case "breach":
+          flash = 0.5; flashCol = "#ff3a2a"; shake = 10;
+          say("-" + e.dmg, "#ff6b5a", e.x * CELL, HUD + E.HEARTH_Y * CELL);
+          SFX.breach();
+          break;
+        case "wave": SFX.wave(); say((e.n > E.WAVES ? "ENDLESS WAVE " : "WAVE ") + e.n, "#ffb64a", W / 2, HUD + 100, true); break;
+        case "waveClear": SFX.clear(); say("WAVE CLEAR  +" + e.bonus + " ember", "#ffb64a", W / 2, HUD + 110, true); break;
+        case "descend": say("DEEPER STILL — the well changes", "#7fd8ff", W / 2, HUD + 150, true); break;
+        case "bossDown": flash = 0.7; flashCol = "#fff"; shake = 16; SFX.win(); break;
+        case "win": SFX.win(); break;
+        case "lose": SFX.lose(); break;
+      }
+    }
+  }
+
+  // ---------- input ----------
+  function toLocal(ev) {
+    var r = cv.getBoundingClientRect();
+    var p = ev.touches && ev.touches.length ? ev.touches[0] : (ev.changedTouches && ev.changedTouches.length ? ev.changedTouches[0] : ev);
+    return { x: (p.clientX - r.left) / r.width * W, y: (p.clientY - r.top) / r.height * H };
+  }
+  function onDown(ev) {
+    audio();
+    if (!g || g.over || paused) return;
+    var p = toLocal(ev);
+    for (var i = 0; i < trayHits.length; i++) {
+      var h = trayHits[i];
+      if (p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h) { h.fn(); SFX.pick(); return; }
+    }
+    if (p.y < HUD || p.y > HUD + BH) return;
+    pointer = { px: p.x, py: p.y, in: true, down: true };
+  }
+  function onMove(ev) {
+    var p = toLocal(ev);
+    var inside = p.y >= HUD && p.y <= HUD + BH;
+    if (!pointer) pointer = { px: p.x, py: p.y, in: inside, down: false };
+    else { pointer.px = p.x; pointer.py = p.y; pointer.in = inside; }
+  }
+  function onUp() { if (pointer) pointer.down = false; pourSound(false); }
+  cv.addEventListener("mousedown", onDown);
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+  cv.addEventListener("touchstart", function (e) { onDown(e); e.preventDefault(); }, { passive: false });
+  cv.addEventListener("touchmove", function (e) { onMove(e); if (pointer) pointer.down = true; e.preventDefault(); }, { passive: false });
+  cv.addEventListener("touchend", function (e) { onUp(); e.preventDefault(); }, { passive: false });
+  window.addEventListener("blur", function () { onUp(); });
+  window.addEventListener("keydown", function (e) {
+    var k = e.key.toLowerCase();
+    if (k === " ") e.preventDefault();
+    if (k === "escape" || k === "p") { togglePause(); return; }
+    if (!g || g.over || paused) return;
+    if (k === " " && g.phase === "build") beginWave();
+    var n = parseInt(k, 10);
+    if (n >= 1 && n <= 8) {
+      var mats = E.POURABLE.filter(function (m) { return g.unlocked[m]; });
+      if (mats[n - 1] != null) g.sel = mats[n - 1];
+    }
+  });
+
+  // ---------- flow ----------
+  function newRun(opts) {
+    audio(); hideAll();
+    var seed;
+    if (opts.daily) {
+      var d = new Date();
+      seed = ((d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate()) * 2654435761) >>> 0;
+    } else seed = (Math.random() * 4294967295) >>> 0;
+    daily = !!opts.daily;
+    g = E.newGame(seed, { heat: opts.daily ? 1 : heatSel });
+    paused = false; armed = null; parts = []; texts = [];
+    rec.runs++; saveRec();
+    store.del(KEY + ".run");
+    setTimeout(function () { if (g && g.wave === 0 && g.phase === "build") beginWave(); }, 1400);
+  }
+  function beginWave() { if (g && g.phase === "build") { E.startWave(g); drain(); } }
+  function togglePause() {
+    if (!g || g.over || g.phase === "reward") return;
+    paused = !paused;
+    if (paused) { pourSound(false); show("ovPause"); } else hide("ovPause");
+  }
+  function persist() {
+    if (g && !g.over && (g.phase === "build" || g.phase === "reward") && !daily) store.set(KEY + ".run", E.save(g));
+  }
+
+  function show(id) { var el = document.getElementById(id); if (el) el.hidden = false; }
+  function hide(id) { var el = document.getElementById(id); if (el) el.hidden = true; }
+  function hideAll() { ["ovTitle", "ovHow", "ovRecords", "ovReward", "ovPause", "ovOver"].forEach(hide); }
+
+  function openReward() {
+    document.getElementById("rwTitle").textContent = "WAVE " + g.wave + " CLEARED";
+    document.getElementById("rwSub").textContent = "ember " + g.ember + "  ·  hearth " + Math.ceil(g.hearth) + "/" + g.hearthMax;
+    var box = document.getElementById("rwCards"); box.innerHTML = "";
+    (g.offered || []).forEach(function (id) {
+      var u = E.upg(id), lvNow = g.up[id] || 0;
+      var kind = u.kind === "unlock" ? "NEW MATERIAL" : (u.kind === "relic" ? "RELIC" : (lvNow ? "UPGRADE · LEVEL " + lvNow + " → " + (lvNow + 1) : "UPGRADE"));
+      var el = document.createElement("div");
+      el.className = "up";
+      el.innerHTML = '<div class="k">' + kind + '</div><div class="n">' + u.name + '</div><div class="d">' + u.desc + '</div>';
+      el.addEventListener("click", function () {
+        SFX.pick(); E.choose(g, id); drain(); hide("ovReward"); persist();
+      });
+      box.appendChild(el);
+    });
+    show("ovReward");
+  }
+
+  function openOver(demoDone) {
+    store.del(KEY + ".run");
+    if (g.score > rec.best) rec.best = g.score;
+    if (g.wave > rec.bestWave) rec.bestWave = g.wave;
+    rec.poured += g.stats.poured;
+    var note = "";
+    if (g.won) {
+      rec.wins++;
+      if (!DEMO && !daily && g.heat >= rec.depth && g.heat < E.HEAT.length - 1) {
+        rec.depth = g.heat + 1;
+        note = "Unlocked " + E.HEAT[rec.depth].name + ": " + E.HEAT[rec.depth].desc;
+      }
+    }
+    saveRec();
+    var head = document.getElementById("ovHead");
+    head.textContent = demoDone ? "DEMO COMPLETE" : (g.won ? "THE HEARTH HOLDS" : "THE HEARTH WENT OUT");
+    head.style.color = (g.won || demoDone) ? "#8bd36b" : "#ff6b5a";
+    document.getElementById("ovScore").textContent = g.score.toLocaleString() + " pts";
+    document.getElementById("ovSub").textContent = "wave " + g.wave + (g.heat ? "  ·  Depth " + g.heat : "") + (daily ? "  ·  Daily" : "");
+    document.getElementById("ovTable").innerHTML =
+      "<tr><td>Monsters put out</td><td class='r'>" + g.kills + "</td></tr>" +
+      "<tr><td>Material poured</td><td class='r'>" + g.stats.poured.toLocaleString() + " grains</td></tr>" +
+      "<tr><td>Reactions discovered</td><td class='r'>" + Object.keys(g.found).length + " / " + E.REACTIONS.length + "</td></tr>" +
+      "<tr><td>Best ever</td><td class='r'>" + rec.best.toLocaleString() + " pts · wave " + rec.bestWave + "</td></tr>";
+    document.getElementById("ovNote").textContent = demoDone ? "That is the end of the free demo — the full well runs twenty waves, three acts deep." : note;
+    
+    var buy = document.getElementById("btnBuyOver");
+    if (buy) buy.hidden = false;
+    show("ovOver");
+  }
+
+  function openRecords() {
+    var html = "<table>" +
+      "<tr><td>Best score</td><td class='r'>" + rec.best.toLocaleString() + "</td></tr>" +
+      "<tr><td>Furthest wave</td><td class='r'>" + rec.bestWave + "</td></tr>" +
+      "<tr><td>Hearths held / runs</td><td class='r'>" + rec.wins + " / " + rec.runs + "</td></tr>" +
+      "<tr><td>Monsters put out, all time</td><td class='r'>" + rec.kills.toLocaleString() + "</td></tr>" +
+      "<tr><td>Material poured, all time</td><td class='r'>" + rec.poured.toLocaleString() + "</td></tr>" +
+      "</table><h2 style='margin-top:12px'>REACTIONS</h2><table>";
+    E.REACTIONS.forEach(function (r) {
+      var f = rec.found[r.id];
+      html += "<tr><td style='color:" + (f ? "#ffb64a" : "#574b40") + "'>" + (f ? r.name : "? ? ?") + "</td>" +
+        "<td style='color:#9b8f82;font-size:12px'>" + (f ? r.out : "not found yet") + "</td></tr>";
+    });
+    html += "</table><h2 style='margin-top:12px'>WHAT CLIMBS</h2><table>";
+    Object.keys(E.MONSTERS).forEach(function (k) {
+      var m = E.MONSTERS[k], s = rec.seen[k];
+      html += "<tr><td style='color:" + (s ? "#" + ("000000" + m.col.toString(16)).slice(-6) : "#574b40") + "'>" + (s ? m.name : "? ? ?") + "</td>" +
+        "<td class='r'>" + (s ? Math.round(m.hp) + " hp" : "") + "</td></tr>";
+    });
+    html += "</table>";
+    document.getElementById("recBody").innerHTML = html;
+    show("ovRecords");
+  }
+
+  function refreshTitle() {
+    var hb = document.getElementById("heatBox");
+    if (hb) {
+      heatSel = Math.min(heatSel, rec.depth);
+      hb.hidden = rec.depth === 0 || DEMO;
+      document.getElementById("heatName").textContent = E.HEAT[heatSel].name;
+      document.getElementById("heatDesc").textContent = E.HEAT[heatSel].desc;
+      document.getElementById("heatDown").disabled = heatSel <= 0;
+      document.getElementById("heatUp").disabled = heatSel >= rec.depth;
+    }
+    document.getElementById("btnResume").hidden = !store.get(KEY + ".run", null);
+    document.getElementById("playSub").textContent = E.WAVES + (DEMO ? " waves of the demo · saves between waves" : " waves · saves between waves");
+    document.getElementById("titleFoot").textContent = rec.best ? "best " + rec.best.toLocaleString() + " pts · wave " + rec.bestWave : (DEMO ? "free demo" : "");
+  }
+
+  function bind(id, fn) { var el = document.getElementById(id); if (el) el.addEventListener("click", fn); }
+  bind("btnPlay", function () { newRun({}); });
+  
+  bind("btnHow", function () { show("ovHow"); });
+  bind("btnHowBack", function () { hide("ovHow"); });
+  bind("btnRecords", openRecords);
+  bind("btnRecBack", function () { hide("ovRecords"); });
+  bind("heatDown", function () { heatSel = Math.max(0, heatSel - 1); refreshTitle(); });
+  bind("heatUp", function () { heatSel = Math.min(rec.depth, heatSel + 1); refreshTitle(); });
+  bind("btnUnpause", togglePause);
+  bind("btnPauseHow", function () { show("ovHow"); });
+  bind("btnQuit", function () { persist(); paused = false; g = null; hideAll(); refreshTitle(); show("ovTitle"); });
+  bind("btnAgain", function () { newRun({ daily: daily }); });
+  bind("btnMenu", function () { g = null; hideAll(); refreshTitle(); show("ovTitle"); });
+  
+  
+  bind("btnBuyTitle", function () { window.open(STORE, "_blank"); });
+  bind("btnBuyOver", function () { window.open(STORE, "_blank"); });
+  
+  bind("btnCopy", function () {
+    var txt = E.shareText(g) + "\nplay: kqmigqkqri.itch.io/moltenwell";
+    var b = document.getElementById("btnCopy");
+    try { navigator.clipboard.writeText(txt); b.textContent = "COPIED"; } catch (e) { b.textContent = "COPY FAILED"; }
+    setTimeout(function () { b.textContent = "COPY RESULT"; }, 1400);
+  });
+  bind("btnResume", function () {
+    var loaded = E.load(store.get(KEY + ".run", null));
+    if (!loaded) { newRun({}); return; }
+    audio(); hideAll(); g = loaded; daily = false; paused = false; parts = []; texts = []; armed = null;
+    if (g.phase === "reward") openReward();
+  });
+
+  // ---------- loop ----------
+  var acc = 0, last = performance.now(), demoDone = false;
+  function frame(now) {
+    var dt = Math.min(0.1, (now - last) / 1000); last = now;
+    if (g && !paused && !g.over && g.phase !== "reward") {
+      acc += dt;
+      var guard = 0;
+      while (acc >= E.TICK && guard++ < 6) {
+        acc -= E.TICK;
+        var inp = {};
+        if (pointer && pointer.down && pointer.in) {
+          var cx = pointer.px / CELL, cy = (pointer.py - HUD) / CELL;
+          inp.pour = { mat: g.sel, x: cx, y: cy };
+        }
+        E.step(g, inp);
+        drain();
+        if (g.phase === "reward" || g.over) break;
+      }
+      pourSound(!!(pointer && pointer.down && pointer.in && g.pressure > 2), g.sel);
+    } else { acc = 0; pourSound(false); }
+
+    if (g && g.phase === "reward" && armed !== "reward") {
+      armed = "reward";
+      persist();
+      setTimeout(function () { if (g && g.phase === "reward") openReward(); }, 700);
+    }
+    if (g && g.over && armed !== "over") {
+      armed = "over";
+      demoDone = DEMO && g.won;
+      setTimeout(function () { if (g && g.over) openOver(demoDone); }, 1100);
+    }
+    if (g && g.phase === "wave") armed = null;
+    fitIfChanged();
+    draw(now / 1000, dt);
+    requestAnimationFrame(frame);
+  }
+
+  // hooks for the capture script and automated checks
+  window.MOLTEN_APP = {
+    setup: function (seed, opts) { hideAll(); g = E.newGame(seed >>> 0, opts || {}); paused = false; parts = []; texts = []; armed = null; return g; },
+    state: function () { return g; },
+    setPaused: function (v) { paused = !!v; },
+    tick: function (n, pourAt) {
+      for (var i = 0; i < (n || 1); i++) {
+        if (!g || g.over) break;
+        E.step(g, pourAt ? { pour: pourAt } : {});
+        drain();
+        if (g.phase === "reward") break;
+      }
+      draw(performance.now() / 1000, 1 / 60);
+      return g ? { phase: g.phase, wave: g.wave, hearth: Math.round(g.hearth), mons: g.mons.length, score: g.score } : null;
+    },
+    draw: function () { draw(performance.now() / 1000, 1 / 60); },
+    openReward: openReward, openOver: openOver, overlay: function (id) { hideAll(); if (id) show(id); }
+  };
+
+  if (!DEMO) ["btnBuyTitle", "btnBuyOver"].forEach(hide);   // the built demo has no full-game buttons at all
+  setupBuffers();
+  fit();
+  refreshTitle();
+  requestAnimationFrame(frame);
+})();
+</script>

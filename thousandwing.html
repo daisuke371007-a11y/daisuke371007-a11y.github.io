@@ -1,0 +1,1294 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>THOUSANDWING</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0814; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; outline: none; cursor: crosshair; }
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0"></canvas>
+<script>window.THOUSANDWING_EDITION = "demo";</script>
+<script>
+// content.js — THOUSANDWING: the birds that hunt the flock, the places it flies, the upgrades it grows.
+(function (root) {
+  "use strict";
+  // behaviour: chase (flies at the flock), swarm (fast and jittery), thief (goes for berries first),
+  // line (crosses the sky in a straight line), hawk (circles, then dives at the flock's edge and snatches),
+  // owl (closes in and hoots: the flock scatters), cloud (a drifting storm: no hp, birds inside get struck)
+  // bite: starlings killed per bite; biteCd: seconds between bites; xp: berries dropped; feathers: kept after the run
+  var ENEMIES = [
+    { id: "CROW", name: "Carrion Crow", hp: 6, r: 11, speed: 70, act: "chase", bite: 1, biteCd: 1.0, xp: 1, feathers: 1, col: "#14141c", eye: "#ffd36b" },
+    { id: "JACKDAW", name: "Jackdaw", hp: 3, r: 8, speed: 115, act: "swarm", bite: 1, biteCd: 1.4, xp: 1, feathers: 1, col: "#2a2c38", eye: "#dfe8ff" },
+    { id: "MAGPIE", name: "Magpie", hp: 9, r: 11, speed: 105, act: "thief", bite: 1, biteCd: 1.2, xp: 2, feathers: 1, col: "#101018", eye: "#ffffff", patch: "#f2f2f2" },
+    { id: "ROOK", name: "Rook", hp: 22, r: 14, speed: 55, act: "chase", bite: 1, biteCd: 0.7, xp: 3, feathers: 2, col: "#1b1726", eye: "#c9b7ff" },
+    { id: "SPARROWHAWK", name: "Sparrowhawk", hp: 30, r: 13, speed: 150, act: "hawk", snatch: 3, bite: 1, biteCd: 0.9, xp: 6, feathers: 4, col: "#6b4a2e", eye: "#ffb340" },
+    { id: "GULL", name: "Herring Gull", hp: 12, r: 14, speed: 170, act: "line", bite: 2, biteCd: 0.8, xp: 2, feathers: 1, col: "#d9dde6", eye: "#ffd24a" },
+    { id: "SKUA", name: "Great Skua", hp: 20, r: 14, speed: 140, act: "thief", bite: 2, biteCd: 0.9, xp: 4, feathers: 3, col: "#5a4636", eye: "#ffcf8a" },
+    { id: "CORMORANT", name: "Cormorant", hp: 40, r: 16, speed: 60, act: "chase", bite: 2, biteCd: 0.8, xp: 5, feathers: 3, col: "#10181a", eye: "#4dffb0" },
+    { id: "PIGEON", name: "Feral Pigeon", hp: 5, r: 10, speed: 95, act: "swarm", bite: 1, biteCd: 1.3, xp: 1, feathers: 1, col: "#7d8496", eye: "#ff7a3a" },
+    { id: "KESTREL", name: "Kestrel", hp: 34, r: 12, speed: 165, act: "hawk", snatch: 3, bite: 1, biteCd: 0.9, xp: 6, feathers: 4, col: "#a5622f", eye: "#ffe08a" },
+    { id: "CLOUD", name: "Storm Cloud", hp: 0, r: 90, speed: 25, act: "cloud", bite: 1, biteCd: 0.5, xp: 0, feathers: 0, col: "#2b2f45", eye: "#e8f0ff" },
+    { id: "BARNOWL", name: "Barn Owl", hp: 55, r: 17, speed: 70, act: "owl", bite: 2, biteCd: 0.8, xp: 8, feathers: 5, col: "#e8d2a8", eye: "#14100a" },
+    { id: "HARRIER", name: "Marsh Harrier", hp: 50, r: 16, speed: 150, act: "hawk", snatch: 5, bite: 2, biteCd: 0.8, xp: 9, feathers: 5, col: "#6a5034", eye: "#ffd34a" },
+    // bosses
+    { id: "GOSHAWK", name: "Northern Goshawk", hp: 1400, r: 34, speed: 120, act: "hawk", snatch: 8, bite: 3, biteCd: 0.5, xp: 60, feathers: 60, col: "#4d4a52", eye: "#ff8a2a", boss: true },
+    { id: "BLACKBACK", name: "Great Black-backed Gull", hp: 3200, r: 40, speed: 95, act: "chase", bite: 4, biteCd: 0.45, xp: 90, feathers: 90, col: "#2a2e38", eye: "#ffd24a", boss: true, wings: "#f4f6fa" },
+    { id: "PEREGRINE", name: "Peregrine Falcon", hp: 7000, r: 34, speed: 210, act: "hawk", snatch: 12, bite: 4, biteCd: 0.4, xp: 130, feathers: 130, col: "#3c4656", eye: "#ffdf4a", boss: true },
+    { id: "EAGLEOWL", name: "Eurasian Eagle-Owl", hp: 12000, r: 46, speed: 75, act: "owl", bite: 5, biteCd: 0.4, xp: 200, feathers: 200, col: "#7a5a36", eye: "#ff8a1a", boss: true }
+  ];
+  var ENEMY = {}; ENEMIES.forEach(function (e) { ENEMY[e.id] = e; });
+
+  // regions: waves are [from second, to second, enemy, spawns per second at the start, at the end]
+  var REGIONS = [
+    { id: "FARM", hpx: 1, ratex: 1, name: "Harvest Fields", len: 480, boss: "GOSHAWK", bossAt: 400, sky: ["#2a1d4a", "#c2477a", "#ffb35c"], ground: "farm",
+      waves: [[0, 480, "CROW", 0.8, 3.2], [40, 480, "JACKDAW", 0.4, 3.0], [100, 480, "MAGPIE", 0.15, 0.8], [170, 480, "ROOK", 0.1, 0.7], [240, 480, "SPARROWHAWK", 0.03, 0.18]] },
+    
+  ];
+
+  // in-run upgrades (three to choose from at each level)
+  var UPGRADES = [
+    { id: "BEAKS", name: "Sharp Beaks", desc: "Every peck hits 25% harder.", max: 5 },
+    { id: "WINGS", name: "Quick Wings", desc: "The flock flies 10% faster.", max: 5 },
+    { id: "BALL", name: "Tight Ball", desc: "BALL hits 20% harder, and hawks snatch fewer birds from it.", max: 5 },
+    { id: "RIBBON", name: "Long Ribbon", desc: "RIBBON grows 20% longer and hits 15% harder.", max: 5 },
+    { id: "WHEEL", name: "Wide Wheel", desc: "WHEEL grows wider, spins faster and hits 15% harder.", max: 5 },
+    { id: "DIVE", name: "Steep Dive", desc: "DIVE comes back 15% sooner and hits 25% harder.", max: 5 },
+    { id: "NOSE", name: "Berry Nose", desc: "Pick up berries from 30% further away.", max: 5 },
+    { id: "CALL", name: "Strays' Call", desc: "More lone starlings join, and from further away.", max: 5 },
+    { id: "HARDY", name: "Hardy Birds", desc: "Each bite has a 10% better chance to miss.", max: 5 },
+    { id: "SWALLOWS", name: "Swallows", desc: "Two swallows fly with you and dart at the nearest enemy.", max: 5 },
+    { id: "MOCKER", name: "Mockingbird", desc: "Every few seconds a screech stuns everything near the flock.", max: 5 },
+    { id: "SONG", name: "Evening Song", desc: "Every 8 seconds, starlings hear the flock and join.", max: 5 },
+    { id: "FLOCK", name: "Twelve More", desc: "Twelve starlings join the flock now.", max: 99 }
+  ];
+  var UPGRADE = {}; UPGRADES.forEach(function (u) { UPGRADE[u.id] = u; });
+  // evolutions: offered once both parts are at their max
+  var EVOLUTIONS = [
+    { id: "BLACKSUN", name: "Black Sun", needs: ["BALL", "BEAKS"], desc: "The BALL burns: everything it touches takes damage every moment. (Danes call a great murmuration 'sort sol' - the black sun.)" },
+    { id: "SKYRIVER", name: "Sky River", needs: ["RIBBON", "WINGS"], desc: "The RIBBON pecks twice as fast and leaves no gaps." },
+    { id: "STORMWHEEL", name: "Storm Wheel", needs: ["WHEEL", "DIVE"], desc: "The WHEEL flings feather-darts at anything in reach." }
+  ];
+  var EVOLUTION = {}; EVOLUTIONS.forEach(function (u) { EVOLUTION[u.id] = u; });
+
+  // the roost: kept between runs, bought with feathers
+  var ROOST = [
+    { id: "START", name: "Bigger Roost", desc: "Start every run with 10 more starlings.", max: 10, base: 15, grow: 1.4 },
+    { id: "BEAK", name: "Strong Beaks", desc: "+10% damage.", max: 10, base: 20, grow: 1.45 },
+    { id: "TOUGH", name: "Thick Feathers", desc: "Bites miss 6% more often.", max: 5, base: 30, grow: 1.6 },
+    { id: "WING", name: "Long Wings", desc: "+5% speed.", max: 5, base: 25, grow: 1.55 },
+    { id: "FORAGE", name: "Foraging", desc: "+10% berries from every enemy.", max: 5, base: 25, grow: 1.55 },
+    { id: "LURE", name: "Roost Call", desc: "+20% lone starlings.", max: 5, base: 30, grow: 1.6 },
+    { id: "REROLL", name: "Second Thoughts", desc: "One reroll of the three choices per run.", max: 3, base: 60, grow: 2.2 },
+    { id: "DIVEFAST", name: "Falconer's Lesson", desc: "DIVE comes back 10% sooner.", max: 5, base: 35, grow: 1.6 }
+  ];
+  var ROOSTU = {}; ROOST.forEach(function (u) { ROOSTU[u.id] = u; });
+
+  // field notes, shown between runs: all true
+  var NOTES = [
+    "A starling in a murmuration keeps track of about seven of its nearest neighbours - not the whole flock.",
+    "In Denmark a great murmuration over the marshes is called 'sort sol': the black sun.",
+    "When a falcon attacks, a murmuration bunches tighter and ripples away from it in waves.",
+    "Small birds mob hawks and owls on purpose: a crowd makes a hunter give up.",
+    "Starlings are mimics. They copy car alarms, phones, and other birds' songs.",
+    "A peregrine falcon in a stoop is the fastest animal on Earth.",
+    "Magpies cache food and steal from other birds' caches.",
+    "Rooks nest in colonies called rookeries, and come back to them for years.",
+    "Barn owls hunt by sound alone: they can catch a mouse in total darkness.",
+    "Murmurations happen at dusk, just before the flock drops into its roost for the night."
+  ];
+
+  var api = { ENEMIES: ENEMIES, ENEMY: ENEMY, REGIONS: REGIONS, UPGRADES: UPGRADES, UPGRADE: UPGRADE, EVOLUTIONS: EVOLUTIONS, EVOLUTION: EVOLUTION, ROOST: ROOST, ROOSTU: ROOSTU, NOTES: NOTES };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.CONTENT = api;
+})(this);
+
+</script>
+<script>
+// flock.js — THOUSANDWING: a murmuration that fights by its shape.
+// Pure logic: the page, the balance runs and the tests all drive it the same way.
+(function (root) {
+  "use strict";
+  var node = typeof module !== "undefined" && module.exports;
+  var C = node ? require("./content.js") : root.CONTENT;
+  var MAXB = 900, GOLD = 2.399963, CELL = 64;
+
+  function rng(seed) {
+    var a = seed >>> 0;
+    return function () { a = (a + 0x6D2B79F5) >>> 0; var t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+  function hash(i) { var x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+
+  // --- the save ---
+  function newGame(opts) {
+    opts = opts || {};
+    return { v: 1, demo: !!opts.demo, feathers: 0, total: 0, roost: {}, open: 1, region: 0, cleared: {}, runs: 0, best: {}, endless: 0, seed: opts.seed || 1, seen: {} };
+  }
+  function rl(g, id) { return g.roost[id] || 0; }
+  function roostCost(g, id) { var u = C.ROOSTU[id], l = rl(g, id); return l >= u.max ? Infinity : Math.round(u.base * Math.pow(u.grow, l)); }
+  function canBuy(g, id) { return rl(g, id) < C.ROOSTU[id].max && g.feathers >= roostCost(g, id); }
+  function buy(g, id) { if (!canBuy(g, id)) return false; g.feathers -= roostCost(g, id); g.roost[id] = rl(g, id) + 1; return true; }
+
+  // --- stats of the flock in a run: roost x in-run upgrades ---
+  function lv(run, id) { return run.ups[id] || 0; }
+  function stats(run) {
+    var g = run.g;
+    return {
+      beak: 1 * (1 + 0.25 * lv(run, "BEAKS")) * (1 + 0.1 * rl(g, "BEAK")),
+      speed: 230 * (1 + 0.1 * lv(run, "WINGS")) * (1 + 0.05 * rl(g, "WING")),
+      dodge: Math.min(0.75, 0.1 * lv(run, "HARDY") + 0.06 * rl(g, "TOUGH")),
+      magnet: 110 * (1 + 0.3 * lv(run, "NOSE")),
+      call: (1 + 0.25 * lv(run, "CALL")) * (1 + 0.2 * rl(g, "LURE")),
+      forage: 1 + 0.1 * rl(g, "FORAGE"),
+      ball: 1.25 * (1 + 0.2 * lv(run, "BALL")),
+      ribbon: 1 * (1 + 0.15 * lv(run, "RIBBON")),
+      ribbonLen: 1 + 0.2 * lv(run, "RIBBON"),
+      wheel: 0.9 * (1 + 0.15 * lv(run, "WHEEL")),
+      wheelR: 1 + 0.12 * lv(run, "WHEEL"),
+      wheelSpin: 2.2 * (1 + 0.15 * lv(run, "WHEEL")),
+      dive: 2.2 * (1 + 0.25 * lv(run, "DIVE")),
+      diveCd: 7 * Math.pow(0.85, lv(run, "DIVE")) * Math.pow(0.9, rl(g, "DIVEFAST")),
+      swallows: 2 * lv(run, "SWALLOWS"),
+      mocker: lv(run, "MOCKER"),
+      song: lv(run, "SONG"),
+      peck: 0.5
+    };
+  }
+
+  // --- a run ---
+  function startRun(g, ri, seed) {
+    var reg = ri === "endless" ? endlessRegion() : C.REGIONS[ri];
+    var run = { g: g, ri: ri, reg: reg, t: 0, rng: rng((seed || (g.seed * 7919 + g.runs * 104729 + 7)) >>> 0), birds: [], lead: { x: 0, y: 0, vx: 0, vy: 0 }, target: { x: 0, y: 0 },
+      form: "BALL", trail: [], dive: null, diveCd: 0, enemies: [], berries: [], strays: [], darts: [], swallowsL: [], level: 1, xp: 0, xpNext: 5, ups: {}, evos: {},
+      choices: null, rerolls: rl(g, "REROLL"), kills: 0, feathers: 0, events: [], over: false, won: false, bossSpawned: false, boss: null, spawnAcc: {}, strayT: 1, mockT: 4, songT: 8, peak: 0, eid: 1, stun: 0 };
+    run.s = stats(run);
+    var n = 40 + 10 * rl(g, "START");
+    for (var i = 0; i < n; i++) addBird(run, (run.rng() - 0.5) * 80, (run.rng() - 0.5) * 80);
+    run.trail.push({ x: 0, y: 0 });
+    return run;
+  }
+  function endlessRegion() {
+    // all four regions' birds at once, getting worse for ever; a boss every 3 minutes
+    return { id: "ENDLESS", name: "Black Sun", len: 1e9, endless: true, sky: ["#05040c", "#3a1030", "#ff5a2a"], ground: "marsh",
+      waves: [[0, 1e9, "CROW", 1, 0], [0, 1e9, "JACKDAW", 1, 0], [30, 1e9, "PIGEON", 0.6, 0], [60, 1e9, "MAGPIE", 0.3, 0], [90, 1e9, "ROOK", 0.3, 0], [120, 1e9, "GULL", 0.3, 0],
+        [150, 1e9, "SKUA", 0.2, 0], [180, 1e9, "KESTREL", 0.06, 0], [200, 1e9, "BARNOWL", 0.06, 0], [240, 1e9, "HARRIER", 0.05, 0], [260, 1e9, "CLOUD", 0.02, 0], [300, 1e9, "CORMORANT", 0.2, 0]] };
+  }
+  function addBird(run, x, y) {
+    if (run.birds.length >= MAXB) return false;
+    var i = run.birds.length;
+    run.birds.push({ x: x, y: y, vx: 0, vy: 0, cd: run.rng() * 0.5, ph: hash(i + run.birds.length * 0.37) * 6.283, k: i });
+    return true;
+  }
+  function flockRadius(run) { var n = run.birds.length; return run.form === "BALL" ? 6 * Math.sqrt(n) + 10 : run.form === "WHEEL" ? wheelR(run) + 30 : 60; }
+  function wheelR(run) { return (70 + 4.5 * Math.sqrt(run.birds.length)) * run.s.wheelR; }
+
+  // --- the player's orders ---
+  function setTarget(run, x, y) { run.target.x = x; run.target.y = y; }
+  function setForm(run, f) { if (f === "BALL" || f === "RIBBON" || f === "WHEEL") { if (run.form !== f) run.events.push({ e: "form", f: f }); run.form = f; } }
+  function dive(run, x, y) {
+    if (run.diveCd > 0 || run.dive) return false;
+    var dx = x - run.lead.x, dy = y - run.lead.y, L = Math.sqrt(dx * dx + dy * dy) || 1, reach = 420;
+    if (L > reach) { x = run.lead.x + dx / L * reach; y = run.lead.y + dy / L * reach; }
+    run.dive = { x: x, y: y, t: 0, len: 0.8 };
+    run.diveCd = run.s.diveCd;
+    run.events.push({ e: "dive", x: x, y: y });
+    return true;
+  }
+
+  // --- the choices at a level up ---
+  function offer(run) {
+    var pool = [];
+    C.EVOLUTIONS.forEach(function (ev) { if (!run.evos[ev.id] && ev.needs.every(function (id) { return lv(run, id) >= C.UPGRADE[id].max; })) pool.push({ id: ev.id, evo: true, w: 100 }); });
+    C.UPGRADES.forEach(function (u) { if (lv(run, u.id) < u.max) pool.push({ id: u.id, w: u.id === "FLOCK" ? 1.2 : 2 + (lv(run, u.id) > 0 ? 1 : 0) }); });
+    var out = [];
+    while (out.length < 3 && pool.length) {
+      var tot = 0; pool.forEach(function (p) { tot += p.w; });
+      var r = run.rng() * tot, k = 0;
+      for (; k < pool.length - 1; k++) { r -= pool[k].w; if (r <= 0) break; }
+      out.push(pool[k]); pool.splice(k, 1);
+    }
+    run.choices = out.map(function (p) { return p.id; });
+  }
+  function choose(run, id) {
+    if (!run.choices || run.choices.indexOf(id) < 0) return false;
+    if (C.EVOLUTION[id]) run.evos[id] = true;
+    else {
+      run.ups[id] = lv(run, id) + 1;
+      if (id === "FLOCK") for (var i = 0; i < 12; i++) addBird(run, run.lead.x + (run.rng() - 0.5) * 60, run.lead.y + (run.rng() - 0.5) * 60);
+    }
+    run.choices = null;
+    run.s = stats(run);
+    syncSwallows(run);
+    run.events.push({ e: "chose", id: id });
+    if (run.xp >= run.xpNext) levelUp(run);
+    return true;
+  }
+  function reroll(run) { if (!run.choices || run.rerolls <= 0) return false; run.rerolls--; offer(run); return true; }
+  function levelUp(run) { run.xp -= run.xpNext; run.level++; run.xpNext = Math.round(5 + run.level * 3.4 + Math.pow(run.level, 1.55)); offer(run); run.events.push({ e: "level", level: run.level }); }
+  function syncSwallows(run) {
+    while (run.swallowsL.length < run.s.swallows) run.swallowsL.push({ x: run.lead.x, y: run.lead.y, vx: 0, vy: 0, cd: 0, tgt: null });
+  }
+
+  // --- enemies ---
+  function spawnEnemy(run, id, x, y) {
+    var d = C.ENEMY[id], r = run.rng;
+    if (x === undefined) { var a = r() * 6.283, dist = 760 + r() * 200; x = run.lead.x + Math.cos(a) * dist; y = run.lead.y + Math.sin(a) * dist * 0.8; }
+    var hpMul = run.reg.endless ? 2 + run.t / 120 : ramp(run, run.reg.hpx);
+    var e = { uid: run.eid++, id: id, d: d, x: x, y: y, vx: 0, vy: 0, hp: d.hp * hpMul, max: d.hp * hpMul, biteT: d.biteCd * 0.6, flash: 0, st: "in", t: 0, ang: r() * 6.283, stun: 0, dead: false };
+    if (d.act === "line") { var tx = run.lead.x + (r() - 0.5) * 200, ty = run.lead.y + (r() - 0.5) * 200, L = Math.hypot(tx - x, ty - y) || 1; e.vx = (tx - x) / L * d.speed; e.vy = (ty - y) / L * d.speed; e.life = 2400 / d.speed; }
+    if (d.act === "cloud") { e.vx = (r() - 0.5) * 30; e.vy = (r() - 0.5) * 30; e.life = 50; }
+    run.enemies.push(e);
+    if (d.boss) { run.boss = e; run.events.push({ e: "boss", id: id }); }
+    return e;
+  }
+  function moveEnemy(run, e, dt, cx, cy) {
+    var d = e.d, sp = d.speed * (run.stun > 0 || e.stun > 0 ? 0.15 : 1), dx, dy, L;
+    e.t += dt; if (e.stun > 0) e.stun -= dt;
+    if (d.act === "chase" || d.act === "swarm") {
+      dx = cx - e.x; dy = cy - e.y; L = Math.sqrt(dx * dx + dy * dy) || 1;
+      var j = d.act === "swarm" ? 0.9 : 0.2;
+      var wob = Math.sin(e.t * 3 + e.ang) * j;
+      var ax = dx / L * Math.cos(wob) - dy / L * Math.sin(wob), ay = dx / L * Math.sin(wob) + dy / L * Math.cos(wob);
+      e.vx += (ax * sp - e.vx) * Math.min(1, dt * 2.5); e.vy += (ay * sp - e.vy) * Math.min(1, dt * 2.5);
+    } else if (d.act === "thief") {
+      var b = null, bd = 380;
+      for (var i = 0; i < run.berries.length; i++) { var q = run.berries[i], dd = Math.abs(q.x - e.x) + Math.abs(q.y - e.y); if (dd < bd) { bd = dd; b = q; } }
+      var tx = b ? b.x : cx, ty = b ? b.y : cy;
+      dx = tx - e.x; dy = ty - e.y; L = Math.sqrt(dx * dx + dy * dy) || 1;
+      e.vx += (dx / L * sp - e.vx) * Math.min(1, dt * 3); e.vy += (dy / L * sp - e.vy) * Math.min(1, dt * 3);
+      if (b && L < 14) { b.taken = true; e.loot = (e.loot || 0) + b.v; }
+    } else if (d.act === "line" || d.act === "cloud") {
+      e.life -= dt; if (e.life <= 0) e.gone = true;
+      if (d.act === "cloud") { dx = cx - e.x; dy = cy - e.y; L = Math.sqrt(dx * dx + dy * dy) || 1; e.vx += dx / L * 6 * dt; e.vy += dy / L * 6 * dt; }
+    } else if (d.act === "hawk") {
+      // circle at a distance, then stoop at the flock's edge
+      dx = cx - e.x; dy = cy - e.y; L = Math.sqrt(dx * dx + dy * dy) || 1;
+      if (e.st === "in" || e.st === "circle") {
+        var want = 300 + (d.boss ? 60 : 0);
+        e.ang += dt * 0.9;
+        var ox = cx + Math.cos(e.ang) * want, oy = cy + Math.sin(e.ang) * want * 0.75;
+        var ex = ox - e.x, ey = oy - e.y, EL = Math.sqrt(ex * ex + ey * ey) || 1;
+        e.vx += (ex / EL * sp - e.vx) * Math.min(1, dt * 2); e.vy += (ey / EL * sp - e.vy) * Math.min(1, dt * 2);
+        if (EL < 120) e.st = "circle";
+        if (e.st === "circle" && e.t > (d.boss ? 2.5 : 4) && run.rng() < dt * (d.boss ? 0.8 : 0.35)) { e.st = "stoop"; e.t = 0; e.sx = dx / L; e.sy = dy / L; }
+      } else if (e.st === "stoop") {
+        e.vx = e.sx * sp * 2.6; e.vy = e.sy * sp * 2.6;
+        if (e.t > 1.1) { e.st = "circle"; e.t = 0; e.snatched = false; }
+      }
+    } else if (d.act === "owl") {
+      dx = cx - e.x; dy = cy - e.y; L = Math.sqrt(dx * dx + dy * dy) || 1;
+      e.vx += (dx / L * sp - e.vx) * Math.min(1, dt * 1.5); e.vy += (dy / L * sp - e.vy) * Math.min(1, dt * 1.5);
+      e.hoot = (e.hoot || 3) - dt;
+      if (e.hoot <= 0 && L < 260) { e.hoot = d.boss ? 3.5 : 5; run.events.push({ e: "hoot", x: e.x, y: e.y }); scatter(run, e.x, e.y, d.boss ? 320 : 220); }
+    }
+    e.x += e.vx * dt; e.y += e.vy * dt;
+  }
+  function scatter(run, x, y, rad) {
+    run.birds.forEach(function (b) { var dx = b.x - x, dy = b.y - y, L = Math.sqrt(dx * dx + dy * dy) || 1; if (L < rad) { b.vx += dx / L * 520; b.vy += dy / L * 520; } });
+  }
+  function killEnemy(run, e) {
+    if (e.dead) return;
+    e.dead = true; run.kills++;
+    var v = Math.max(1, Math.round(e.d.xp * run.s.forage + (e.loot || 0)));
+    // berries scatter where it fell
+    var n = Math.min(e.d.boss ? 12 : 3, v), per = v / n;
+    for (var i = 0; i < n; i++) {
+      // too many berries on the ground: the new ones add to old ones instead
+      if (run.berries.length >= 450) { run.berries[Math.floor(run.rng() * run.berries.length)].v += per; continue; }
+      run.berries.push({ x: e.x + (run.rng() - 0.5) * e.d.r * 2, y: e.y + (run.rng() - 0.5) * e.d.r * 2, v: per, t: 0 });
+    }
+    if (e.d.boss) run.feathers += e.d.feathers;
+    run.events.push({ e: "kill", id: e.id, x: e.x, y: e.y, boss: !!e.d.boss });
+    if (e.d.boss) run.bossDown = true;
+  }
+
+  // --- formation slots ---
+  function slotOf(run, i, n, out) {
+    var L = run.lead, t = run.t;
+    if (run.dive) {
+      var dv = run.dive, rr = 10 * Math.sqrt((i + 0.5) / n) * Math.sqrt(n) * 0.6, a = i * GOLD;
+      out.x = dv.x + Math.cos(a) * rr; out.y = dv.y + Math.sin(a) * rr; return;
+    }
+    if (run.form === "BALL") {
+      var R = 6 * Math.sqrt(n) * (run.evos.BLACKSUN ? 1.2 : 1), r = R * Math.sqrt((i + 0.5) / n), ang = i * GOLD + t * 0.7;
+      out.x = L.x + Math.cos(ang) * r; out.y = L.y + Math.sin(ang) * r;
+    } else if (run.form === "WHEEL") {
+      var band = i % 3, Rw = wheelR(run) + band * 13, a2 = (i / n) * 6.283 * (band === 1 ? -1 : 1) + t * run.s.wheelSpin * (band === 1 ? -1 : 1);
+      out.x = L.x + Math.cos(a2) * Rw; out.y = L.y + Math.sin(a2) * Rw;
+    } else {
+      // RIBBON: the birds stream back along the lead's path
+      var len = Math.min(1700, (220 + 11 * Math.pow(n, 0.85)) * run.s.ribbonLen), d = len * (i + 0.5) / n, p = trailAt(run, d);
+      var w = (hash(i) - 0.5) * (26 + n * 0.06);
+      out.x = p.x - p.ny * w; out.y = p.y + p.nx * w;
+    }
+  }
+  function trailAt(run, d) {
+    var tr = run.trail, acc = 0, prev = { x: run.lead.x, y: run.lead.y };
+    for (var k = tr.length - 1; k >= 0; k--) {
+      var q = tr[k], dx = q.x - prev.x, dy = q.y - prev.y, L = Math.sqrt(dx * dx + dy * dy);
+      if (acc + L >= d && L > 0) { var f = (d - acc) / L; return { x: prev.x + dx * f, y: prev.y + dy * f, nx: -dx / L, ny: -dy / L }; }
+      acc += L; prev = q;
+    }
+    // the trail is shorter than the ribbon: bunch up at its end
+    var last = tr[0] || prev;
+    return { x: last.x - (d - acc) * 0.15, y: last.y, nx: 1, ny: 0 };
+  }
+
+  // --- one step ---
+  var tmp = { x: 0, y: 0 };
+  function step(run, dt) {
+    if (run.over || run.choices) return;
+    var s = run.s, r = run.rng, L = run.lead, i, k, e, b;
+    run.t += dt;
+    // the lead flies to the cursor
+    var dx = run.target.x - L.x, dy = run.target.y - L.y, D = Math.sqrt(dx * dx + dy * dy);
+    var want = Math.min(s.speed, D * 4);
+    var tvx = D > 1 ? dx / D * want : 0, tvy = D > 1 ? dy / D * want : 0;
+    L.vx += (tvx - L.vx) * Math.min(1, dt * 6); L.vy += (tvy - L.vy) * Math.min(1, dt * 6);
+    L.x += L.vx * dt; L.y += L.vy * dt;
+    var last = run.trail[run.trail.length - 1];
+    if (Math.abs(last.x - L.x) + Math.abs(last.y - L.y) > 8) { run.trail.push({ x: L.x, y: L.y }); if (run.trail.length > 400) run.trail.shift(); }
+    // dive
+    if (run.dive) { run.dive.t += dt; if (run.dive.t >= run.dive.len) run.dive = null; }
+    if (run.diveCd > 0) run.diveCd -= dt;
+    if (run.stun > 0) run.stun -= dt;
+    // birds fly to their slots, with a shimmer
+    var n = run.birds.length, cx = 0, cy = 0, pull = run.dive ? 14 : 9, maxv = s.speed * (run.dive ? 3.2 : 1.9);
+    for (i = 0; i < n; i++) {
+      b = run.birds[i];
+      slotOf(run, i, n, tmp);
+      var sh = Math.sin(run.t * 2.3 + b.ph) * 6, sh2 = Math.cos(run.t * 1.7 + b.ph * 1.3) * 6;
+      b.vx += ((tmp.x + sh - b.x) * pull - b.vx * 2.2) * dt * 2;
+      b.vy += ((tmp.y + sh2 - b.y) * pull - b.vy * 2.2) * dt * 2;
+      var v = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+      if (v > maxv) { b.vx *= maxv / v; b.vy *= maxv / v; }
+      b.x += b.vx * dt; b.y += b.vy * dt;
+      if (b.cd > 0) b.cd -= dt;
+      cx += b.x; cy += b.y;
+    }
+    if (n) { cx /= n; cy /= n; } else { cx = L.x; cy = L.y; }
+    run.cx = cx; run.cy = cy;
+    // spawning
+    spawnWaves(run, dt);
+    // strays wait on wires and fences
+    run.strayT -= dt * s.call;
+    if (run.strayT <= 0) {
+      run.strayT = 2.2;
+      var a = r() * 6.283, dist = 260 + r() * 380, cnt = 1 + Math.floor(r() * 4);
+      run.strays.push({ x: L.x + Math.cos(a) * dist, y: L.y + Math.sin(a) * dist * 0.7, n: cnt, t: 0 });
+    }
+    var recruitR = (55 + flockRadius(run) * 0.5) * Math.sqrt(s.call);
+    run.strays = run.strays.filter(function (st) {
+      st.t += dt;
+      if (Math.hypot(st.x - L.x, st.y - L.y) < recruitR + 40 || Math.hypot(st.x - cx, st.y - cy) < recruitR) {
+        for (var q = 0; q < st.n; q++) addBird(run, st.x + q * 4, st.y);
+        run.events.push({ e: "join", x: st.x, y: st.y, n: st.n });
+        return false;
+      }
+      return st.t < 30 && Math.hypot(st.x - L.x, st.y - L.y) < 1400;
+    });
+    // song and screech
+    if (s.song) { run.songT -= dt; if (run.songT <= 0) { run.songT = 8; for (k = 0; k < s.song * 2; k++) addBird(run, L.x + (r() - 0.5) * 40, L.y + (r() - 0.5) * 40); run.events.push({ e: "song", n: s.song * 2 }); } }
+    if (s.mocker) { run.mockT -= dt; if (run.mockT <= 0) { run.mockT = Math.max(3, 9 - s.mocker); var rad = 200 + 40 * s.mocker; run.enemies.forEach(function (q) { if (!q.d.boss && Math.hypot(q.x - cx, q.y - cy) < rad) q.stun = 1 + 0.25 * s.mocker; }); run.events.push({ e: "screech", x: cx, y: cy, r: rad }); } }
+    // enemies move; a grid for the pecking
+    var grid = {};
+    for (k = 0; k < run.enemies.length; k++) {
+      e = run.enemies[k];
+      moveEnemy(run, e, dt, cx, cy);
+      if (e.biteT > 0) e.biteT -= dt;
+      if (e.flash > 0) e.flash -= dt;
+      if (e.d.act === "cloud") continue;
+      var gx = Math.floor(e.x / CELL), gy = Math.floor(e.y / CELL);
+      for (var ox = -1; ox <= 1; ox++) for (var oy = -1; oy <= 1; oy++) { var key = (gx + ox) + "," + (gy + oy); (grid[key] = grid[key] || []).push(e); }
+    }
+    // pecks: every bird touching an enemy pecks it
+    var mult = run.dive ? s.dive : run.form === "BALL" ? s.ball : run.form === "RIBBON" ? s.ribbon : s.wheel;
+    var peckCd = s.peck * (run.form === "RIBBON" && run.evos.SKYRIVER ? 0.5 : 1);
+    var touching = {};
+    for (i = 0; i < run.birds.length; i++) {
+      b = run.birds[i];
+      var cell = grid[Math.floor(b.x / CELL) + "," + Math.floor(b.y / CELL)];
+      if (!cell) continue;
+      for (k = 0; k < cell.length; k++) {
+        e = cell[k];
+        if (e.dead) continue;
+        var ex = b.x - e.x, ey = b.y - e.y, rr = e.d.r + 4;
+        if (ex * ex + ey * ey > rr * rr) continue;
+        (touching[e.uid] = touching[e.uid] || []).push(i);
+        if (b.cd <= 0) {
+          e.hp -= s.beak * mult; e.flash = 0.08; b.cd = peckCd;
+          var el = Math.sqrt(ex * ex + ey * ey) || 1; b.vx += ex / el * 160; b.vy += ey / el * 160;
+          // a pecked bird flinches: knocked back, and its next bite comes later (not bosses)
+          if (!e.d.boss) { var kb = 9 * 11 / e.d.r; e.x -= ex / el * kb; e.y -= ey / el * kb; if (e.biteT < 0.3) e.biteT = 0.3; }
+        }
+        break;
+      }
+    }
+    // black sun: the ball burns what it touches
+    if (run.form === "BALL" && run.evos.BLACKSUN && !run.dive) {
+      var Rb = 6 * Math.sqrt(run.birds.length) * 1.2 + 10;
+      run.enemies.forEach(function (q) { if (q.d.act !== "cloud" && Math.hypot(q.x - L.x, q.y - L.y) < Rb + q.d.r) { q.hp -= s.beak * 6 * dt * Math.sqrt(run.birds.length) / 4; q.flash = 0.05; } });
+    }
+    // storm wheel: feather darts
+    if (run.form === "WHEEL" && run.evos.STORMWHEEL && !run.dive) {
+      run.dartT = (run.dartT || 0) - dt;
+      if (run.dartT <= 0) {
+        run.dartT = 0.25;
+        var tg = nearestEnemy(run, L.x, L.y, wheelR(run) + 260);
+        if (tg) { var src = run.birds[Math.floor(r() * run.birds.length)]; if (src) { var ddx = tg.x - src.x, ddy = tg.y - src.y, dl = Math.sqrt(ddx * ddx + ddy * ddy) || 1; run.darts.push({ x: src.x, y: src.y, vx: ddx / dl * 620, vy: ddy / dl * 620, t: 0 }); } }
+      }
+    }
+    run.darts = run.darts.filter(function (d) {
+      d.t += dt; d.x += d.vx * dt; d.y += d.vy * dt;
+      for (var q = 0; q < run.enemies.length; q++) { var en = run.enemies[q]; if (!en.dead && en.d.act !== "cloud" && Math.abs(en.x - d.x) < en.d.r + 4 && Math.abs(en.y - d.y) < en.d.r + 4) { en.hp -= s.beak * 4; en.flash = 0.08; return false; } }
+      return d.t < 1;
+    });
+    // swallows
+    run.swallowsL.forEach(function (sw) {
+      if (!sw.tgt || sw.tgt.dead || sw.tgt.gone) sw.tgt = nearestEnemy(run, sw.x, sw.y, 420);
+      var tx = sw.tgt ? sw.tgt.x : L.x + Math.cos(run.t * 3 + sw.cd) * 60, ty = sw.tgt ? sw.tgt.y : L.y + Math.sin(run.t * 3) * 60;
+      var ddx = tx - sw.x, ddy = ty - sw.y, dl = Math.sqrt(ddx * ddx + ddy * ddy) || 1;
+      sw.vx += (ddx / dl * 520 - sw.vx) * Math.min(1, dt * 5); sw.vy += (ddy / dl * 520 - sw.vy) * Math.min(1, dt * 5);
+      sw.x += sw.vx * dt; sw.y += sw.vy * dt;
+      if (sw.cd > 0) sw.cd -= dt;
+      if (sw.tgt && dl < sw.tgt.d.r + 6 && sw.cd <= 0) { sw.tgt.hp -= s.beak * 3; sw.tgt.flash = 0.08; sw.cd = 0.35; sw.vx = -sw.vx * 0.6; sw.vy = -sw.vy * 0.6; }
+    });
+    // bites and snatches
+    var lost = 0;
+    for (k = 0; k < run.enemies.length; k++) {
+      e = run.enemies[k];
+      if (e.dead || e.gone) continue;
+      var d = e.d, list = touching[e.uid];
+      if (d.act === "cloud") {
+        // lightning strikes birds inside the cloud now and then
+        if (e.biteT <= 0) { e.biteT = d.biteCd; var hit = []; for (i = 0; i < run.birds.length; i++) { b = run.birds[i]; if (Math.abs(b.x - e.x) < d.r && Math.abs(b.y - e.y) < d.r * 0.6) hit.push(i); } if (hit.length) { lost += kill(run, hit, 1 + Math.floor(hit.length / 25)); run.events.push({ e: "zap", x: e.x, y: e.y }); } }
+        continue;
+      }
+      if (e.hp <= 0) { killEnemy(run, e); continue; }
+      if (run.stun > 0 || e.stun > 0) continue;
+      if (d.act === "hawk" && e.st === "stoop" && !e.snatched) {
+        var near = []; for (i = 0; i < run.birds.length; i++) { b = run.birds[i]; if (Math.abs(b.x - e.x) < d.r + 30 && Math.abs(b.y - e.y) < d.r + 30) near.push(i); }
+        if (near.length) { var sn = d.snatch * (run.form === "BALL" ? Math.max(0.15, 0.4 - 0.05 * lv(run, "BALL")) : 1); lost += kill(run, near, Math.max(1, Math.round(sn))); e.snatched = true; run.events.push({ e: "snatch", x: e.x, y: e.y, boss: !!d.boss }); }
+        continue;
+      }
+      if (list && e.biteT <= 0) { e.biteT = d.biteCd; lost += kill(run, list, d.bite); }
+    }
+    run.enemies = run.enemies.filter(function (q) { return !q.dead && !q.gone && Math.abs(q.x - L.x) < 2600 && Math.abs(q.y - L.y) < 2200; });
+    // berries
+    var mag = s.magnet + flockRadius(run) * 0.6;
+    run.berries = run.berries.filter(function (q) {
+      if (q.taken) return false;
+      q.t += dt;
+      var bx = L.x - q.x, by = L.y - q.y, bl = Math.sqrt(bx * bx + by * by);
+      var near2 = bl < mag || Math.hypot(cx - q.x, cy - q.y) < mag;
+      if (near2) { q.x += bx / (bl || 1) * Math.min(bl, 520 * dt); q.y += by / (bl || 1) * Math.min(bl, 520 * dt); }
+      if (bl < 22) { run.xp += q.v; return false; }
+      return q.t < 60;
+    });
+    while (run.xp >= run.xpNext && !run.choices) levelUp(run);
+    run.peak = Math.max(run.peak, run.birds.length);
+    // the boss, the end
+    if (!run.reg.endless && !run.bossSpawned && run.t >= run.reg.bossAt) { run.bossSpawned = true; spawnEnemy(run, run.reg.boss); }
+    if (run.reg.endless) { run.bossT = (run.bossT || 180) - dt; if (run.bossT <= 0) { run.bossT = 180; var bosses = ["GOSHAWK", "BLACKBACK", "PEREGRINE", "EAGLEOWL"]; spawnEnemy(run, bosses[Math.floor(run.t / 180 - 1) % 4]); } }
+    if (!run.birds.length) end(run, false);
+    else if (!run.reg.endless && run.t >= run.reg.len && run.bossDown) end(run, true);
+    else if (!run.reg.endless && run.t >= run.reg.len + 120) end(run, false);  // the boss outlasted the dusk
+  }
+  function kill(run, idxs, count) {
+    // the bitten birds are the ones touching: some dodge
+    var s = run.s, killed = 0, set = {};
+    for (var q = 0; q < count && q < idxs.length; q++) {
+      if (run.rng() < s.dodge) continue;
+      set[idxs[q]] = 1; killed++;
+    }
+    if (killed) {
+      run.birds = run.birds.filter(function (b, i) { if (set[i]) { run.events.push({ e: "lost", x: b.x, y: b.y }); return false; } return true; });
+    }
+    return killed;
+  }
+  function nearestEnemy(run, x, y, rad) { var best = null, bd = rad * rad; run.enemies.forEach(function (q) { if (q.dead || q.d.act === "cloud") return; var d = (q.x - x) * (q.x - x) + (q.y - y) * (q.y - y); if (d < bd) { bd = d; best = q; } }); return best; }
+  // a harder region eases in: its full toughness arrives after four minutes
+  function ramp(run, x) { x = x || 1; return 1 + (x - 1) * Math.min(1, run.t / 240); }
+  function spawnWaves(run, dt) {
+    var w = run.reg.waves, t = run.t, cap = 240;
+    if (run.enemies.length >= cap) return;
+    for (var k = 0; k < w.length; k++) {
+      var wv = w[k];
+      if (t < wv[0] || t > wv[1]) continue;
+      var rate = run.reg.endless ? wv[3] * (1 + (t - wv[0]) / 120) : (wv[3] + (wv[4] - wv[3]) * (t - wv[0]) / (wv[1] - wv[0])) * ramp(run, run.reg.ratex);
+      var key = wv[2] + k;
+      run.spawnAcc[key] = (run.spawnAcc[key] || 0) + rate * dt;
+      while (run.spawnAcc[key] >= 1) {
+        run.spawnAcc[key] -= 1;
+        var id = wv[2], d = C.ENEMY[id];
+        if (d.act === "swarm") { var a = run.rng() * 6.283, dist = 800, x0 = run.lead.x + Math.cos(a) * dist, y0 = run.lead.y + Math.sin(a) * dist * 0.8; for (var q = 0; q < 4; q++) spawnEnemy(run, id, x0 + (run.rng() - 0.5) * 60, y0 + (run.rng() - 0.5) * 60); }
+        else spawnEnemy(run, id);
+      }
+    }
+  }
+  function end(run, won) {
+    if (run.over) return;
+    run.over = true; run.won = won;
+    var g = run.g, rid = run.reg.id;
+    // feathers kept: time aloft, the crowd you beat, bosses, and a clear
+    var minutes = run.t / 60, fe = Math.round(minutes * 6 + run.kills / 40 + run.feathers + (won ? 30 + 15 * (typeof run.ri === "number" ? run.ri : 0) : 0));
+    if (run.reg.endless) fe = Math.round(minutes * 8 + run.kills / 40 + run.feathers * 0.5);
+    g.feathers += fe; g.total += fe; g.runs++;
+    g.best[rid] = Math.max(g.best[rid] || 0, Math.round(run.t));
+    var opened = false, finished = false;
+    if (won && typeof run.ri === "number") {
+      if (!g.cleared[rid]) { g.cleared[rid] = 1; if (run.ri + 1 < C.REGIONS.length && g.open < run.ri + 2) { g.open = run.ri + 2; opened = true; } if (run.ri === C.REGIONS.length - 1) finished = true; }
+      else g.cleared[rid]++;
+    }
+    run.summary = { won: won, time: run.t, kills: run.kills, peak: run.peak, level: run.level, feathers: fe, opened: opened, finished: finished, endless: !!run.reg.endless };
+    run.events.push({ e: "end", won: won });
+  }
+
+  function save(g) { return JSON.stringify(g); }
+  function load(str) { var g = JSON.parse(str); if (!g || g.v !== 1 || typeof g.roost !== "object") throw new Error("not a THOUSANDWING save"); return g; }
+
+  var api = { MAXB: MAXB, rng: rng, newGame: newGame, rl: rl, roostCost: roostCost, canBuy: canBuy, buy: buy, stats: stats, lv: lv,
+    startRun: startRun, setTarget: setTarget, setForm: setForm, dive: dive, offer: offer, choose: choose, reroll: reroll, step: step, end: end,
+    spawnEnemy: spawnEnemy, addBird: addBird, flockRadius: flockRadius, wheelR: wheelR, killEnemy: killEnemy, save: save, load: load, endlessRegion: endlessRegion };
+  if (node) module.exports = api;
+  else root.FLOCK = api;
+})(this);
+
+</script>
+<script>
+// bot.js — flies the flock like a careful player: gathers strays and berries, eats what it can,
+// balls up when a hawk is near, dives into crowds. Used to tune the regions and to prove each can be cleared.
+//   node bot.js [runs] [seed]  -> one line per run
+(function (root) {
+"use strict";
+var node = typeof module !== "undefined" && module.exports;
+var F = node ? require("./flock.js") : root.FLOCK, C = node ? require("./content.js") : root.CONTENT;
+
+var PREF = ["BLACKSUN", "STORMWHEEL", "SKYRIVER", "BEAKS", "BALL", "SWALLOWS", "SONG", "WHEEL", "NOSE", "CALL", "HARDY", "DIVE", "WINGS", "MOCKER", "RIBBON", "FLOCK"];
+function pick(run) {
+  var c = run.choices.slice().sort(function (a, b) { return PREF.indexOf(a) - PREF.indexOf(b); });
+  return c[0];
+}
+// decide where to fly, which shape to hold, when to dive
+function think(run) {
+  var L = run.lead, n = run.birds.length, best = null, bs = -1;
+  var power = n * F.stats(run).beak;
+  var danger = run.enemies.some(function (e) { return !e.dead && (e.d.act === "hawk" || e.d.act === "owl" || e.d.boss) && Math.hypot(e.x - L.x, e.y - L.y) < 520; });
+  run.strays.forEach(function (s) { var d = Math.hypot(s.x - L.x, s.y - L.y) + 60; var v = s.n * 10 / d; if (v > bs) { bs = v; best = { x: s.x, y: s.y }; } });
+  run.berries.forEach(function (b) { var d = Math.hypot(b.x - L.x, b.y - L.y) + 60; var v = b.v * 4 / d; if (v > bs) { bs = v; best = { x: b.x, y: b.y }; } });
+  run.enemies.forEach(function (e) {
+    if (e.dead || e.d.act === "cloud") return;
+    var d = Math.hypot(e.x - L.x, e.y - L.y) + 60;
+    var ok = e.hp < power * 3 || e.d.boss && n > 60;
+    var v = ok ? (e.d.xp + 1) * 6 / d : -1;
+    if (v > bs) { bs = v; best = { x: e.x, y: e.y }; }
+  });
+  // stay out of storm clouds
+  run.enemies.forEach(function (e) { if (e.d.act === "cloud" && best && Math.hypot(e.x - best.x, e.y - best.y) < e.d.r) { best.x += (best.x - e.x) * 1.2; best.y += (best.y - e.y) * 1.2; } });
+  if (!best) best = { x: L.x + Math.cos(run.t * 0.4) * 300, y: L.y + Math.sin(run.t * 0.4) * 300 };
+  F.setTarget(run, best.x, best.y);
+  var crowd = run.enemies.filter(function (e) { return !e.dead && e.d.act !== "cloud" && Math.hypot(e.x - L.x, e.y - L.y) < 260; }).length;
+  F.setForm(run, danger ? "BALL" : crowd > 6 ? "WHEEL" : "RIBBON");
+  if (run.diveCd <= 0 && crowd > 8) {
+    var cx = 0, cy = 0, k = 0;
+    run.enemies.forEach(function (e) { if (!e.dead && e.d.act !== "cloud" && Math.hypot(e.x - L.x, e.y - L.y) < 400) { cx += e.x; cy += e.y; k++; } });
+    if (k) F.dive(run, cx / k, cy / k);
+  }
+}
+function playRun(g, ri, seed) {
+  var run = F.startRun(g, ri, seed), dt = 1 / 30, th = 0;
+  while (!run.over) {
+    if (run.choices) { F.choose(run, pick(run)); continue; }
+    th -= dt; if (th <= 0) { think(run); th = 0.2; }
+    F.step(run, dt);
+    run.events.length = 0;
+  }
+  return run;
+}
+var RPREF = ["START", "BEAK", "TOUGH", "FORAGE", "LURE", "WING", "DIVEFAST", "REROLL"];
+function shop(g) {
+  for (var guard = 0; guard < 80; guard++) {
+    var opts = RPREF.filter(function (id) { return F.canBuy(g, id); });
+    if (!opts.length) return;
+    opts.sort(function (a, b) { return F.roostCost(g, a) - F.roostCost(g, b); });
+    F.buy(g, opts[0]);
+  }
+}
+// play run after run, always the newest open region, until all are cleared
+function campaign(maxRuns, seed) {
+  var g = F.newGame({ seed: seed || 3 }), log = [];
+  for (var n = 0; n < (maxRuns || 60); n++) {
+    var ri = Math.min(g.open, C.REGIONS.length) - 1;
+    var run = playRun(g, ri);
+    log.push({ run: n + 1, region: run.reg.id, won: run.won, t: Math.round(run.t), peak: run.peak, end: run.birds.length, level: run.level, kills: run.kills, feathers: run.summary.feathers });
+    if (Object.keys(g.cleared).length >= C.REGIONS.length) break;
+    shop(g);
+  }
+  return { g: g, log: log };
+}
+var api = { think: think, pick: pick, playRun: playRun, shop: shop, campaign: campaign };
+if (node) module.exports = api; else root.BOT = api;
+if (node && require.main === module) {
+  var r = campaign(+(process.argv[2] || 60), +(process.argv[3] || 3));
+  r.log.forEach(function (l) { console.log(JSON.stringify(l)); });
+  console.log("cleared", Object.keys(r.g.cleared).length, "of", C.REGIONS.length, "in", r.log.length, "runs; roost", JSON.stringify(r.g.roost));
+}
+})(this);
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var C = window.CONTENT, F = window.FLOCK, BOT = window.BOT;
+  var ED = window.THOUSANDWING_EDITION || "full", DEMO = ED === "demo";
+  var PROFILE_URL = "https://kqmigqkqri.itch.io/";
+  var STORE_URL = "https://kqmigqkqri.itch.io/thousandwing";
+  var W = 1280, H = 800;
+  var SANS = "'Segoe UI', system-ui, -apple-system, sans-serif", SERIF = "Georgia, 'Times New Roman', serif";
+  var COL = { text: "#f4efe6", dim: "#b9adc4", gold: "#ffc86b", good: "#9fe3a8", bad: "#ff8a7a", panel: "rgba(20,14,30,0.94)", line: "#5a4470", ink: "#140c16" };
+  var cv = document.getElementById("c"), cx = cv.getContext("2d"), scale = 1, dpr = 1;
+
+  // ---------------- saving ----------------
+  var KEY = DEMO ? "thousandwing.demo.v1" : "thousandwing.v1", SKEY = KEY + ".settings";
+  var settings = { sound: true, music: true, seenHelp: false };
+  try { var ss = localStorage.getItem(SKEY); if (ss) { var so = JSON.parse(ss); for (var k0 in so) settings[k0] = so[k0]; } } catch (e) {}
+  function saveSettings() { try { localStorage.setItem(SKEY, JSON.stringify(settings)); } catch (e) {} }
+  var g = null;
+  try { var raw = localStorage.getItem(KEY); if (raw) g = F.load(raw); } catch (e) { g = null; }
+  if (!g) g = F.newGame({ demo: DEMO, seed: (Date.now() % 100000) + 1 });
+  function persist() { try { localStorage.setItem(KEY, F.save(g)); } catch (e) {} }
+
+  // ---------------- sound ----------------
+  var ac = null, master = null, wind = null;
+  function audio() {
+    try {
+      if (!ac) {
+        ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = 0.8; master.connect(ac.destination);
+        // the rush of a thousand wings: filtered noise, louder as the flock grows
+        var len = ac.sampleRate * 2, buf = ac.createBuffer(1, len, ac.sampleRate), d = buf.getChannelData(0);
+        for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+        var src = ac.createBufferSource(); src.buffer = buf; src.loop = true;
+        var bp = ac.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 900; bp.Q.value = 0.6;
+        wind = ac.createGain(); wind.gain.value = 0;
+        src.connect(bp); bp.connect(wind); wind.connect(master); src.start();
+        wind.bp = bp;
+      }
+      if (ac.state === "suspended") ac.resume();
+      return ac;
+    } catch (e) { return null; }
+  }
+  function tone(f, d, type, vol, delay, slide) {
+    if (!settings.sound) return; var a = audio(); if (!a) return;
+    var t0 = a.currentTime + (delay || 0), o = a.createOscillator(), gn = a.createGain();
+    o.type = type || "sine"; o.frequency.setValueAtTime(f, t0); if (slide) o.frequency.exponentialRampToValueAtTime(slide, t0 + d);
+    gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol || 0.04, t0 + 0.005); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+    o.connect(gn); gn.connect(master); o.start(t0); o.stop(t0 + d + 0.03);
+  }
+  var popT = 0, lostT = 0;
+  function sfx(k) {
+    if (k === "kill") { if (popT > 0) return; popT = 0.05; tone(500 + Math.random() * 500, 0.06, "triangle", 0.025, 0, 260); }
+    else if (k === "lost") { if (lostT > 0) return; lostT = 0.12; tone(1800, 0.05, "sine", 0.012, 0, 1200); }
+    else if (k === "join") { tone(2200, 0.05, "sine", 0.02); tone(2600, 0.06, "sine", 0.018, 0.05); }
+    else if (k === "level") [523, 659, 784, 1046].forEach(function (f, i) { tone(f, 0.25, "triangle", 0.04, i * 0.06); });
+    else if (k === "dive") tone(900, 0.35, "sawtooth", 0.025, 0, 180);
+    else if (k === "boss") { tone(110, 0.9, "sawtooth", 0.04, 0, 70); tone(165, 0.9, "sawtooth", 0.03, 0.1, 100); }
+    else if (k === "snatch") tone(260, 0.3, "square", 0.03, 0, 90);
+    else if (k === "hoot") { tone(300, 0.35, "sine", 0.05, 0, 260); tone(300, 0.4, "sine", 0.05, 0.4, 250); }
+    else if (k === "zap") tone(2400, 0.15, "square", 0.025, 0, 300);
+    else if (k === "screech") tone(2600, 0.2, "sawtooth", 0.02, 0, 1800);
+    else if (k === "ui") tone(1200, 0.04, "sine", 0.03);
+    else if (k === "bad") tone(140, 0.12, "square", 0.03);
+    else if (k === "buy") { tone(660, 0.08, "triangle", 0.05); tone(990, 0.16, "triangle", 0.05, 0.06); }
+    else if (k === "win") [392, 523, 659, 784, 1046].forEach(function (f, i) { tone(f, 0.7, "triangle", 0.045, i * 0.12); });
+    else if (k === "lose") [392, 330, 262].forEach(function (f, i) { tone(f, 0.6, "triangle", 0.04, i * 0.2); });
+  }
+  var music = { next: 0, i: 0 };
+  function ambient() {
+    if (!ac || ac.state !== "running") return;
+    if (wind) {
+      var n = screen === "run" && run ? run.birds.length : screen === "title" && demoRun ? demoRun.birds.length * 0.5 : 0;
+      var wv = settings.sound ? Math.min(0.11, 0.012 + n / 7000) : 0;
+      wind.gain.setTargetAtTime(paused ? 0 : wv, ac.currentTime, 0.3);
+    }
+    if (!settings.music) return;
+    if (music.next < ac.currentTime) music.next = ac.currentTime + 0.05;
+    while (music.next < ac.currentTime + 0.3) {
+      var bar = Math.floor(music.i / 8) % 4, root = [0, -4, -7, -2][bar];
+      var step = music.i % 8;
+      if (step === 0) pad(110 * Math.pow(2, root / 12), music.next, 4.4);
+      var mel = [12, 15, 19, 17, 15, 12, 10, 7][(music.i * 3 + bar) % 8] + root;
+      if (step % 2 === 1 && (music.i % 16) !== 15) pluck(440 * Math.pow(2, mel / 12), music.next);
+      music.i++; music.next += 0.55;
+    }
+  }
+  function pad(f, t0, d) {
+    [1, 1.5, 2].forEach(function (m, i) {
+      var o = ac.createOscillator(), gn = ac.createGain(); o.type = "sine"; o.frequency.value = f * m;
+      gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(0.012 / (i + 1), t0 + 1.2); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+      o.connect(gn); gn.connect(master); o.start(t0); o.stop(t0 + d + 0.1);
+    });
+  }
+  function pluck(f, t0) {
+    var o = ac.createOscillator(), gn = ac.createGain(); o.type = "triangle"; o.frequency.value = f;
+    gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(0.012, t0 + 0.01); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.9);
+    o.connect(gn); gn.connect(master); o.start(t0); o.stop(t0 + 1);
+  }
+
+  // ---------------- drawing helpers ----------------
+  function rr(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
+  function text(s, x, y, size, col, align, weight, font) { cx.font = (weight || 600) + " " + size + "px " + (font || SANS); cx.fillStyle = col || COL.text; cx.textAlign = align || "left"; cx.textBaseline = "middle"; cx.fillText(s, x, y); }
+  function tw(s, size, weight, font) { cx.font = (weight || 600) + " " + size + "px " + (font || SANS); return cx.measureText(s).width; }
+  function wrap(s, x, y, maxW, size, col, lh, weight, align) {
+    var lines = [];
+    String(s).split("\n").forEach(function (p) { var ws = p.split(" "), line = ""; ws.forEach(function (w) { var t = line ? line + " " + w : w; if (tw(t, size, weight) > maxW && line) { lines.push(line); line = w; } else line = t; }); lines.push(line); });
+    lines.forEach(function (l, i) { text(l, x, y + i * lh, size, col, align, weight); });
+    return y + lines.length * lh;
+  }
+  var buttons = [], mouse = { x: W / 2, y: H / 2, down: false };
+  function hot(x, y, w, h) { return mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h; }
+  function button(x, y, w, h, label, fn, o) {
+    o = o || {};
+    var on = hot(x, y, w, h) && !o.disabled;
+    rr(x, y, w, h, Math.min(h / 2, 14));
+    cx.fillStyle = o.disabled ? "rgba(40,30,50,0.85)" : o.primary ? (on ? "#ffd894" : COL.gold) : o.active ? "rgba(120,80,140,0.95)" : on ? "rgba(80,56,100,0.95)" : "rgba(46,32,60,0.92)"; cx.fill();
+    cx.strokeStyle = o.primary ? "#ffe9c2" : o.active ? "#e8c8ff" : "rgba(200,170,220,0.45)"; cx.lineWidth = 1.2; cx.stroke();
+    text(label, x + w / 2, y + h / 2 + 1, o.size || 14, o.disabled ? "#7a6a88" : o.primary ? "#2a1606" : COL.text, "center", 700);
+    if (!o.disabled && fn) buttons.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+  function glow(x, y, r, col, a) { var gr = cx.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, col.replace("A", a)); gr.addColorStop(1, col.replace("A", 0)); cx.fillStyle = gr; cx.beginPath(); cx.arc(x, y, r, 0, 7); cx.fill(); }
+  function lerpCol(a, b, t) {
+    var pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+    var r1 = pa >> 16, g1 = (pa >> 8) & 255, b1 = pa & 255, r2 = pb >> 16, g2 = (pb >> 8) & 255, b2 = pb & 255;
+    return "rgb(" + Math.round(r1 + (r2 - r1) * t) + "," + Math.round(g1 + (g2 - g1) * t) + "," + Math.round(b1 + (b2 - b1) * t) + ")";
+  }
+  var t0 = performance.now();
+  function now() { return (performance.now() - t0) / 1000; }
+  var stars = []; for (var si = 0; si < 160; si++) stars.push({ x: Math.random() * W, y: Math.random() * 520, r: Math.random() * 1.3 + 0.3, p: Math.random() * 6 });
+
+  // ---------------- the sky and the land below ----------------
+  // night: 0 at the start of a run, 1 when it is fully dark
+  function drawSky(reg, night, camX) {
+    var sky = reg.sky, top = lerpCol(sky[0], "#04030a", night * 0.8), mid = lerpCol(sky[1], "#14102a", night * 0.85), low = lerpCol(sky[2], "#2a1c3a", night * 0.9);
+    var gr = cx.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, top); gr.addColorStop(0.55, mid); gr.addColorStop(1, low);
+    cx.fillStyle = gr; cx.fillRect(0, 0, W, H);
+    var t = now();
+    if (night > 0.25 || reg.id === "MARSH") stars.forEach(function (s) { var a = Math.min(1, (reg.id === "MARSH" ? 0.6 : 0) + (night - 0.25) * 1.5) * (0.4 + 0.3 * Math.sin(t * 1.3 + s.p)); if (a > 0) { cx.fillStyle = "rgba(240,235,255," + a + ")"; cx.fillRect(s.x, s.y, s.r, s.r); } });
+    // the sun going down (the moon on the marsh)
+    if (reg.id === "MARSH" || reg.endless) { var mx = 980, my = 160; glow(mx, my, 180, "rgba(200,210,255,A)", 0.16); cx.beginPath(); cx.arc(mx, my, 34, 0, 7); cx.fillStyle = reg.endless ? "#ff7a3a" : "#e8ecff"; cx.fill(); }
+    else {
+      var sy = 520 + night * 260, sx = 900 - (camX * 0.02 % 400);
+      glow(sx, sy, 380, "rgba(255,170,90,A)", 0.35 * (1 - night));
+      cx.beginPath(); cx.arc(sx, sy, 58, 0, 7); cx.fillStyle = lerpCol("#ffd27a", "#ff6a3a", night); cx.fill();
+    }
+  }
+  function drawLand(reg, camX, night) {
+    var g0 = reg.ground, dark = lerpCol("#1a1020", "#05040a", night), far = lerpCol("#3a2240", "#0a0814", night);
+    // far hills
+    cx.fillStyle = far; cx.beginPath(); cx.moveTo(0, H);
+    for (var x = 0; x <= W; x += 16) { var wx = x + camX * 0.15; cx.lineTo(x, 640 - Math.sin(wx * 0.004) * 30 - Math.sin(wx * 0.011) * 14); }
+    cx.lineTo(W, H); cx.closePath(); cx.fill();
+    cx.fillStyle = dark; cx.strokeStyle = dark;
+    var off = camX * 0.45;
+    if (g0 === "farm") {
+      cx.beginPath(); cx.moveTo(0, H); for (x = 0; x <= W; x += 20) cx.lineTo(x, 700 - Math.sin((x + off) * 0.006) * 12); cx.lineTo(W, H); cx.closePath(); cx.fill();
+      for (var k = -1; k < 6; k++) { var tx = k * 300 - (off % 300) + 120; cx.beginPath(); cx.arc(tx, 640, 46, 0, 7); cx.arc(tx + 30, 620, 38, 0, 7); cx.fill(); cx.fillRect(tx + 8, 640, 10, 70); }
+      // power line with poles
+      cx.lineWidth = 1.5; for (k = -1; k < 6; k++) { var px = k * 260 - (off * 1.1 % 260); cx.fillRect(px, 560, 6, 160); cx.beginPath(); cx.moveTo(px + 3, 568); cx.quadraticCurveTo(px + 133, 600, px + 263, 568); cx.stroke(); }
+    } else if (g0 === "pier") {
+      cx.fillStyle = lerpCol("#2a2c50", "#05060e", night); cx.fillRect(0, 690, W, 110);
+      cx.fillStyle = "rgba(255,210,150," + 0.15 * (1 - night) + ")"; for (k = 0; k < 8; k++) cx.fillRect(820 + Math.sin(now() + k) * 8, 700 + k * 12, 160 - k * 16, 2);
+      cx.fillStyle = dark; var pierX = 200 - off % 1600; cx.fillRect(pierX, 660, 1100, 14); for (k = 0; k < 12; k++) cx.fillRect(pierX + k * 92, 660, 8, 140);
+      cx.fillRect(pierX + 900, 600, 120, 60); cx.beginPath(); cx.moveTo(pierX + 890, 600); cx.lineTo(pierX + 960, 560); cx.lineTo(pierX + 1030, 600); cx.fill();
+    } else if (g0 === "city") {
+      for (k = -1; k < 14; k++) { var bx = k * 110 - (off % 110), bh = 120 + ((k * 7919 + Math.floor(off / 110) * 31) % 5 + 5) % 5 * 40; cx.fillRect(bx, H - bh, 100, bh); if (k % 3 === 0) cx.fillRect(bx + 40, H - bh - 40, 6, 40);
+        cx.fillStyle = "rgba(255,200,120," + (0.15 + 0.6 * night) + ")"; for (var wy = H - bh + 16; wy < H - 20; wy += 26) for (var wxx = bx + 12; wxx < bx + 90; wxx += 22) if (((wxx * 13 + wy * 7) % 5) < 2) cx.fillRect(wxx, wy, 8, 10); cx.fillStyle = dark; }
+    } else {
+      cx.fillStyle = lerpCol("#101830", "#04060c", night); cx.fillRect(0, 700, W, 100);
+      cx.fillStyle = "rgba(220,230,255,0.12)"; for (k = 0; k < 7; k++) cx.fillRect(960 + Math.sin(now() * 0.8 + k) * 6, 712 + k * 11, 60 - k * 6, 2);
+      cx.fillStyle = dark; for (k = -1; k < 40; k++) { var rx = k * 34 - (off % 34), rh = 60 + ((k * 37 + Math.floor(off / 34) * 11) % 7) * 12; cx.fillRect(rx, 720 - rh, 3, rh); cx.beginPath(); cx.ellipse(rx + 1.5, 716 - rh, 4, 12, 0, 0, 7); cx.fill(); }
+    }
+  }
+
+  // ---------------- the flock and everything in the air ----------------
+  var cam = { x: 0, y: 0 };
+  function sx(x) { return x - cam.x + W / 2; } function sy(y) { return y - cam.y + H / 2; }
+  function drawBirds(birds, t, col, evo) {
+    // a soft haze where the flock is thick: the dark cloud a murmuration makes
+    cx.fillStyle = "rgba(18,8,18,0.07)";
+    cx.beginPath();
+    for (var j = 0; j < birds.length; j += 2) { var hb = birds[j], hx = sx(hb.x), hy = sy(hb.y); if (hx < -20 || hx > W + 20 || hy < -20 || hy > H + 20) continue; cx.moveTo(hx + 9, hy); cx.arc(hx, hy, 9, 0, 6.283); }
+    cx.fill();
+    cx.fillStyle = col || "#120a12";
+    cx.beginPath();
+    for (var i = 0; i < birds.length; i++) {
+      var b = birds[i], x = sx(b.x), y = sy(b.y);
+      if (x < -20 || x > W + 20 || y < -20 || y > H + 20) continue;
+      var v = Math.sqrt(b.vx * b.vx + b.vy * b.vy) || 1, ux = b.vx / v, uy = b.vy / v, fl = Math.sin(t * 22 + b.ph) * 2.2, s = 3.2;
+      // a starling seen from below: body and two swept wings
+      cx.moveTo(x + ux * s * 1.4, y + uy * s * 1.4);
+      cx.lineTo(x - uy * (s * 1.6 + fl) - ux * s * 0.6, y + ux * (s * 1.6 + fl) - uy * s * 0.6);
+      cx.lineTo(x - ux * s * 0.9, y - uy * s * 0.9);
+      cx.lineTo(x + uy * (s * 1.6 + fl) - ux * s * 0.6, y - ux * (s * 1.6 + fl) - uy * s * 0.6);
+      cx.closePath();
+    }
+    cx.fill();
+    if (evo) { cx.strokeStyle = "rgba(255,120,60,0.35)"; cx.lineWidth = 1; cx.stroke(); }
+  }
+  function silhouette(e, t) {
+    var d = e.d, x = sx(e.x), y = sy(e.y), r = d.r;
+    if (x < -r * 3 || x > W + r * 3 || y < -r * 3 || y > H + r * 3) return;
+    if (d.act === "cloud") {
+      cx.save(); cx.globalAlpha = 0.85;
+      for (var k = 0; k < 7; k++) { cx.beginPath(); cx.arc(x + Math.cos(k * 1.3) * r * 0.6, y + Math.sin(k * 2.1) * r * 0.3, r * 0.45, 0, 7); cx.fillStyle = k % 2 ? "#2a2c44" : "#33364f"; cx.fill(); }
+      if (Math.sin(t * 7 + e.uid) > 0.93) { cx.strokeStyle = "#fff6c8"; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(x, y); cx.lineTo(x + 10, y + 30); cx.lineTo(x - 6, y + 46); cx.lineTo(x + 6, y + 80); cx.stroke(); }
+      cx.restore(); return;
+    }
+    var ang = Math.atan2(e.vy, e.vx), flap = Math.sin(t * (d.boss ? 6 : 12) + e.uid) * 0.5;
+    cx.save(); cx.translate(x, y); cx.rotate(ang);
+    var body = e.flash > 0 ? lerpCol(d.col, "#ff8a6a", 0.55) : d.col;
+    // rim light from the sunset
+    cx.shadowColor = "rgba(255,150,80,0.8)"; cx.shadowBlur = d.boss ? 18 : 8;
+    cx.fillStyle = body;
+    var span = r * (d.act === "hawk" ? 2.3 : d.act === "owl" ? 2.0 : 1.9), sw = 0.55 + flap * 0.35;
+    cx.beginPath();
+    // head and body
+    cx.ellipse(-r * 0.1, 0, r * 1.05, r * 0.38, 0, 0, 7);
+    // a fanned tail
+    cx.moveTo(-r * 0.9, 0); cx.lineTo(-r * 1.75, -r * 0.42); cx.lineTo(-r * 1.6, 0); cx.lineTo(-r * 1.75, r * 0.42); cx.closePath();
+    // two long wings, swept back
+    [-1, 1].forEach(function (sd) {
+      cx.moveTo(r * 0.35, sd * r * 0.2);
+      cx.quadraticCurveTo(r * 0.1, sd * span * sw, -r * 0.55, sd * span * (sw + 0.35));
+      cx.quadraticCurveTo(-r * 0.45, sd * span * 0.45, -r * 0.6, sd * r * 0.2);
+      cx.closePath();
+    });
+    cx.fill();
+    cx.shadowBlur = 0;
+    if (d.wings) { cx.fillStyle = d.wings; cx.beginPath(); cx.ellipse(-r * 0.4, -span * 0.45, r * 0.35, span * 0.25, 0.3, 0, 7); cx.fill(); cx.beginPath(); cx.ellipse(-r * 0.4, span * 0.45, r * 0.35, span * 0.25, -0.3, 0, 7); cx.fill(); }
+    if (d.patch) { cx.fillStyle = d.patch; cx.beginPath(); cx.ellipse(-r * 0.2, -r * 0.5, r * 0.3, r * 0.5, 0, 0, 7); cx.fill(); cx.beginPath(); cx.ellipse(-r * 0.2, r * 0.5, r * 0.3, r * 0.5, 0, 0, 7); cx.fill(); }
+    if (d.act === "owl") { cx.fillStyle = body; cx.beginPath(); cx.arc(r * 0.5, 0, r * 0.75, 0, 7); cx.fill(); cx.fillStyle = "#fff4dc"; cx.beginPath(); cx.arc(r * 0.6, -r * 0.3, r * 0.28, 0, 7); cx.arc(r * 0.6, r * 0.3, r * 0.28, 0, 7); cx.fill(); }
+    cx.fillStyle = d.eye; cx.beginPath(); cx.arc(r * 0.7, -r * 0.22, Math.max(1.5, r * 0.12), 0, 7); cx.arc(r * 0.7, r * 0.22, Math.max(1.5, r * 0.12), 0, 7); cx.fill();
+    // the beak
+    cx.fillStyle = d.act === "hawk" || d.act === "owl" ? "#e8b84a" : "#2a2420"; cx.beginPath(); cx.moveTo(r * 1.1, -r * 0.12); cx.lineTo(r * 1.5, 0); cx.lineTo(r * 1.1, r * 0.12); cx.fill();
+    cx.restore();
+    if (!d.boss && e.hp < e.max && d.hp >= 20) { cx.fillStyle = "rgba(0,0,0,0.5)"; cx.fillRect(x - r, y - r * 1.8, r * 2, 3); cx.fillStyle = "#ff8a6a"; cx.fillRect(x - r, y - r * 1.8, r * 2 * Math.max(0, e.hp / e.max), 3); }
+    if (e.stun > 0) { cx.strokeStyle = "rgba(255,240,160,0.8)"; cx.lineWidth = 1.5; cx.beginPath(); cx.arc(x, y - r * 1.6, 6, 0, 7); cx.stroke(); }
+    if (d.act === "hawk" && e.st === "stoop") { cx.strokeStyle = "rgba(255,90,60,0.6)"; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(x, y); cx.lineTo(x - e.vx * 0.12, y - e.vy * 0.12); cx.stroke(); }
+  }
+  var fx = [];
+  function puff(x, y, n, col, sp) { for (var i = 0; i < n; i++) fx.push({ x: x, y: y, vx: (Math.random() - 0.5) * sp, vy: (Math.random() - 0.5) * sp - 20, t: 0, life: 0.6 + Math.random() * 0.5, col: col, rot: Math.random() * 6, kind: "feather" }); }
+  function ring(x, y, r, col) { fx.push({ x: x, y: y, r: r, t: 0, life: 0.5, col: col, kind: "ring" }); }
+  function drawFx(dt) {
+    fx = fx.filter(function (p) { p.t += dt; return p.t < p.life; });
+    fx.forEach(function (p) {
+      var a = 1 - p.t / p.life;
+      if (p.kind === "feather") {
+        p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 60 * dt; p.vx *= 0.97;
+        cx.save(); cx.translate(sx(p.x), sy(p.y)); cx.rotate(p.rot + p.t * 4); cx.globalAlpha = a; cx.fillStyle = p.col; cx.beginPath(); cx.ellipse(0, 0, 4, 1.4, 0, 0, 7); cx.fill(); cx.restore();
+      } else if (p.kind === "ring") {
+        cx.globalAlpha = a; cx.strokeStyle = p.col; cx.lineWidth = 3; cx.beginPath(); cx.arc(sx(p.x), sy(p.y), p.r * (0.4 + 0.6 * p.t / p.life), 0, 7); cx.stroke(); cx.globalAlpha = 1;
+      } else if (p.kind === "text") {
+        cx.globalAlpha = a; text(p.s, sx(p.x), sy(p.y) - p.t * 30, 15, p.col, "center", 800); cx.globalAlpha = 1;
+      }
+    });
+  }
+
+  // ---------------- a run ----------------
+  var screen = "title", run = null, paused = false, helpOpen = false, helpPage = 0, acc = 0, lastSummary = null, msg = null, keys = {};
+  function flash(s, col) { msg = { s: s, t: 0, col: col || COL.text }; }
+  function startRun(ri) {
+    run = F.startRun(g, ri); screen = "run"; paused = false; acc = 0; fx = [];
+    cam.x = run.lead.x; cam.y = run.lead.y;
+    if (!settings.seenHelp) { helpOpen = true; helpPage = 0; }
+  }
+  function handle(e) {
+    if (e.e === "kill") { sfx("kill"); puff(e.x, e.y, e.boss ? 40 : 5, "#2a1f2c", e.boss ? 260 : 120); if (e.boss) { sfx("win"); flash("The " + C.ENEMY[e.id].name + " is driven off!", COL.gold); } }
+    else if (e.e === "lost") { sfx("lost"); puff(e.x, e.y, 2, "#3a2a34", 80); }
+    else if (e.e === "join") { sfx("join"); fx.push({ x: e.x, y: e.y, s: "+" + e.n, t: 0, life: 1, col: COL.good, kind: "text" }); }
+    else if (e.e === "level") sfx("level");
+    else if (e.e === "dive") { sfx("dive"); ring(e.x, e.y, 60, "rgba(255,200,140,0.8)"); }
+    else if (e.e === "boss") { sfx("boss"); flash("A " + C.ENEMY[e.id].name + " is hunting the flock!", COL.bad); }
+    else if (e.e === "snatch") { sfx("snatch"); ring(e.x, e.y, 40, "rgba(255,90,60,0.8)"); }
+    else if (e.e === "hoot") { sfx("hoot"); ring(e.x, e.y, 240, "rgba(230,220,255,0.7)"); }
+    else if (e.e === "zap") sfx("zap");
+    else if (e.e === "screech") { sfx("screech"); ring(e.x, e.y, e.r, "rgba(255,240,160,0.7)"); }
+    else if (e.e === "song") fx.push({ x: run.lead.x, y: run.lead.y - 40, s: "+" + e.n + " joined the song", t: 0, life: 1.2, col: COL.good, kind: "text" });
+    else if (e.e === "end") { lastSummary = run.summary; sfx(run.won ? "win" : "lose"); persist(); }
+  }
+  function steer() {
+    var kx = (keys.d || keys.arrowright ? 1 : 0) - (keys.a || keys.arrowleft ? 1 : 0), ky = (keys.s || keys.arrowdown ? 1 : 0) - (keys.w || keys.arrowup ? 1 : 0);
+    if (kx || ky) { var L = Math.sqrt(kx * kx + ky * ky); F.setTarget(run, run.lead.x + kx / L * 260, run.lead.y + ky / L * 260); }
+    else F.setTarget(run, mouse.x - W / 2 + cam.x, mouse.y - H / 2 + cam.y);
+  }
+  function drawRun(dt) {
+    var t = now();
+    if (!paused && !helpOpen && !run.choices && !run.over) {
+      steer();
+      acc += dt; var n = 0;
+      while (acc >= 1 / 60 && n < 4) { F.step(run, 1 / 60); run.events.forEach(handle); run.events.length = 0; acc -= 1 / 60; n++; if (run.choices || run.over) { acc = 0; break; } }
+      if (n >= 4) acc = 0;
+    }
+    // the camera follows the lead, a little behind
+    cam.x += (run.lead.x - cam.x) * Math.min(1, dt * 4); cam.y += (run.lead.y - cam.y) * Math.min(1, dt * 4);
+    var night = run.reg.endless ? 0.7 : Math.min(1, run.t / run.reg.len);
+    drawSky(run.reg, night, cam.x);
+    drawLand(run.reg, cam.x, night);
+    // strays on their wires
+    run.strays.forEach(function (st) {
+      var x = sx(st.x), y = sy(st.y);
+      if (x < -40 || x > W + 40 || y < -40 || y > H + 40) { edgeArrow(x, y, "#a8e6a0"); return; }
+      cx.strokeStyle = "rgba(240,220,200,0.5)"; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(x - 22, y + 4); cx.lineTo(x + 22, y + 4); cx.stroke();
+      for (var q = 0; q < st.n; q++) { cx.fillStyle = "#1a1018"; cx.beginPath(); cx.ellipse(x - 10 + q * 7, y, 3, 4, 0, 0, 7); cx.fill(); }
+      cx.globalAlpha = 0.4 + 0.3 * Math.sin(t * 4); glow(x, y, 26, "rgba(170,240,160,A)", 0.5); cx.globalAlpha = 1;
+    });
+    // berries
+    run.berries.forEach(function (b) { var x = sx(b.x), y = sy(b.y); if (x < -10 || x > W + 10 || y < -10 || y > H + 10) return; var r = 2.5 + Math.min(4, b.v); cx.beginPath(); cx.arc(x, y, r, 0, 7); cx.fillStyle = "#c2306a"; cx.fill(); cx.beginPath(); cx.arc(x - r * 0.3, y - r * 0.3, r * 0.35, 0, 7); cx.fillStyle = "#ffb0d0"; cx.fill(); });
+    run.enemies.forEach(function (e) { silhouette(e, t); });
+    // swallows and darts
+    run.swallowsL.forEach(function (s) { var x = sx(s.x), y = sy(s.y), a = Math.atan2(s.vy, s.vx); cx.save(); cx.translate(x, y); cx.rotate(a); cx.fillStyle = "#26408a"; cx.beginPath(); cx.moveTo(7, 0); cx.lineTo(-4, -8); cx.lineTo(-2, 0); cx.lineTo(-4, 8); cx.closePath(); cx.fill(); cx.fillStyle = "#e8603a"; cx.fillRect(4, -1.5, 3, 3); cx.restore(); });
+    cx.strokeStyle = "rgba(255,220,180,0.9)"; cx.lineWidth = 2; run.darts.forEach(function (d) { cx.beginPath(); cx.moveTo(sx(d.x), sy(d.y)); cx.lineTo(sx(d.x - d.vx * 0.03), sy(d.y - d.vy * 0.03)); cx.stroke(); });
+    // the black sun glows
+    if (run.form === "BALL" && run.evos.BLACKSUN && !run.dive) {
+      // an eclipse made of birds: a corona of fire round the dark ball
+      var R0 = 6 * Math.sqrt(run.birds.length) * 1.2, ex = sx(run.lead.x), ey = sy(run.lead.y), pulse = 1 + 0.04 * Math.sin(t * 3);
+      cx.save(); cx.globalCompositeOperation = "lighter";
+      var cg = cx.createRadialGradient(ex, ey, R0 * 0.7, ex, ey, R0 * 1.7 * pulse);
+      cg.addColorStop(0, "rgba(255,120,50,0)"); cg.addColorStop(0.3, "rgba(255,150,70,0.55)"); cg.addColorStop(0.55, "rgba(255,90,40,0.25)"); cg.addColorStop(1, "rgba(255,60,30,0)");
+      cx.fillStyle = cg; cx.beginPath(); cx.arc(ex, ey, R0 * 1.7 * pulse, 0, 7); cx.fill();
+      cx.restore();
+      var dg = cx.createRadialGradient(ex, ey, 0, ex, ey, R0 * 0.98);
+      dg.addColorStop(0, "rgba(14,4,12,0.85)"); dg.addColorStop(0.8, "rgba(14,4,12,0.6)"); dg.addColorStop(1, "rgba(14,4,12,0)");
+      cx.fillStyle = dg; cx.beginPath(); cx.arc(ex, ey, R0 * 0.98, 0, 7); cx.fill();
+    }
+    drawBirds(run.birds, t, "#120a12", run.evos.BLACKSUN && run.form === "BALL");
+    drawFx(dt);
+    // where the flock is heading
+    if (!run.over && !window.__noTarget) { var tx = sx(run.target.x), ty = sy(run.target.y); cx.strokeStyle = "rgba(255,240,220,0.35)"; cx.lineWidth = 1; cx.beginPath(); cx.arc(tx, ty, 8, 0, 7); cx.stroke(); }
+    drawHud(t);
+    drawMsg(dt);
+    if (run.choices) drawChoices();
+    if (helpOpen) drawHelp();
+    else if (paused && !run.over) drawPause();
+    if (run.over) drawEnd(dt);
+  }
+  function edgeArrow(x, y, col) {
+    var cxm = W / 2, cym = H / 2, dx = x - cxm, dy = y - cym, k = Math.min((W / 2 - 24) / Math.abs(dx || 1), (H / 2 - 24) / Math.abs(dy || 1));
+    var ex = cxm + dx * k, ey = cym + dy * k, a = Math.atan2(dy, dx);
+    cx.save(); cx.translate(ex, ey); cx.rotate(a); cx.fillStyle = col; cx.globalAlpha = 0.7; cx.beginPath(); cx.moveTo(8, 0); cx.lineTo(-6, -6); cx.lineTo(-6, 6); cx.closePath(); cx.fill(); cx.restore();
+  }
+  function drawHud(t) {
+    var s = run.s;
+    // top bar
+    var grd = cx.createLinearGradient(0, 0, 0, 70); grd.addColorStop(0, "rgba(10,6,16,0.7)"); grd.addColorStop(1, "rgba(10,6,16,0)"); cx.fillStyle = grd; cx.fillRect(0, 0, W, 70);
+    text(run.reg.name, 22, 24, 18, COL.text, "left", 700, SERIF);
+    if (!run.reg.endless) {
+      var left = Math.max(0, run.reg.len - run.t), mm = Math.floor(left / 60), ssec = Math.floor(left % 60);
+      text((run.t < run.reg.len ? mm + ":" + (ssec < 10 ? "0" : "") + ssec + " to nightfall" : "Drive off the " + C.ENEMY[run.reg.boss].name + "!"), 22, 48, 13, run.t < run.reg.len ? COL.dim : COL.bad, "left", 700);
+    } else text(Math.floor(run.t / 60) + ":" + (Math.floor(run.t % 60) < 10 ? "0" : "") + Math.floor(run.t % 60) + " survived", 22, 48, 13, COL.dim, "left", 700);
+    // the flock count, big
+    text(String(run.birds.length), W / 2, 30, 34, COL.text, "center", 800, SERIF);
+    text("STARLINGS", W / 2, 56, 11, COL.dim, "center", 800);
+    // level bar
+    rr(W / 2 - 200, 66, 400, 8, 4); cx.fillStyle = "rgba(20,10,24,0.7)"; cx.fill();
+    rr(W / 2 - 200, 66, Math.max(8, 400 * Math.min(1, run.xp / run.xpNext)), 8, 4); cx.fillStyle = "#e0507a"; cx.fill();
+    text("Lv " + run.level, W / 2 + 212, 70, 12, COL.dim, "left", 700);
+    // upgrades held: a short list, top right
+    var uy = 18;
+    Object.keys(run.evos).concat(Object.keys(run.ups)).forEach(function (id) {
+      var u = C.UPGRADE[id] || C.EVOLUTION[id], l = run.ups[id], lab = u.name + (l ? (u.max < 99 ? "  " + l + "/" + u.max : "  x" + l) : "  ★");
+      var w = tw(lab, 12, 700) + 18, x = W - 22 - w;
+      rr(x, uy, w, 20, 7); cx.fillStyle = C.EVOLUTION[id] ? "rgba(200,80,40,0.85)" : "rgba(30,18,40,0.7)"; cx.fill();
+      text(lab, x + 9, uy + 10.5, 12, C.EVOLUTION[id] ? "#fff0e0" : COL.text, "left", 700);
+      if (hot(x, uy, w, 20)) tip(u.name + ": " + u.desc);
+      uy += 23;
+    });
+    // boss bar
+    if (run.boss && !run.boss.dead) {
+      var b = run.boss; rr(W / 2 - 260, 92, 520, 14, 7); cx.fillStyle = "rgba(20,8,12,0.8)"; cx.fill();
+      rr(W / 2 - 260, 92, Math.max(14, 520 * b.hp / b.max), 14, 7); cx.fillStyle = "#ff6a4a"; cx.fill();
+      text(b.d.name, W / 2, 118, 13, COL.bad, "center", 800);
+    }
+    // formations and dive
+    if (run.over) return;
+    var forms = [["BALL", "1"], ["RIBBON", "2"], ["WHEEL", "3"]], bx = W / 2 - 250;
+    forms.forEach(function (f, i) {
+      var x = bx + i * 130;
+      button(x, H - 62, 120, 42, f[1] + "  " + f[0], function () { F.setForm(run, f[0]); sfx("ui"); }, { active: run.form === f[0], size: 14 });
+    });
+    var dx = bx + 3 * 130 + 10, ready = run.diveCd <= 0 && !run.dive;
+    button(dx, H - 62, 120, 42, "DIVE", function () { var p = toWorld(mouse.x, mouse.y); F.dive(run, p.x, p.y); }, { primary: ready, disabled: !ready, size: 14 });
+    if (!ready) { var f = Math.max(0, run.diveCd) / s.diveCd; cx.fillStyle = "rgba(255,200,120,0.25)"; rr(dx, H - 62, 120 * (1 - f), 42, 14); cx.fill(); }
+    text("Space / right-click", dx + 60, H - 12, 10, COL.dim, "center", 600);
+    if (tipText) drawTip();
+  }
+  var tipText = null;
+  function tip(s) { tipText = s; }
+  function drawTip() { var w = Math.min(560, tw(tipText, 13, 600) + 24); rr(W - w - 260, 18, w, 30, 8); cx.fillStyle = COL.panel; cx.fill(); text(tipText, W - w - 248, 33, 13, COL.text, "left", 600); tipText = null; }
+  function toWorld(x, y) { return { x: x - W / 2 + cam.x, y: y - H / 2 + cam.y }; }
+  function drawMsg(dt) {
+    if (!msg) return; msg.t += dt; if (msg.t > 3) { msg = null; return; }
+    var a = Math.min(1, (3 - msg.t) * 2), ww = tw(msg.s, 16, 700) + 40;
+    cx.globalAlpha = a; rr(W / 2 - ww / 2, 140, ww, 34, 17); cx.fillStyle = "rgba(16,8,20,0.88)"; cx.fill(); text(msg.s, W / 2, 157, 16, msg.col, "center", 700); cx.globalAlpha = 1;
+  }
+  var choiceAt = 0;
+  function drawChoices() {
+    cx.fillStyle = "rgba(10,4,14,0.6)"; cx.fillRect(0, 0, W, H);
+    text("LEVEL " + run.level, W / 2, 170, 15, COL.gold, "center", 800);
+    text("The flock learns something new", W / 2, 206, 30, COL.text, "center", 700, SERIF);
+    run.choices.forEach(function (id, i) {
+      var evo = C.EVOLUTION[id], u = evo || C.UPGRADE[id], x = W / 2 - 480 + i * 330, y = 250, w = 300, h = 300, l = run.ups[id] || 0, on = hot(x, y, w, h);
+      rr(x, y, w, h, 18); cx.fillStyle = evo ? "rgba(90,30,20,0.96)" : on ? "rgba(70,44,86,0.97)" : "rgba(40,24,52,0.96)"; cx.fill();
+      cx.strokeStyle = evo ? "#ff8a4a" : on ? "#ffd894" : "rgba(220,180,240,0.4)"; cx.lineWidth = evo || on ? 2.5 : 1.2; cx.stroke();
+      text((i + 1) + "", x + 24, y + 28, 14, COL.dim, "left", 800);
+      text(evo ? "EVOLUTION" : l ? "LEVEL " + (l + 1) + (u.max < 99 ? " / " + u.max : "") : "NEW", x + w - 20, y + 28, 12, evo ? "#ff9a5a" : COL.gold, "right", 800);
+      iconFor(id, x + w / 2, y + 100);
+      text(u.name, x + w / 2, y + 170, 22, COL.text, "center", 700, SERIF);
+      wrap(u.desc, x + w / 2, y + 206, w - 40, 14, COL.dim, 20, 600, "center");
+      buttons.push({ x: x, y: y, w: w, h: h, fn: function () { F.choose(run, id); sfx("buy"); } });
+    });
+    if (run.rerolls > 0) button(W / 2 - 90, 580, 180, 40, "REROLL (" + run.rerolls + ")", function () { F.reroll(run); sfx("ui"); }, { size: 13 });
+  }
+  function iconFor(id, x, y) {
+    cx.save(); cx.translate(x, y);
+    var t = now();
+    if (id === "BALL" || id === "BLACKSUN") { for (var i = 0; i < 40; i++) { var r = 30 * Math.sqrt((i + 0.5) / 40), a = i * 2.4 + t; cx.fillStyle = id === "BLACKSUN" ? "#ff7a3a" : "#e8d8f0"; cx.fillRect(Math.cos(a) * r, Math.sin(a) * r, 3, 3); } }
+    else if (id === "RIBBON" || id === "SKYRIVER") { for (i = 0; i < 40; i++) { var px = -50 + i * 2.5; cx.fillStyle = "#e8d8f0"; cx.fillRect(px, Math.sin(px * 0.08 + t * 3) * 14 + (i % 3 - 1) * 4, 3, 3); } }
+    else if (id === "WHEEL" || id === "STORMWHEEL") { for (i = 0; i < 36; i++) { var a2 = i / 36 * 6.283 + t * 2; cx.fillStyle = "#e8d8f0"; cx.fillRect(Math.cos(a2) * 32, Math.sin(a2) * 32, 3, 3); } }
+    else if (id === "DIVE") { cx.strokeStyle = "#ffc86b"; cx.lineWidth = 4; cx.beginPath(); cx.moveTo(-30, -30); cx.lineTo(20, 20); cx.stroke(); cx.beginPath(); cx.moveTo(26, 4); cx.lineTo(26, 26); cx.lineTo(4, 26); cx.stroke(); }
+    else if (id === "SWALLOWS") { cx.fillStyle = "#4a6ad0"; [-1, 1].forEach(function (s) { cx.beginPath(); cx.moveTo(s * 20 + 14, 0); cx.lineTo(s * 20 - 8, -14); cx.lineTo(s * 20 - 3, 0); cx.lineTo(s * 20 - 8, 14); cx.fill(); }); }
+    else if (id === "NOSE") { for (i = 0; i < 5; i++) { cx.beginPath(); cx.arc(-24 + i * 12, Math.sin(i + t * 3) * 6, 6, 0, 7); cx.fillStyle = "#d03a76"; cx.fill(); } }
+    else if (id === "CALL" || id === "SONG" || id === "FLOCK") { cx.strokeStyle = "rgba(240,220,200,0.7)"; cx.beginPath(); cx.moveTo(-40, 10); cx.lineTo(40, 10); cx.stroke(); for (i = 0; i < 6; i++) { cx.fillStyle = "#e8d8f0"; cx.beginPath(); cx.ellipse(-30 + i * 12, 3, 4, 6, 0, 0, 7); cx.fill(); } }
+    else if (id === "MOCKER") { cx.strokeStyle = "#fff0a0"; cx.lineWidth = 2; for (i = 1; i < 4; i++) { cx.beginPath(); cx.arc(0, 0, i * 12 + (t * 20 % 12), -0.8, 0.8); cx.stroke(); } }
+    else { cx.fillStyle = "#e8d8f0"; cx.beginPath(); cx.moveTo(0, -30); cx.lineTo(10, 0); cx.lineTo(0, 30); cx.lineTo(-10, 0); cx.closePath(); cx.fill(); }
+    cx.restore();
+  }
+  function drawPause() {
+    cx.fillStyle = "rgba(10,4,14,0.62)"; cx.fillRect(0, 0, W, H);
+    text("PAUSED", W / 2, 320, 40, COL.text, "center", 700, SERIF);
+    button(W / 2 - 100, 370, 200, 46, "RESUME", function () { paused = false; }, { primary: true });
+    button(W / 2 - 100, 428, 200, 40, "HOW TO PLAY", function () { helpOpen = true; helpPage = 0; }, { size: 13 });
+    button(W / 2 - 100, 478, 200, 40, "LEAVE THE RUN", function () { F.end(run, false); run.events.forEach(handle); run.events.length = 0; paused = false; }, { size: 13 });
+  }
+  var endT = 0;
+  function drawEnd(dt) {
+    endT += dt;
+    var s = lastSummary || run.summary, a = Math.min(1, endT * 2);
+    cx.fillStyle = "rgba(10,4,14," + 0.72 * a + ")"; cx.fillRect(0, 0, W, H);
+    cx.globalAlpha = a;
+    text(s.endless ? "THE BLACK SUN SETS" : s.won ? "NIGHTFALL" : "THE FLOCK SCATTERS", W / 2, 180, 16, s.won ? COL.gold : COL.bad, "center", 800);
+    text(s.endless ? "You flew " + fmtT(s.time) : s.won ? run.reg.name + " is safe for the night" : "Only " + fmtT(s.time) + " - the roost will be ready again", W / 2, 224, 30, COL.text, "center", 700, SERIF);
+    var stat = [["Biggest flock", s.peak], ["Driven off", s.kills], ["Level", s.level], ["Feathers", "+" + s.feathers]];
+    stat.forEach(function (p, i) { var x = W / 2 - 330 + i * 220; text(String(p[1]), x + 110, 300, 34, i === 3 ? COL.gold : COL.text, "center", 700, SERIF); text(p[0], x + 110, 334, 13, COL.dim, "center", 700); });
+    var y = 384;
+    if (s.opened) { text("A new place opens: " + C.REGIONS[g.open - 1].name + "!", W / 2, y, 18, COL.good, "center", 800); y += 32; }
+    if (s.finished) { text("All four places are safe. The Black Sun night is open: fly as long as you can.", W / 2, y, 16, COL.good, "center", 700); y += 30; }
+    wrap("Field note: " + C.NOTES[(g.runs * 7) % C.NOTES.length], W / 2, y + 10, 760, 14, COL.dim, 20, 600, "center");
+    cx.globalAlpha = 1;
+    if (endT > 0.6) {
+      button(W / 2 - 220, 520, 200, 50, "TO THE ROOST", function () { goRoost(); }, { primary: true, size: 16 });
+      button(W / 2 + 20, 520, 200, 50, "FLY AGAIN", function () { startRun(run.ri); endT = 0; }, { size: 15 });
+      if (s.won) button(W / 2 - 160, 586, 320, 44, "GET THE FULL GAME", openStore, { size: 14 });
+      followLine(664);
+    }
+  }
+  function fmtT(t) { var m = Math.floor(t / 60), s = Math.floor(t % 60); return m + ":" + (s < 10 ? "0" : "") + s; }
+  // follow the maker on itch.io: shown on the end screens
+  function followLine(y) {
+    var label = "Enjoying it? Follow Proven Little Games on itch.io for new games", w = tw(label, 13, 700) + 30;
+    var x = W / 2 - w / 2, on = hot(x, y - 15, w, 30);
+    rr(x, y - 15, w, 30, 15); cx.fillStyle = on ? "rgba(90,60,110,0.95)" : "rgba(40,24,52,0.85)"; cx.fill();
+    text(label, W / 2, y, 13, on ? COL.gold : COL.dim, "center", 700);
+    buttons.push({ x: x, y: y - 15, w: w, h: 30, fn: openProfile });
+  }
+  function openProfile() { try { window.open(PROFILE_URL, "_blank", "noopener"); } catch (e) {} }
+
+  // ---------------- the roost: places and lasting upgrades ----------------
+  function goRoost() { screen = "roost"; run = null; endT = 0; persist(); }
+  var note = 0;
+  function drawRoost() {
+    drawSky(C.REGIONS[0], 0.55, now() * 20); drawLand(C.REGIONS[0], now() * 20, 0.55);
+    if (demoRun) { stepDemo(1 / 60); drawBirds(demoRun.birds.map(function (b) { return { x: b.x + 300, y: b.y - 120, vx: b.vx, vy: b.vy, ph: b.ph }; }), now(), "#120a12"); }
+    cx.fillStyle = "rgba(10,4,14,0.55)"; cx.fillRect(0, 0, W, H);
+    text("THE ROOST", 60, 56, 30, COL.text, "left", 700, SERIF);
+    text(g.feathers + " feathers", W - 60, 56, 22, COL.gold, "right", 800, SERIF);
+    // places
+    text("WHERE TO FLY TONIGHT", 60, 108, 12, COL.dim, "left", 800);
+    var regs = C.REGIONS.length;
+    for (var i = 0; i < 4; i++) (function (i) {
+      var x = 60 + i * 292, y = 124, w = 276, h = 150, open = i < regs && i < g.open, reg = C.REGIONS[i];
+      rr(x, y, w, h, 14); cx.fillStyle = open ? "rgba(46,28,58,0.94)" : "rgba(26,16,32,0.9)"; cx.fill();
+      cx.strokeStyle = open && hot(x, y, w, h) ? COL.gold : "rgba(200,170,220,0.35)"; cx.lineWidth = 1.4; cx.stroke();
+      if (reg && open) {
+        var gr = cx.createLinearGradient(x, y, x, y + 60); gr.addColorStop(0, reg.sky[1]); gr.addColorStop(1, reg.sky[2]); rr(x + 10, y + 10, w - 20, 54, 10); cx.fillStyle = gr; cx.fill();
+        text(reg.name, x + 16, y + 86, 18, COL.text, "left", 700, SERIF);
+        text(g.cleared[reg.id] ? "Cleared x" + g.cleared[reg.id] : g.best[reg.id] ? "Best " + fmtT(g.best[reg.id]) : "Not yet flown", x + 16, y + 110, 12, g.cleared[reg.id] ? COL.good : COL.dim, "left", 700);
+        text("Boss: " + C.ENEMY[reg.boss].name, x + 16, y + 130, 12, COL.dim, "left", 600);
+        buttons.push({ x: x, y: y, w: w, h: h, fn: function () { sfx("ui"); startRun(i); } });
+      } else {
+        text(i < regs ? "Clear the place before" : "FULL GAME", x + w / 2, y + 66, 14, "#8a7a98", "center", 700);
+        if (i >= regs) text(["", "The Old Pier", "City Rooftops", "Night Marsh"][i], x + w / 2, y + 92, 18, "#b9a8c8", "center", 700, SERIF);
+      }
+    })(i);
+    
+    // lasting upgrades
+    text("LASTING UPGRADES", 60, 312, 12, COL.dim, "left", 800);
+    C.ROOST.forEach(function (u, i) {
+      var col = i % 2, row = Math.floor(i / 2), x = 60 + col * 590, y = 330 + row * 76, l = F.rl(g, u.id), cost = F.roostCost(g, u.id), can = F.canBuy(g, u.id);
+      rr(x, y, 570, 66, 12); cx.fillStyle = "rgba(40,24,52,0.92)"; cx.fill();
+      text(u.name, x + 16, y + 22, 16, COL.text, "left", 700);
+      text(u.desc, x + 16, y + 46, 12, COL.dim, "left", 600);
+      for (var q = 0; q < u.max; q++) { cx.beginPath(); cx.arc(x + 420 - (u.max - q) * 11, y + 22, 3.6, 0, 7); cx.fillStyle = q < l ? COL.gold : "rgba(160,130,180,0.4)"; cx.fill(); }
+      button(x + 440, y + 14, 116, 38, l >= u.max ? "MAX" : cost + " ✦", function () { if (F.buy(g, u.id)) { sfx("buy"); persist(); } else sfx("bad"); }, { primary: can, disabled: !can, size: 14 });
+    });
+    button(60, H - 66, 150, 44, "TITLE", function () { screen = "title"; }, { size: 13 });
+    button(222, H - 66, 170, 44, "HOW TO PLAY", function () { helpOpen = true; helpPage = 0; }, { size: 13 });
+    wrap("Field note: " + C.NOTES[note % C.NOTES.length], W - 60, H - 44, 640, 13, COL.dim, 18, 600, "right");
+    if (helpOpen) drawHelp();
+  }
+
+  // ---------------- help ----------------
+  var HELP = [
+    ["Lead the flock", "Your flock follows the mouse (or WASD / arrow keys). It fights by flying into things: every starling that touches an enemy pecks it, and a pecked bird flinches back. Bites and snatches cost you starlings - the flock is your health. Fly over lone starlings on the wires to bring them in."],
+    ["Change its shape", "1  BALL: a tight ball. Many beaks on one target, and hawks can barely snatch from it.\n2  RIBBON: a long stream along your path. Sweep it through crowds.\n3  WHEEL: a ring around you. It guards you while you hold still or circle.\nSPACE or right-click: DIVE - the whole flock stoops at the cursor and hits much harder."],
+    ["Grow", "Enemies drop berries. Gather them to level up and pick one of three upgrades. Max two upgrades that belong together and an evolution may appear. Survive until nightfall and drive off the boss to make the place safe."],
+    ["The roost", "Win or lose, you keep feathers. Spend them in the roost on lasting upgrades, then fly again. Watch for: magpies and skuas stealing berries, hawks that circle and then stoop (ball up!), owls that hoot and scatter the flock, and storm clouds."]
+  ];
+  function drawHelp() {
+    cx.fillStyle = "rgba(10,4,14,0.75)"; cx.fillRect(0, 0, W, H);
+    var x = 260, y = 140, ww = 760, hh = 500, p = HELP[helpPage];
+    rr(x, y, ww, hh, 18); cx.fillStyle = COL.panel; cx.fill(); cx.strokeStyle = COL.line; cx.lineWidth = 1.5; cx.stroke();
+    text("HOW TO PLAY " + (helpPage + 1) + "/" + HELP.length, x + 30, y + 34, 12, COL.dim, "left", 800);
+    text(p[0], x + 30, y + 78, 32, COL.gold, "left", 700, SERIF);
+    wrap(p[1], x + 30, y + 132, ww - 60, 18, COL.text, 28, 600);
+    var close = function () { helpOpen = false; settings.seenHelp = true; saveSettings(); };
+    if (helpPage > 0) button(x + 30, y + hh - 66, 120, 42, "BACK", function () { helpPage--; }, {});
+    if (helpPage < HELP.length - 1) button(x + ww - 150, y + hh - 66, 120, 42, "NEXT", function () { helpPage++; }, { primary: true });
+    else button(x + ww - 150, y + hh - 66, 120, 42, "FLY!", close, { primary: true });
+    button(x + ww / 2 - 60, y + hh - 66, 120, 42, "CLOSE", close, {});
+  }
+
+  // ---------------- title: a murmuration plays across the dusk ----------------
+  var demoRun = null;
+  function makeDemo() {
+    var dg = F.newGame({ seed: 9 }); dg.roost.START = 10;
+    demoRun = F.startRun(dg, 0, 99);
+    for (var i = 0; i < 420; i++) F.addBird(demoRun, (Math.random() - 0.5) * 200, (Math.random() - 0.5) * 200);
+    demoRun.form = "RIBBON"; demoRun.reg = { id: "TITLE", len: 1e9, waves: [], sky: C.REGIONS[0].sky, ground: "farm", bossAt: 1e9 };
+  }
+  var demoForm = 0;
+  function stepDemo(dt) {
+    if (!demoRun) makeDemo();
+    var t = demoRun.t;
+    // a lazy figure-of-eight across the sky, changing shape now and then
+    F.setTarget(demoRun, Math.sin(t * 0.45) * 420, Math.sin(t * 0.9) * 150);
+    var f = Math.floor(t / 7) % 3; if (f !== demoForm) { demoForm = f; F.setForm(demoRun, ["RIBBON", "BALL", "WHEEL"][f]); }
+    demoRun.strays.length = 0;
+    F.step(demoRun, dt); demoRun.events.length = 0;
+  }
+  function drawTitle(dt) {
+    stepDemo(dt);
+    drawSky(C.REGIONS[0], 0.1, now() * 30); drawLand(C.REGIONS[0], now() * 30, 0.1);
+    var save = { x: cam.x, y: cam.y }; cam.x = -100; cam.y = 60;
+    drawBirds(demoRun.birds, now(), "#140a12");
+    cam.x = save.x; cam.y = save.y;
+    var gr = cx.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, "rgba(10,4,14,0.45)"); gr.addColorStop(0.4, "rgba(10,4,14,0)"); gr.addColorStop(1, "rgba(10,4,14,0.6)"); cx.fillStyle = gr; cx.fillRect(0, 0, W, H);
+    cx.font = "700 92px " + SERIF; cx.textAlign = "center"; cx.textBaseline = "middle";
+    cx.shadowColor = "rgba(255,170,90,0.8)"; cx.shadowBlur = 26; cx.fillStyle = "#fff4e6"; cx.fillText("THOUSANDWING", W / 2, 120); cx.shadowBlur = 0;
+    text("Lead a murmuration. Change its shape. Drive off the night.", W / 2, 184, 22, "#ffe8d4", "center", 600, SERIF);
+    text("FREE DEMO · Harvest Fields", W / 2, 218, 14, COL.gold, "center", 800);
+    button(W / 2 - 160, 560, 320, 58, "FLY", function () { audio(); if (g.runs === 0) { startRun(0); } else goRoost(); }, { primary: true, size: 20 });
+    button(W / 2 - 160, 630, 155, 42, "THE ROOST", function () { audio(); goRoost(); }, { size: 13 });
+    button(W / 2 + 5, 630, 155, 42, settings.music ? "MUSIC ON" : "MUSIC OFF", function () { settings.music = !settings.music; saveSettings(); audio(); }, { size: 13 });
+    button(W / 2 - 160, 682, 155, 36, "HOW TO PLAY", function () { helpOpen = true; helpPage = 0; }, { size: 12 });
+    button(W / 2 + 5, 682, 155, 36, settings.sound ? "SOUND ON" : "SOUND OFF", function () { settings.sound = !settings.sound; saveSettings(); }, { size: 12 });
+    button(W - 300, H - 66, 270, 40, "GET THE FULL GAME", openStore, { size: 13 });
+    if (helpOpen) drawHelp();
+  }
+  
+  function openStore() { try { window.open(STORE_URL, "_blank", "noopener"); } catch (e) {} }
+  function drawDemoEnd() {
+    drawSky(C.REGIONS[0], 0.8, 0); drawLand(C.REGIONS[0], 0, 0.8);
+    cx.fillStyle = "rgba(10,4,14,0.7)"; cx.fillRect(0, 0, W, H);
+    text("THE DEMO ENDS HERE", W / 2, 190, 38, COL.gold, "center", 700, SERIF);
+    var y = wrap("Harvest Fields is safe. The full game flies on: the Old Pier with its gulls and skuas, City Rooftops where the peregrine hunts, and the Night Marsh under the eagle-owl - then the endless Black Sun night, with every lasting upgrade.", W / 2, 260, 760, 18, COL.text, 28, 600, "center");
+    button(W / 2 - 170, y + 36, 340, 56, "GET THE FULL GAME", openStore, { primary: true, size: 18 });
+    button(W / 2 - 100, y + 104, 200, 42, "KEEP FLYING", function () { goRoost(); }, { size: 13 });
+    followLine(H - 60);
+  }
+  
+  function drawWon() {
+    drawSky(C.REGIONS[C.REGIONS.length - 1], 0.4, 0); drawLand(C.REGIONS[C.REGIONS.length - 1], 0, 0.4);
+    cx.fillStyle = "rgba(10,4,14,0.62)"; cx.fillRect(0, 0, W, H);
+    text("A THOUSAND WINGS", W / 2, 210, 44, COL.gold, "center", 700, SERIF);
+    wrap("All four places are safe for the night. " + g.runs + " flights, and the roost has never been fuller. The Black Sun night is open in the roost: fly as long as you can.", W / 2, 290, 720, 18, COL.text, 28, 600, "center");
+    button(W / 2 - 110, 420, 220, 50, "TO THE ROOST", function () { goRoost(); }, { primary: true });
+    followLine(H - 60);
+  }
+
+  // ---------------- main loop and input ----------------
+  var lastT = performance.now();
+  function frame(nowT) {
+    var dt = Math.min(0.05, (nowT - lastT) / 1000); lastT = nowT;
+    buttons = []; popT -= dt; lostT -= dt;
+    cx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    ambient();
+    if (screen === "title") drawTitle(dt);
+    else if (screen === "run") drawRun(dt);
+    else if (screen === "roost") drawRoost();
+    else if (screen === "won") drawWon();
+    else if (screen === "demoend") drawDemoEnd();
+    requestAnimationFrame(frame);
+  }
+  function resize() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H); dpr = window.devicePixelRatio || 1;
+    cv.style.width = Math.floor(W * scale) + "px"; cv.style.height = Math.floor(H * scale) + "px";
+    cv.width = Math.floor(W * scale * dpr); cv.height = Math.floor(H * scale * dpr);
+  }
+  window.addEventListener("resize", resize); resize();
+  function local(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+  cv.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  cv.addEventListener("pointermove", function (e) { var m = local(e); mouse.x = m.x; mouse.y = m.y; });
+  cv.addEventListener("pointerdown", function (e) {
+    var m = local(e); mouse.x = m.x; mouse.y = m.y; cv.focus(); audio();
+    for (var i = buttons.length - 1; i >= 0; i--) { var b = buttons[i]; if (m.x >= b.x && m.x <= b.x + b.w && m.y >= b.y && m.y <= b.y + b.h) { sfx("ui"); b.fn(); afterClick(); return; } }
+    if (screen === "run" && run && !run.over && !paused && !helpOpen && !run.choices && e.button === 2) { var p = toWorld(m.x, m.y); F.dive(run, p.x, p.y); }
+  });
+  // leaving a run's end screen after a first clear: the demo ends, or the whole game is won
+  function afterClick() {
+    if (screen === "roost" && lastSummary) {
+      var s = lastSummary; lastSummary = null;
+      if (DEMO && s.won && !g.sawDemoEnd) { g.sawDemoEnd = true; persist(); screen = "demoend"; return; }
+      if (!DEMO && s.finished) { screen = "won"; return; }
+    }
+  }
+  cv.addEventListener("wheel", function (e) { if (screen === "run" && run && !run.choices) { var order = ["BALL", "RIBBON", "WHEEL"], i = order.indexOf(run.form); F.setForm(run, order[(i + (e.deltaY > 0 ? 1 : 2)) % 3]); e.preventDefault(); } }, { passive: false });
+  window.addEventListener("keydown", function (e) {
+    var k = e.key.toLowerCase(); keys[k] = true;
+    if (screen === "run" && run) {
+      if (run.choices && (k === "1" || k === "2" || k === "3")) { var id = run.choices[+k - 1]; if (id) { F.choose(run, id); sfx("buy"); } return; }
+      if (k === "escape" || k === "p") { if (helpOpen) helpOpen = false; else if (!run.over) paused = !paused; }
+      else if (k === "1") F.setForm(run, "BALL"); else if (k === "2") F.setForm(run, "RIBBON"); else if (k === "3") F.setForm(run, "WHEEL");
+      else if (k === " ") { var p = toWorld(mouse.x, mouse.y); F.dive(run, p.x, p.y); e.preventDefault(); }
+      else if (k === "r" && run.choices) F.reroll(run);
+    } else if (k === "escape") helpOpen = false;
+  });
+  window.addEventListener("keyup", function (e) { keys[e.key.toLowerCase()] = false; });
+  window.addEventListener("blur", function () { keys = {}; if (screen === "run" && run && !run.over) paused = true; });
+
+  // hooks for the screenshot tool and tests
+  window.THOUSANDWING_APP = {
+    edition: ED, game: function () { return g; }, run: function () { return run; }, setGame: function (str) { g = F.load(str); },
+    start: function (ri) { startRun(ri); msg = null; }, screen: function (s) { if (s) screen = s; return screen; }, help: function (v) { helpOpen = v; }, settings: settings,
+    hover: function (x, y) { mouse.x = x; mouse.y = y; }, pause: function (v) { paused = v; }, sim: function (sec, botPlay) { for (var t = 0; t < sec && !run.over; t += 1 / 60) { if (run.choices) { if (botPlay) F.choose(run, BOT.pick(run)); else break; } if (botPlay && Math.round(t * 60) % 12 === 0) BOT.think(run); F.step(run, 1 / 60); run.events.forEach(handle); run.events.length = 0; } cam.x = run.lead.x; cam.y = run.lead.y; },
+    cam: cam, fx: function () { return fx; }, note: function (n) { note = n; }, puff: puff, ring: ring
+  };
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

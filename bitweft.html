@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BITWEFT</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0e0f16; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  #wrap { position: relative; }
+  canvas { display: block; outline: none; }
+  #expr { position: absolute; display: none; box-sizing: border-box; background: #151826; color: #f1e9d6; border: 2px solid #3a3f5c; border-radius: 10px;
+    font-family: ui-monospace, Consolas, "Courier New", monospace; outline: none; padding: 0 16px; caret-color: #e8b84a; }
+  #expr:focus { border-color: #e8b84a; }
+  #expr.bad { border-color: #d8574a; }
+  #expr.done { border-color: #79c98a; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" tabindex="0"></canvas><input id="expr" spellcheck="false" autocomplete="off" autocapitalize="off"></div>
+<script>window.WEFT_EDITION = "demo";</script>
+<script>
+// WEFT: the one-line language of BITWEFT.
+// Values are 32-bit integers. Variables: x (column 0-15), y (row 0-15), t (frame 0-15), i (= y*16 + x).
+// Numbers: whole numbers 0 to 255. Operators, tightest first (as in C and JavaScript):
+//   unary  -  ~  !          * / %          + -          << >>          < >          == !=          &          ^          |
+// Division rounds toward zero; dividing by zero gives 0. Comparisons and ! give 1 or 0.
+// A cell is woven when the value is not 0 (mono patterns), or takes colour (value & 3) (colour patterns).
+(function (root) {
+  "use strict";
+  var BIN = {
+    "*": 9, "/": 9, "%": 9, "+": 8, "-": 8, "<<": 7, ">>": 7, "<": 6, ">": 6, "==": 5, "!=": 5, "&": 4, "^": 3, "|": 2
+  };
+  var UNARY = { "-": 1, "~": 1, "!": 1 };
+  var VARS = ["x", "y", "t", "i"];
+  var MAXNUM = 255;
+
+  // ---------- reading ----------
+  function tokenize(src) {
+    var out = [], i = 0, s = String(src);
+    while (i < s.length) {
+      var c = s[i];
+      if (/\s/.test(c)) { i++; continue; }
+      if (/[0-9]/.test(c)) { var j = i; while (j < s.length && /[0-9]/.test(s[j])) j++; out.push({ k: "num", v: s.slice(i, j), at: i }); i = j; continue; }
+      if (/[a-z]/i.test(c)) { var j2 = i; while (j2 < s.length && /[a-z0-9_]/i.test(s[j2])) j2++; out.push({ k: "name", v: s.slice(i, j2), at: i }); i = j2; continue; }
+      var two = s.substr(i, 2);
+      if (two === "<<" || two === ">>" || two === "==" || two === "!=") { out.push({ k: "op", v: two, at: i }); i += 2; continue; }
+      if ("+-*/%<>&^|~!()".indexOf(c) >= 0) { out.push({ k: c === "(" || c === ")" ? c : "op", v: c, at: i }); i++; continue; }
+      throw { msg: "\"" + c + "\" is not part of WEFT.", at: i };
+    }
+    return out;
+  }
+  // precedence climbing; returns an AST {op, a, b} | {v: name} | {n: number}
+  function parse(src) {
+    var toks = tokenize(src), p = 0;
+    if (!toks.length) throw { msg: "Type an expression.", at: 0 };
+    function peek() { return toks[p]; }
+    function atom() {
+      var t = toks[p];
+      if (!t) throw { msg: "The expression stops too early.", at: String(src).length };
+      if (t.k === "op" && UNARY[t.v]) { p++; return { op: "u" + t.v, a: atom() }; }
+      if (t.k === "num") {
+        p++; var n = parseInt(t.v, 10);
+        if (n > MAXNUM) throw { msg: "Numbers go from 0 to " + MAXNUM + ".", at: t.at };
+        return { n: n };
+      }
+      if (t.k === "name") {
+        p++;
+        if (VARS.indexOf(t.v) < 0) throw { msg: "\"" + t.v + "\" is not a variable. Use x, y, t or i.", at: t.at };
+        return { v: t.v };
+      }
+      if (t.k === "(") {
+        p++; var e = expr(0);
+        if (!toks[p] || toks[p].k !== ")") throw { msg: "A bracket is never closed.", at: t.at };
+        p++; return e;
+      }
+      throw { msg: "\"" + t.v + "\" cannot go here.", at: t.at };
+    }
+    function expr(minPrec) {
+      var left = atom();
+      for (;;) {
+        var t = peek();
+        if (!t || t.k !== "op" || !BIN[t.v] || BIN[t.v] < minPrec) break;
+        var prec = BIN[t.v];
+        p++;
+        var right = expr(prec + 1);
+        left = { op: t.v, a: left, b: right };
+      }
+      return left;
+    }
+    var e = expr(0);
+    if (p < toks.length) throw { msg: "\"" + toks[p].v + "\" cannot go here.", at: toks[p].at };
+    return e;
+  }
+  // characters that count: everything except spaces
+  function length(src) { return String(src).replace(/\s+/g, "").length; }
+
+  // ---------- running ----------
+  // the cells of a pattern: frames x 256, in order (t, y, x)
+  function grid(frames) {
+    var n = 256 * frames, X = new Int32Array(n), Y = new Int32Array(n), T = new Int32Array(n), I = new Int32Array(n);
+    for (var t = 0; t < frames; t++) for (var y = 0; y < 16; y++) for (var x = 0; x < 16; x++) {
+      var k = t * 256 + y * 16 + x; X[k] = x; Y[k] = y; T[k] = t; I[k] = y * 16 + x;
+    }
+    return { n: n, frames: frames, x: X, y: Y, t: T, i: I };
+  }
+  function apply(op, A, B, out) {
+    var n = out.length, k;
+    switch (op) {
+      case "u-": for (k = 0; k < n; k++) out[k] = -A[k] | 0; break;
+      case "u~": for (k = 0; k < n; k++) out[k] = ~A[k]; break;
+      case "u!": for (k = 0; k < n; k++) out[k] = A[k] === 0 ? 1 : 0; break;
+      case "*": for (k = 0; k < n; k++) out[k] = Math.imul(A[k], B[k]); break;
+      case "/": for (k = 0; k < n; k++) out[k] = B[k] === 0 ? 0 : (A[k] / B[k]) | 0; break;
+      case "%": for (k = 0; k < n; k++) out[k] = B[k] === 0 ? 0 : (A[k] % B[k]) | 0; break;
+      case "+": for (k = 0; k < n; k++) out[k] = (A[k] + B[k]) | 0; break;
+      case "-": for (k = 0; k < n; k++) out[k] = (A[k] - B[k]) | 0; break;
+      case "<<": for (k = 0; k < n; k++) out[k] = A[k] << B[k]; break;
+      case ">>": for (k = 0; k < n; k++) out[k] = A[k] >> B[k]; break;
+      case "<": for (k = 0; k < n; k++) out[k] = A[k] < B[k] ? 1 : 0; break;
+      case ">": for (k = 0; k < n; k++) out[k] = A[k] > B[k] ? 1 : 0; break;
+      case "==": for (k = 0; k < n; k++) out[k] = A[k] === B[k] ? 1 : 0; break;
+      case "!=": for (k = 0; k < n; k++) out[k] = A[k] !== B[k] ? 1 : 0; break;
+      case "&": for (k = 0; k < n; k++) out[k] = A[k] & B[k]; break;
+      case "^": for (k = 0; k < n; k++) out[k] = A[k] ^ B[k]; break;
+      case "|": for (k = 0; k < n; k++) out[k] = A[k] | B[k]; break;
+    }
+    return out;
+  }
+  function evalAst(ast, G) {
+    if (ast.n !== undefined) { var c = new Int32Array(G.n); c.fill(ast.n); return c; }
+    if (ast.v) return G[ast.v];
+    var A = evalAst(ast.a, G), B = ast.b ? evalAst(ast.b, G) : null;
+    return apply(ast.op, A, B, new Int32Array(G.n));
+  }
+  // what the loom shows: 0/1 for mono patterns, 0-3 for colour patterns
+  function weave(values, mode) {
+    var out = new Uint8Array(values.length);
+    for (var k = 0; k < values.length; k++) out[k] = mode === "color" ? values[k] & 3 : (values[k] !== 0 ? 1 : 0);
+    return out;
+  }
+  // compile and run: { ok, cells, error: {msg, at}, len }
+  function run(src, frames, mode, G) {
+    G = G || grid(frames);
+    try {
+      var ast = parse(src);
+      return { ok: true, ast: ast, cells: weave(evalAst(ast, G), mode), len: length(src) };
+    } catch (e) {
+      if (e && e.msg) return { ok: false, error: e, len: length(src) };
+      throw e;
+    }
+  }
+
+  // ---------- printing with the fewest brackets ----------
+  function prec(ast) { return ast.n !== undefined || ast.v ? 11 : ast.op.charAt(0) === "u" && ast.op.length === 2 ? 10 : BIN[ast.op]; }
+  function print(ast) {
+    if (ast.n !== undefined) return String(ast.n);
+    if (ast.v) return ast.v;
+    if (ast.op.charAt(0) === "u" && ast.op.length === 2) { var s = print(ast.a); return ast.op.charAt(1) + (prec(ast.a) < 10 ? "(" + s + ")" : s); }
+    var p = BIN[ast.op], l = print(ast.a), r = print(ast.b);
+    if (prec(ast.a) < p) l = "(" + l + ")";
+    if (prec(ast.b) <= p) r = "(" + r + ")";
+    return l + ast.op + r;
+  }
+
+  var API = { BIN: BIN, UNARY: UNARY, VARS: VARS, MAXNUM: MAXNUM, tokenize: tokenize, parse: parse, length: length, grid: grid,
+    apply: apply, evalAst: evalAst, weave: weave, run: run, print: print, prec: prec };
+  if (typeof module !== "undefined" && module.exports) module.exports = API;
+  else root.WEFT = API;
+})(this);
+
+</script>
+<script>
+// The patterns. ref is one expression that weaves the pattern (never shown to the player).
+// The goal shown in the game comes from proofs.json: a proven shortest length, or the best known length
+// together with the length below which nothing works.
+(function (root) {
+  "use strict";
+  var L = [];
+  function add(ch, id, title, ref, o) {
+    o = o || {};
+    L.push({ id: id, ch: ch, title: title, ref: ref, mode: o.color ? "color" : "mono", frames: o.anim ? 16 : 1, text: o.text || "", hint: o.hint || "" });
+  }
+  // ---------------- I. THREADS ----------------
+  add(1, "HALF", "HALF", "x<8", { text: "Weave the left half. x is the column, 0 on the left to 15 on the right. A cell is woven when your expression is not 0.", hint: "Comparisons give 1 or 0." });
+  add(1, "STRIPES", "STRIPES", "x&1", { text: "Every other column.", hint: "& keeps the bits two numbers share. Odd numbers have bit 1 set." });
+  add(1, "BANDS", "BANDS", "y&2", { text: "Bands two rows tall. y is the row, 0 at the top.", hint: "Which bit of y changes every two rows?" });
+  add(1, "DIAGONAL", "DIAGONAL", "x==y", { text: "A single thread from corner to corner.", hint: "Where is the column number the same as the row number?" });
+  add(1, "CHECKER", "CHECKER", "x+y&1", { text: "A checkerboard.", hint: "Moving one cell in any direction changes x+y by one." });
+  add(1, "CORNER", "CORNER", "(x|y)<8", { text: "The top-left quarter.", hint: "Both x and y below 8. There is a way that needs only one comparison." });
+  add(1, "CROSS", "CROSS", "x==7|y==7", { text: "One column and one row.", hint: "| weaves a cell if either side does." });
+  add(1, "FRAME", "FRAME", "x%15*(y%15)<1", { text: "The border.", hint: "x % 15 is 0 only on the left and right edges." });
+  
+
+  var CH = ["", "THREADS", "BITS", "CURVES", "MOTION", "COLOUR"];
+  L.forEach(function (lv, i) { lv.index = i; });
+  var API = { LEVELS: L, CHAPTERS: CH };
+  if (typeof module !== "undefined" && module.exports) module.exports = API;
+  else root.WLEVELS = API;
+})(this);
+
+</script>
+<script>
+// Generated by prove.js.
+var WPROOFS = {"HALF": {"min": 3, "proven": true, "best": "x<8", "refLen": 3}, "STRIPES": {"min": 3, "proven": true, "best": "x%2", "refLen": 3}, "BANDS": {"min": 3, "proven": true, "best": "y&2", "refLen": 3}, "DIAGONAL": {"min": 4, "proven": true, "best": "x==y", "refLen": 4}, "CHECKER": {"min": 5, "proven": true, "best": "1&x+y", "refLen": 5}, "CORNER": {"min": 7, "proven": true, "best": "(x|y)<8", "refLen": 7}, "CROSS": {"min": 9, "proven": false, "nothingUpTo": 7, "best": "x==7|y==7", "refLen": 9}, "FRAME": {"min": 13, "proven": false, "nothingUpTo": 7, "best": "x%15*(y%15)<1", "refLen": 13}};
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var WF = window.WEFT, LV = window.WLEVELS, PROOF = window.WPROOFS || {};
+  var ED = window.WEFT_EDITION || "full", DEMO = ED === "demo";
+  var STORE_URL = "https://kqmigqkqri.itch.io/bitweft";
+  var LEVELS = LV.LEVELS, W = 1200, H = 760;
+  var FONT = "'Segoe UI', system-ui, -apple-system, sans-serif", MONO = "ui-monospace, Consolas, 'Courier New', monospace";
+  var COL = { bg: "#0e0f16", panel: "#151826", panel2: "#1b1f30", line: "#2b3049", text: "#f1e9d6", dim: "#8d90a8", gold: "#e8b84a", ok: "#79c98a", bad: "#d8574a",
+    bare: "#1c2033", bare2: "#20253a", thread: "#efe6d2" };
+  var PAL = ["#1c2033", "#d8574a", "#e8b84a", "#4fb3a6"];
+  var ROMAN = ["", "I", "II", "III", "IV", "V"];
+  var cv = document.getElementById("c"), cx = cv.getContext("2d"), input = document.getElementById("expr"), scale = 1, dpr = 1;
+
+  // ---------------- save ----------------
+  var KEY = DEMO ? "bitweft.demo.v1" : "bitweft.v1";
+  var store = { best: {}, draft: {}, hints: {}, muted: false, sandbox: "x^y^t" };
+  try { var raw = localStorage.getItem(KEY); if (raw) { var o = JSON.parse(raw); for (var k in o) store[k] = o[k]; } } catch (e) {}
+  function persist() { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) {} }
+
+  // ---------------- goals ----------------
+  function goal(lv) {
+    var p = PROOF[lv.id];
+    if (!p) return { len: WF.length(lv.ref), proven: false, floor: 0 };
+    return { len: p.min, proven: p.proven, floor: p.proven ? p.min : (p.nothingUpTo || 0) + 1 };
+  }
+  function stars(lv) {
+    var b = store.best[lv.id]; if (!b) return 0;
+    var g = goal(lv);
+    if (!g.proven && b.len < g.len) return 3;   // shorter than anything we knew of
+    return b.len <= g.len ? 2 : 1;
+  }
+  function solvedCount(ch) { return LEVELS.filter(function (l) { return l.ch === ch && store.best[l.id]; }).length; }
+  function chapterOpen(ch) { return ch === 1 || solvedCount(ch - 1) >= 5; }
+
+  // ---------------- patterns ----------------
+  var grids = { 1: WF.grid(1), 16: WF.grid(16) }, targetCache = {};
+  function target(lv) { if (!targetCache[lv.id]) targetCache[lv.id] = WF.run(lv.ref, lv.frames, lv.mode, grids[lv.frames]).cells; return targetCache[lv.id]; }
+
+  // ---------------- sound ----------------
+  var ac = null;
+  function tone(f, d, type, vol, delay) {
+    if (store.muted) return;
+    try {
+      if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+      if (ac.state === "suspended") ac.resume();
+      var t0 = ac.currentTime + (delay || 0), o = ac.createOscillator(), g = ac.createGain();
+      o.type = type || "triangle"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol || 0.05, t0 + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+      o.connect(g); g.connect(ac.destination); o.start(t0); o.stop(t0 + d + 0.02);
+    } catch (e) {}
+  }
+  function sfxKey(match) { tone(300 + match * 4, 0.04, "triangle", 0.025); }
+  function sfxWin(star) { [523, 659, 784, 1047, star ? 1319 : 0].forEach(function (f, i) { if (f) tone(f, 0.3, "triangle", 0.06, i * 0.07); }); }
+
+  // ---------------- drawing helpers ----------------
+  function rr(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
+  function text(s, x, y, size, col, align, weight, font) { cx.font = (weight || 500) + " " + size + "px " + (font || FONT); cx.fillStyle = col || COL.text; cx.textAlign = align || "left"; cx.textBaseline = "middle"; cx.fillText(s, x, y); }
+  function tw(s, size, weight, font) { cx.font = (weight || 500) + " " + size + "px " + (font || FONT); return cx.measureText(s).width; }
+  function wrap(s, x, y, maxW, size, col, lh) {
+    String(s).split("\n").forEach(function (para) {
+      var words = para.split(" "), line = "";
+      for (var i = 0; i < words.length; i++) { var t = line ? line + " " + words[i] : words[i]; if (tw(t, size) > maxW && line) { text(line, x, y, size, col); line = words[i]; y += lh; } else line = t; }
+      text(line, x, y, size, col); y += lh;
+    });
+    return y;
+  }
+  var buttons = [], hover = { x: -1, y: -1 };
+  function button(x, y, w, h, label, fn, o) {
+    o = o || {};
+    var hot = hover.x >= x && hover.x <= x + w && hover.y >= y && hover.y <= y + h && !o.disabled;
+    rr(x, y, w, h, 8);
+    cx.fillStyle = o.disabled ? "#171a28" : o.primary ? (hot ? "#f0c869" : "#e8b84a") : hot ? "#2a3048" : (o.fill || "#20253a"); cx.fill();
+    cx.strokeStyle = o.primary ? "#f6d98e" : "#363c5a"; cx.lineWidth = 1; cx.stroke();
+    text(label, x + w / 2, y + h / 2 + 1, o.size || 13, o.disabled ? "#4a4e66" : o.primary ? "#1a1406" : COL.text, "center", 700);
+    if (!o.disabled && fn) buttons.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+  // one woven cell: a thread square with a little light and shade
+  function cell(x, y, s, v, color, frameOff) {
+    if (!v) {
+      cx.fillStyle = ((x / s + y / s) | 0) % 2 ? COL.bare : COL.bare2; cx.fillRect(x, y, s, s);
+      return;
+    }
+    var c = color ? PAL[v] : COL.thread;
+    cx.fillStyle = c; cx.fillRect(x + 1, y + 1, s - 2, s - 2);
+    if (s > 8) {
+      cx.fillStyle = "rgba(255,255,255,0.18)"; cx.fillRect(x + 1, y + 1, s - 2, Math.max(1, s * 0.18));
+      cx.fillStyle = "rgba(0,0,0,0.22)"; cx.fillRect(x + 1, y + s - 1 - Math.max(1, s * 0.16), s - 2, Math.max(1, s * 0.16));
+    }
+  }
+  function loom(cells, frame, x0, y0, s, color, wrong) {
+    rr(x0 - 8, y0 - 8, s * 16 + 16, s * 16 + 16, 10); cx.fillStyle = "#0a0b12"; cx.fill();
+    var off = frame * 256;
+    for (var y = 0; y < 16; y++) for (var x = 0; x < 16; x++) {
+      cell(x0 + x * s, y0 + y * s, s, cells ? cells[off + y * 16 + x] : 0, color);
+      if (wrong && wrong[off + y * 16 + x]) { cx.strokeStyle = COL.bad; cx.lineWidth = 2; cx.strokeRect(x0 + x * s + 2, y0 + y * s + 2, s - 4, s - 4); }
+    }
+  }
+
+  // ---------------- play ----------------
+  var screen = "title", cur = null, run = null, wrong = null, match = 0, total = 256, solvedNow = false, frame = 0, ftime = 0, flash = 0, record = null;
+  function openLevel(lv) {
+    cur = lv; screen = "play"; solvedNow = !!store.best[lv.id]; record = null; flash = 0;
+    input.value = store.draft[lv.id] !== undefined ? store.draft[lv.id] : "";
+    evaluate(false);
+    setTimeout(function () { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }, 0);
+  }
+  function evaluate(fromTyping) {
+    var lv = cur;
+    if (!lv) return;
+    var src = input.value, t = target(lv);
+    total = t.length;
+    if (!src.trim()) { run = null; wrong = null; match = 0; input.className = ""; return; }
+    run = WF.run(src, lv.frames, lv.mode, grids[lv.frames]);
+    if (!run.ok) { wrong = null; match = 0; input.className = "bad"; return; }
+    wrong = new Uint8Array(t.length); match = 0;
+    for (var k = 0; k < t.length; k++) { if (run.cells[k] === t[k]) match++; else wrong[k] = 1; }
+    input.className = match === total ? "done" : "";
+    if (match === total) {
+      var len = run.len, prev = store.best[lv.id], g = goal(lv);
+      var better = !prev || len < prev.len;
+      if (better) {
+        store.best[lv.id] = { len: len, expr: src.replace(/\s+/g, "") };
+        persist();
+      }
+      if (fromTyping && (better || !solvedNow)) {
+        solvedNow = true; flash = 1.2;
+        record = { len: len, first: !prev, better: better, atGoal: len <= g.len, beat: !g.proven && len < g.len };
+        sfxWin(len <= g.len);
+      }
+    } else if (fromTyping) sfxKey(match / total * 40);
+  }
+  input.addEventListener("input", function () { if (cur) { store.draft[cur.id] = input.value; persist(); } evaluate(true); });
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && run && run.ok && match === total && screen === "play") { nextLevel(); e.preventDefault(); }
+    if (e.key === "Escape") { screen = "map"; input.blur(); }
+    e.stopPropagation();
+  });
+  function nextLevel() {
+    var nx = LEVELS[cur.index + 1];
+    if (DEMO && !nx) { screen = "demoend"; return; }
+    if (!nx || !chapterOpen(nx.ch)) { screen = "map"; return; }
+    openLevel(nx);
+  }
+
+  function drawPlay(dt) {
+    var lv = cur, color = lv.mode === "color";
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    // top bar
+    cx.fillStyle = COL.panel2; cx.fillRect(0, 0, W, 48);
+    button(10, 9, 84, 30, "◂ LEVELS", function () { screen = "map"; });
+    text(ROMAN[lv.ch] + "  ·  " + lv.title, 112, 24, 18, COL.text, "left", 800);
+    button(W - 168, 9, 74, 30, "HELP", function () { helpFrom = "play"; screen = "help"; });
+    button(W - 86, 9, 76, 30, store.muted ? "SOUND OFF" : "SOUND", function () { store.muted = !store.muted; persist(); }, { size: 11 });
+    // the two looms
+    var s = 22, y0 = 96, xA = 48, xB = 448;
+    if (lv.frames > 1) { ftime += dt; if (ftime > 0.16) { ftime = 0; frame = (frame + 1) % lv.frames; } } else frame = 0;
+    text("PATTERN", xA, 76, 12, COL.dim, "left", 800);
+    loom(target(lv), frame, xA, y0, s, color, null);
+    text("YOUR WEAVE", xB, 76, 12, COL.dim, "left", 800);
+    loom(run && run.ok ? run.cells : null, frame, xB, y0, s, color, run && run.ok && match < total ? wrong : null);
+    if (lv.frames > 1) text("t = " + frame, xB + s * 16, 76, 12, COL.gold, "right", 700, MONO);
+    if (run && run.ok) text(match === total ? "every cell matches" : (total - match) + " cell" + (total - match === 1 ? "" : "s") + " wrong" + (lv.frames > 1 ? " (over all 16 frames)" : ""), xB + s * 16, y0 + s * 16 + 22, 13, match === total ? COL.ok : COL.bad, "right", 700);
+    // the input sits under the looms
+    var iy = y0 + s * 16 + 44;
+    placeInput(48, iy, 752, 56);
+    var len = WF.length(input.value);
+    text(len + " chars", 800, iy + 76, 14, COL.text, "right", 700, MONO);
+    if (run && !run.ok) text(run.error.msg, 48, iy + 76, 14, COL.bad, "left", 600);
+    else if (!input.value.trim()) text("Type an expression using x, y" + (lv.frames > 1 ? ", t" : "") + " and i. It runs as you type.", 48, iy + 76, 14, COL.dim, "left", 600);
+    else if (match === total) text("Woven! Press Enter for the next pattern - or keep shortening it.", 48, iy + 76, 14, COL.ok, "left", 700);
+    // celebration
+    if (flash > 0 && record) {
+      flash -= dt;
+      var a = Math.min(1, flash * 2);
+      cx.globalAlpha = a;
+      rr(xB, y0 + 120, s * 16, 112, 12); cx.fillStyle = "rgba(14,15,22,0.9)"; cx.fill();
+      text(record.beat ? "NEW RECORD" : record.atGoal ? "★ AT THE GOAL" : record.first ? "WOVEN" : "SHORTER", xB + s * 8, y0 + 160, 28, record.atGoal || record.beat ? COL.gold : COL.ok, "center", 900);
+      text(record.len + " characters", xB + s * 8, y0 + 200, 16, COL.text, "center", 700, MONO);
+      cx.globalAlpha = 1;
+    }
+    drawSide(lv);
+  }
+  function drawSide(lv) {
+    var x = 860, y = 70, mw = W - x - 24;
+    cx.fillStyle = COL.panel; cx.fillRect(x - 20, 48, W - x + 20, H - 48);
+    text(LV.CHAPTERS[lv.ch], x, y, 11, COL.dim, "left", 800); y += 20;
+    y = wrap(lv.text, x, y, mw, 14, COL.text, 20) + 8;
+    // goal
+    var g = goal(lv), b = store.best[lv.id];
+    rr(x - 6, y, mw + 12, 92, 8); cx.fillStyle = "#1b2032"; cx.fill();
+    if (g.proven) {
+      text("GOAL  " + g.len + " characters", x + 6, y + 20, 15, COL.gold, "left", 800);
+      wrap("Proven shortest: every expression of " + (g.len - 1) + " characters or fewer was tried. None weaves this.", x + 6, y + 44, mw - 12, 12, COL.dim, 16);
+    } else {
+      text("GOAL  " + g.len + " characters", x + 6, y + 20, 15, COL.gold, "left", 800);
+      wrap("Best we know. Proven: nothing of " + (g.floor - 1) + " characters or fewer works. Beat " + g.len + " for a record.", x + 6, y + 44, mw - 12, 12, COL.dim, 16);
+    }
+    y += 104;
+    if (b) {
+      var st = stars(lv);
+      text("YOUR BEST  " + b.len + (st === 3 ? "   ★ record" : st === 2 ? "   ★" : ""), x, y, 14, st >= 2 ? COL.gold : COL.ok, "left", 800);
+      text(b.expr.length > 34 ? b.expr.slice(0, 33) + "…" : b.expr, x, y + 22, 13, COL.text, "left", 600, MONO);
+      y += 50;
+    }
+    if (lv.hint) {
+      if (store.hints[lv.id]) y = wrap("Hint: " + lv.hint, x, y + 4, mw, 13, "#c9b47a", 18) + 4;
+      else { button(x, y, 90, 28, "HINT", function () { store.hints[lv.id] = 1; persist(); }); y += 40; }
+    }
+    // the language, always at hand
+    var ry = Math.max(y + 10, H - 250);
+    text("WEFT", x, ry, 11, COL.dim, "left", 800); ry += 20;
+    [["x  y", "column, row (0-15)"], ["t", "frame (0-15)"], ["i", "y*16 + x"], ["0-255", "numbers"], ["- ~ !", "minus, flip bits, not"], ["* / %", "times, divide, remainder"], ["+ -", "plus, minus"], ["<< >>", "shift bits"], ["< > == !=", "compare (1 or 0)"], ["& ^ |", "and, xor, or (bits)"]].forEach(function (r) {
+      text(r[0], x, ry, 13, COL.gold, "left", 700, MONO); text(r[1], x + 100, ry, 12, COL.text, "left", 500); ry += 18;
+    });
+    if (store.best[lv.id]) {
+      var nx = LEVELS[lv.index + 1];
+      if (DEMO && !nx) { button(x, H - 56, mw, 40, "CHAPTER I DONE ▸", nextLevel, { primary: true }); return; }
+      if (nx && chapterOpen(nx.ch)) button(x, H - 56, mw, 40, "NEXT: " + nx.title + " ▸", nextLevel, { primary: true });
+    }
+  }
+  function placeInput(x, y, w, h) {
+    input.style.display = "block";
+    input.style.left = (x * scale) + "px"; input.style.top = (y * scale) + "px";
+    input.style.width = (w * scale) + "px"; input.style.height = (h * scale) + "px";
+    input.style.fontSize = (24 * scale) + "px";
+  }
+
+  // ---------------- sandbox ----------------
+  
+
+  // ---------------- map, title, help ----------------
+  function drawMap() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    button(20, 16, 90, 32, "◂ TITLE", function () { screen = "title"; });
+    text("PATTERNS", W / 2, 34, 24, COL.text, "center", 900);
+    
+    var colW = (W - 60) / 5;
+    for (var c = 1; c <= 5; c++) {
+      var x = 30 + (c - 1) * colW, y = 80;
+      var lockedDemo = DEMO && c > 1, open = !lockedDemo && chapterOpen(c);
+      text(ROMAN[c] + ". " + LV.CHAPTERS[c], x + 10, y, 14, open ? COL.gold : "#4a4e66", "left", 800);
+      text(open ? solvedCount(c) + "/8" : lockedDemo ? "FULL GAME" : "solve 5 in " + ROMAN[c - 1], x + colW - 18, y, 11, open ? COL.dim : "#4a4e66", "right", 700);
+      y += 20;
+      if (lockedDemo) {
+        rr(x + 6, y, colW - 20, 150, 8); cx.fillStyle = "#14172a"; cx.fill();
+        wrap(c === 2 ? "Bits: triangles, tiles, lattices, interference." : c === 3 ? "Curves: circles, parabolas, lace, a ribbon." : c === 4 ? "Motion: t brings frames - scans, sweeps, ripples." : "Colour: four threads, tartans, quilts, feathers.", x + 18, y + 24, colW - 44, 12, COL.dim, 17);
+        continue;
+      }
+      LEVELS.filter(function (l) { return l.ch === c; }).forEach(function (lv, k) {
+        var tx = x + 6 + (k % 2) * ((colW - 20) / 2 + 4), ty = y + Math.floor(k / 2) * 154, tw2 = (colW - 28) / 2;
+        var hot = open && hover.x >= tx && hover.x <= tx + tw2 && hover.y >= ty && hover.y <= ty + 146;
+        rr(tx, ty, tw2, 146, 8); cx.fillStyle = hot ? "#252b45" : "#181c2e"; cx.fill();
+        cx.strokeStyle = store.best[lv.id] ? "#4a7a55" : "#2b3049"; cx.lineWidth = 1; cx.stroke();
+        var cs = Math.floor((tw2 - 16) / 16), lx = tx + (tw2 - cs * 16) / 2;
+        if (open) { var t = target(lv), f = lv.frames > 1 ? Math.floor(performance.now() / 160) % 16 : 0; for (var yy = 0; yy < 16; yy++) for (var xx = 0; xx < 16; xx++) cell(lx + xx * cs, ty + 8 + yy * cs, cs, t[f * 256 + yy * 16 + xx], lv.mode === "color"); }
+        else { cx.fillStyle = "#121524"; cx.fillRect(lx, ty + 8, cs * 16, cs * 16); }
+        text(lv.title, tx + tw2 / 2, ty + 8 + cs * 16 + 14, 11, open ? COL.text : "#4a4e66", "center", 800);
+        var b = store.best[lv.id], g = goal(lv), st = stars(lv);
+        text(b ? (st >= 2 ? "★ " : "") + b.len + " / " + g.len : "goal " + g.len, tx + tw2 / 2, ty + 8 + cs * 16 + 30, 11, st >= 2 ? COL.gold : b ? COL.ok : COL.dim, "center", 700, MONO);
+        if (open) buttons.push({ x: tx, y: ty, w: tw2, h: 146, fn: (function (l) { return function () { openLevel(l); }; })(lv) });
+      });
+    }
+    text("Numbers: your shortest / the goal.  ★ = at the goal.", W / 2, H - 20, 12, COL.dim, "center", 600);
+    button(W / 2 - 140, H - 74, 280, 40, "GET THE FULL GAME", function () { window.open(STORE_URL, "_blank"); }, { primary: true });
+  }
+  var titleT = 0;
+  function drawTitle(dt) {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    titleT += dt;
+    var f = Math.floor(titleT * 6) % 16, s = 12, cols = Math.ceil(W / s), rows = Math.ceil(H / s);
+    for (var y = 0; y < rows; y++) for (var x = 0; x < cols; x++) {
+      var v = ((x ^ y ^ f) & 3), dim = 0.18;
+      if (!v) continue;
+      cx.globalAlpha = dim; cx.fillStyle = PAL[v]; cx.fillRect(x * s + 1, y * s + 1, s - 2, s - 2);
+    }
+    cx.globalAlpha = 1;
+    rr(W / 2 - 330, 170, 660, 330, 18); cx.fillStyle = "rgba(14,15,22,0.92)"; cx.fill();
+    text("BITWEFT", W / 2, 250, 72, COL.text, "center", 900);
+    text("Weave the pattern in one line of code. Then make it shorter.", W / 2, 306, 18, COL.gold, "center", 600);
+    text("x^y^t", W / 2, 346, 20, COL.dim, "center", 700, MONO);
+    var solved = LEVELS.filter(function (l) { return store.best[l.id]; }).length;
+    var next = LEVELS.filter(function (l) { return !store.best[l.id] && chapterOpen(l.ch); })[0];
+    button(W / 2 - 150, 384, 300, 48, solved ? "CONTINUE" : "START", function () { if (next) openLevel(next); else screen = "map"; }, { primary: true, size: 16 });
+    button(W / 2 - 150, 442, 145, 40, "PATTERNS", function () { screen = "map"; });
+    button(W / 2 + 5, 442, 145, 40, "HOW TO PLAY", function () { helpFrom = "title"; screen = "help"; });
+    text(solved + " / " + LEVELS.length + " woven", W / 2, 530, 13, COL.dim, "center", 600);
+    text("FREE DEMO · CHAPTER I", W / 2, 556, 13, COL.gold, "center", 700);
+  }
+  var helpFrom = "title";
+  function drawHelp() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    text("HOW TO PLAY", W / 2, 44, 24, COL.text, "center", 900);
+    var x = 110, y = 96;
+    [["The idea", "Each puzzle shows a 16 x 16 pattern. Write one expression that weaves it. The expression runs once for every cell, with x = column (0-15, left to right) and y = row (0-15, top to bottom)."],
+     ["Woven or bare", "A cell is woven when the value is not 0. In the colour chapter, the value's lowest two bits pick the colour: 0 bare, 1 red, 2 gold, 3 teal."],
+     ["Moving patterns", "Some patterns move. t is the frame number, 0 to 15. Your expression must match every frame."],
+     ["Shorter is better", "Spaces are free; every other character counts. Each pattern has a goal length. Most goals are proven: a program tried every shorter expression and none works. Where a goal is only the best we know, beating it sets a record."],
+     ["The language", "Whole numbers 0 to 255. Operators, tightest first: unary - ~ !, then * / %, then + -, then << >>, then < >, then == !=, then &, then ^, then |. Brackets as usual. Comparisons give 1 or 0. Division rounds toward zero; dividing by 0 gives 0. Values are 32-bit integers."],
+     ["Progress", "Every chapter has eight patterns. Weave five to open the next chapter. Your best for each is saved in this browser."]].forEach(function (r) {
+      text(r[0], x, y + 9, 15, COL.gold, "left", 800); y = wrap(r[1], x + 170, y + 9, W - x - 290, 14, COL.text, 21) + 12;
+    });
+    button(W / 2 - 100, H - 70, 200, 42, "BACK", function () { if (helpFrom === "play" && cur) { screen = "play"; setTimeout(function () { input.focus(); }, 0); } else screen = "title"; });
+  }
+  
+  function drawDemoEnd() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    text("CHAPTER I WOVEN", W / 2, 130, 40, COL.gold, "center", 900);
+    var st = LEVELS.filter(function (l) { return stars(l) >= 2; }).length;
+    text(st + " of 8 at the goal length.", W / 2, 178, 17, COL.text, "center", 600);
+    var y = 250;
+    ["The full game has 40 patterns in five chapters:", "II   Bits - triangles, tiles, lattices, interference", "III  Curves - circles, parabolas, lace, a ribbon",
+     "IV   Motion - t brings frames: scans, sweeps, ripples", "V    Colour - four threads: tartans, quilts, feathers", "plus the FREE LOOM, to weave anything you like"].forEach(function (s, i) {
+      text(s, i ? 330 : W / 2, y, i ? 15 : 16, i ? COL.text : COL.gold, i ? "left" : "center", i ? 600 : 800, i ? MONO : FONT); y += i ? 30 : 42;
+    });
+    button(W / 2 - 160, y + 26, 320, 54, "GET THE FULL GAME", function () { window.open(STORE_URL, "_blank"); }, { primary: true, size: 17 });
+    button(W / 2 - 120, y + 96, 240, 40, "PATTERNS", function () { screen = "map"; });
+  }
+  
+
+  // ---------------- loop ----------------
+  var last = 0;
+  function frameLoop(ts) {
+    var dt = Math.min(0.05, (ts - last) / 1000 || 0); last = ts;
+    cx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+    buttons = [];
+    if (screen !== "play" && screen !== "sandbox") input.style.display = "none";
+    if (screen === "title") drawTitle(dt);
+    else if (screen === "map") drawMap();
+    else if (screen === "help") drawHelp();
+    else if (screen === "play") drawPlay(dt);
+    
+    else if (screen === "demoend") drawDemoEnd();
+    requestAnimationFrame(frameLoop);
+  }
+  function resize() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H); dpr = window.devicePixelRatio || 1;
+    cv.style.width = Math.floor(W * scale) + "px"; cv.style.height = Math.floor(H * scale) + "px";
+    cv.width = Math.floor(W * scale * dpr); cv.height = Math.floor(H * scale * dpr);
+    var wrapEl = document.getElementById("wrap"); wrapEl.style.width = cv.style.width; wrapEl.style.height = cv.style.height;
+  }
+  window.addEventListener("resize", resize); resize();
+  function local(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+  cv.addEventListener("mousemove", function (e) { hover = local(e); });
+  cv.addEventListener("mouseleave", function () { hover = { x: -1, y: -1 }; });
+  cv.addEventListener("click", function (e) {
+    var m = local(e);
+    for (var i = buttons.length - 1; i >= 0; i--) { var b = buttons[i]; if (m.x >= b.x && m.x <= b.x + b.w && m.y >= b.y && m.y <= b.y + b.h) { b.fn(); return; } }
+    if (screen === "play" || screen === "sandbox") input.focus();
+  });
+  window.addEventListener("keydown", function (e) {
+    if (screen === "title" && (e.key === "Enter" || e.key === " ")) { var next = LEVELS.filter(function (l) { return !store.best[l.id] && chapterOpen(l.ch); })[0]; if (next) openLevel(next); else screen = "map"; }
+    else if (screen === "map" && e.key === "Escape") screen = "title";
+    else if (screen === "help" && (e.key === "Escape" || e.key === "Enter")) { screen = helpFrom === "play" && cur ? "play" : "title"; }
+  });
+  input.addEventListener("input", function () { if (screen === "sandbox") { store.sandbox = input.value; persist(); } });
+
+  window.WEFT_APP = {
+    state: function () { return { screen: screen, cur: cur, match: match, total: total, store: store, run: run }; },
+    open: function (id) { var lv = LEVELS.filter(function (l) { return l.id === id; })[0]; if (lv) openLevel(lv); },
+    type: function (s) { input.value = s; input.dispatchEvent(new Event("input")); return { match: match, total: total, ok: run && run.ok }; },
+    screen: function (s) { screen = s; }, next: nextLevel
+  };
+  requestAnimationFrame(frameLoop);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1082 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TINCTORY</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1d1813; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; outline: none; }
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0"></canvas>
+<script>window.TINCTORY_EDITION = "demo";</script>
+<script>
+// paint.js — TINCTORY: a paint is a ratio of five pigments. Mixing two paints 1:1 averages them.
+// A paint is stored as five whole parts out of 256 (so eight mixes deep is exact).
+(function (root) {
+  "use strict";
+  var D = 256;
+  var PIG = [
+    { key: "R", name: "Red", rgb: [214, 40, 40] },
+    { key: "Y", name: "Yellow", rgb: [250, 205, 30] },
+    { key: "B", name: "Blue", rgb: [30, 80, 200] },
+    { key: "W", name: "White", rgb: [250, 248, 240] },
+    { key: "K", name: "Black", rgb: [28, 26, 30] }
+  ];
+  function primary(i) { var p = [0, 0, 0, 0, 0]; p[i] = D; return p; }
+  // from parts like {R:3, Y:1} to the stored form
+  function ratio(parts) {
+    var v = PIG.map(function (p) { return parts[p.key] || 0; }), s = v.reduce(function (a, b) { return a + b; }, 0);
+    var out = v.map(function (x) { return x * D / s; });
+    if (out.some(function (x) { return x % 1; })) throw new Error("ratio is not a mix of halves: " + JSON.stringify(parts));
+    return out;
+  }
+  function mix(a, b) {
+    var out = [], odd = false;
+    for (var i = 0; i < 5; i++) { var s = a[i] + b[i]; if (s % 2) odd = true; out.push(s >> 1); }
+    if (odd) { // deeper than the paint can hold: keep the total exact
+      var tot = out.reduce(function (x, y) { return x + y; }, 0), i2 = out.indexOf(Math.max.apply(null, out));
+      out[i2] += D - tot;
+    }
+    return out;
+  }
+  function key(c) { return c.join(","); }
+  function same(a, b) { for (var i = 0; i < 5; i++) if (a[i] !== b[i]) return false; return true; }
+  // how many halvings deep the ratio is (a primary is 0, 1:1 is 1, 3:1 is 2 ...)
+  function depth(c) {
+    var d = 0;
+    for (var i = 0; i < 5; i++) { if (!c[i]) continue; var x = c[i], k = 8; while (x % 2 === 0 && k > 0) { x /= 2; k--; } d = Math.max(d, k); }
+    return d;
+  }
+  function pigments(c) { var n = 0; for (var i = 0; i < 5; i++) if (c[i]) n++; return n; }
+  // sale price of one unit: richer, finer mixes are worth more
+  function value(c) { return pigments(c) * Math.pow(2, depth(c)); }
+  function parts(c) {
+    var g = 0;
+    function gcd(a, b) { return b ? gcd(b, a % b) : a; }
+    c.forEach(function (x) { if (x) g = g ? gcd(g, x) : x; });
+    var out = [];
+    c.forEach(function (x, i) { if (x) out.push((x / g) + " " + PIG[i].name); });
+    return out.join(" : ");
+  }
+  function short(c) {
+    var g = 0;
+    function gcd(a, b) { return b ? gcd(b, a % b) : a; }
+    c.forEach(function (x) { if (x) g = g ? gcd(g, x) : x; });
+    var out = "";
+    c.forEach(function (x, i) { if (x) out += (x / g > 1 ? x / g : "") + PIG[i].key; });
+    return out;
+  }
+
+  // what the paint looks like: red-yellow-blue as a painter's wheel, then white and black stirred in
+  function ryb2rgb(r, y, b) {
+    // trilinear interpolation over the RYB cube (after Gossett and Chen)
+    var C = [[1, 1, 1], [1, 1, 0], [1, 0, 0], [1, 0.5, 0], [0.163, 0.373, 0.6], [0.0, 0.66, 0.2], [0.5, 0, 0.5], [0.2, 0.094, 0]];
+    function lerp(a, b, t) { return a + (b - a) * t; }
+    var out = [];
+    for (var k = 0; k < 3; k++) {
+      var c000 = C[0][k], c001 = C[4][k], c010 = C[1][k], c011 = C[5][k], c100 = C[2][k], c101 = C[6][k], c110 = C[3][k], c111 = C[7][k];
+      var x0 = lerp(lerp(c000, c001, b), lerp(c010, c011, b), y), x1 = lerp(lerp(c100, c101, b), lerp(c110, c111, b), y);
+      out.push(lerp(x0, x1, r));
+    }
+    return out;
+  }
+  var rgbCache = {};
+  function rgb(c) {
+    var k0 = key(c);
+    if (rgbCache[k0]) return rgbCache[k0];
+    var r = c[0] / D, y = c[1] / D, b = c[2] / D, w = c[3] / D, k = c[4] / D, hue = r + y + b, col;
+    if (hue > 0) {
+      var m = Math.max(r, y, b), base = ryb2rgb(r / m, y / m, b / m);
+      // a pure pigment should look like the pigment
+      col = base.map(function (v) { return v * 255; });
+      if (pigments([c[0], c[1], c[2], 0, 0]) === 1) col = PIG[c[0] ? 0 : c[1] ? 1 : 2].rgb.slice();
+    } else col = [128, 128, 128];
+    var white = [250, 248, 240], black = [28, 26, 30], kw = k * 2.2;   // black is strong: it darkens more than its share
+    var out = col.map(function (v, i) { return (v * hue + white[i] * w + black[i] * kw) / (hue + w + kw); });
+    rgbCache[k0] = out.map(function (v) { return Math.round(Math.max(0, Math.min(255, v))); });
+    return rgbCache[k0];
+  }
+  function css(c) { var v = rgb(c); return "rgb(" + v[0] + "," + v[1] + "," + v[2] + ")"; }
+
+  var api = { D: D, PIG: PIG, primary: primary, ratio: ratio, mix: mix, key: key, same: same, depth: depth, pigments: pigments, value: value, parts: parts, short: short, rgb: rgb, css: css };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.PAINT = api;
+})(this);
+
+</script>
+<script>
+// content.js — TINCTORY: the map, the buildings, the commissions, the research.
+(function (root) {
+  "use strict";
+  var P = typeof module !== "undefined" && module.exports ? require("./paint.js") : root.PAINT;
+  var MW = 40, MH = 24, PW = 10, PH = 8;   // map and plot sizes in tiles
+
+  // wells: pigment index at a tile. Plots are 10x8; the middle two are yours from the start.
+  var WELLS = [
+    { x: 12, y: 10, p: 0 }, { x: 13, y: 14, p: 1 }, { x: 27, y: 10, p: 2 },              // start: red, yellow, blue
+    { x: 3, y: 11, p: 0 }, { x: 6, y: 13, p: 1 },                                          // west
+    { x: 33, y: 13, p: 2 }, { x: 36, y: 10, p: 0 },                                        // east
+    { x: 14, y: 3, p: 3 }, { x: 25, y: 5, p: 1 },                                          // north middle: white
+    { x: 24, y: 19, p: 4 }, { x: 16, y: 20, p: 2 },                                        // south middle: black
+    { x: 4, y: 3, p: 3 }, { x: 35, y: 4, p: 4 }, { x: 5, y: 20, p: 1 }, { x: 34, y: 19, p: 0 },  // corners
+    { x: 8, y: 6, p: 2 }, { x: 31, y: 17, p: 3 }
+  ];
+  var HUB = { x: 19, y: 11, w: 3, h: 3 };
+  // plots: column 0..3, row 0..2. price, and the commission tier that opens them for sale
+  var PLOTS = [
+    { c: 1, r: 1, price: 0 }, { c: 2, r: 1, price: 0 },
+    { c: 0, r: 1, price: 150, tier: 1 }, { c: 3, r: 1, price: 400, tier: 1 },
+    { c: 1, r: 0, price: 900, tier: 2 }, { c: 2, r: 2, price: 900, tier: 2 },
+    { c: 2, r: 0, price: 3000, tier: 3 }, { c: 1, r: 2, price: 3000, tier: 3 },
+    { c: 0, r: 0, price: 12000, tier: 4 }, { c: 3, r: 2, price: 12000, tier: 4 },
+    { c: 3, r: 0, price: 40000, tier: 5 }, { c: 0, r: 2, price: 40000, tier: 5 }
+  ];
+
+  // buildings: cost, the tier they unlock at
+  var BUILD = {
+    belt: { name: "Belt", cost: 2, tier: 0, key: "1", desc: "Carries paint one way. Drag to lay a line." },
+    pump: { name: "Pump", cost: 25, tier: 0, key: "2", desc: "Sits on a well and pumps its pigment out the front." },
+    mixer: { name: "Mixer", cost: 60, tier: 1, key: "3", desc: "Takes one paint from its left and one from its right, mixes them 1:1, and sends two out the front." },
+    splitter: { name: "Splitter", cost: 30, tier: 2, key: "4", desc: "Takes paint from behind and sends it left and right in turn." },
+    merger: { name: "Merger", cost: 30, tier: 2, key: "5", desc: "Takes paint from behind, left and right; sends it all out the front." },
+    bridge: { name: "Bridge", cost: 20, tier: 3, key: "6", desc: "Lets two lines cross: paint goes straight through, either way." },
+    drain: { name: "Drain", cost: 10, tier: 2, key: "7", desc: "Pours away any paint it is given." }
+  };
+  var BUILD_ORDER = ["belt", "pump", "mixer", "splitter", "merger", "bridge", "drain"];
+
+  // commissions: each tier is a set of orders; finishing a tier pays out and opens the next
+  function o(id, name, parts, need) { return { id: id, name: name, color: P.ratio(parts), need: need }; }
+  var TIERS = [
+    { name: "First Pours", reward: 60, desc: "Pump pigment to the hub.", orders: [o("RED", "Red", { R: 1 }, 20), o("YELLOW", "Yellow", { Y: 1 }, 20), o("BLUE", "Blue", { B: 1 }, 20)] },
+    { name: "Secondaries", reward: 300, desc: "Mixers blend two paints 1:1.", orders: [o("ORANGE", "Orange", { R: 1, Y: 1 }, 40), o("GREEN", "Green", { Y: 1, B: 1 }, 40), o("VIOLET", "Violet", { R: 1, B: 1 }, 40)] },
+    { name: "Light and Dark", reward: 1500, desc: "White to lighten, black to darken. Buy land to reach their wells.", orders: [o("PINK", "Pink", { R: 1, W: 1 }, 60), o("SKY", "Sky", { B: 1, W: 1 }, 60), o("MAROON", "Maroon", { R: 1, K: 1 }, 60), o("NAVY", "Navy", { B: 1, K: 1 }, 60)] },
+    
+  ];
+  var ORDERS = [];
+  TIERS.forEach(function (t, i) { t.orders.forEach(function (x) { x.tier = i; ORDERS.push(x); }); });
+
+  // research: levels, cost of level 1 and growth per level
+  var RESEARCH = [
+    { id: "PUMP", name: "Stronger Pumps", desc: "Pumps work 35% faster.", max: 12, base: 150, grow: 2.4, tier: 1 },
+    { id: "BELT", name: "Faster Belts", desc: "Belts run 30% faster.", max: 8, base: 200, grow: 2.6, tier: 1 },
+    { id: "MIXER", name: "Quick Mixers", desc: "Mixers work 35% faster.", max: 12, base: 400, grow: 2.4, tier: 2 },
+    { id: "PRICE", name: "Better Buyers", desc: "Paint sells for 25% more.", max: 15, base: 300, grow: 2.2, tier: 1 },
+    { id: "ORDERS", name: "Commission Fees", desc: "Paint that fills an order pays 50% more.", max: 8, base: 1200, grow: 2.8, tier: 2 },
+    { id: "IDLE", name: "Night Shift", desc: "Earn 10% more of your income while away (starts at 20%).", max: 6, base: 2000, grow: 2.5, tier: 3 },
+    { id: "LAND", name: "Surveyor", desc: "Land costs 15% less.", max: 3, base: 1500, grow: 3, tier: 2 }
+  ];
+  var RES = {}; RESEARCH.forEach(function (r) { RES[r.id] = r; });
+
+  var api = { MW: MW, MH: MH, PW: PW, PH: PH, WELLS: WELLS, HUB: HUB, PLOTS: PLOTS, BUILD: BUILD, BUILD_ORDER: BUILD_ORDER, TIERS: TIERS, ORDERS: ORDERS, RESEARCH: RESEARCH, RES: RES };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.CONTENT = api;
+})(this);
+
+</script>
+<script>
+// sim.js — TINCTORY: the factory floor. Tiles, belts, pumps, mixers, splitters, mergers, bridges, drains, the hub;
+// money, commissions, research, land, saving and earnings while away. Pure logic: the page, the tests and the
+// balance runs all use it.
+(function (root) {
+  "use strict";
+  var node = typeof module !== "undefined" && module.exports;
+  var P = node ? require("./paint.js") : root.PAINT, C = node ? require("./content.js") : root.CONTENT;
+  var DX = [1, 0, -1, 0], DY = [0, 1, 0, -1];      // 0 east, 1 south, 2 west, 3 north
+  function opp(d) { return (d + 2) & 3; }
+
+  // --- a new factory (sandbox: any size, no land, pumps anywhere with a chosen pigment) ---
+  function newGame(opts) {
+    opts = opts || {};
+    var W = opts.w || C.MW, H = opts.h || C.MH;
+    var g = { v: 1, w: W, h: H, sandbox: !!opts.sandbox, demo: !!opts.demo, cells: new Array(W * H), wells: {}, money: opts.money === undefined ? 80 : opts.money,
+      tier: 0, delivered: {}, res: {}, plots: {}, time: 0, earned: 0, rate: 0, rateLog: [], stats: { sold: 0, made: 0, mixes: 0 }, events: [], done: false, hub: null };
+    for (var i = 0; i < W * H; i++) g.cells[i] = null;
+    if (!g.sandbox) {
+      C.WELLS.forEach(function (w) { g.wells[w.y * W + w.x] = w.p; });
+      C.PLOTS.forEach(function (p) { if (!p.price) g.plots[p.c + "," + p.r] = 1; });
+      placeHub(g, C.HUB.x, C.HUB.y);
+    }
+    return g;
+  }
+  function placeHub(g, x, y) {
+    g.hub = { x: x, y: y, w: 3, h: 3 };
+    for (var j = 0; j < 3; j++) for (var i = 0; i < 3; i++) g.cells[(y + j) * g.w + x + i] = { t: "hub", d: 0 };
+  }
+  function at(g, x, y) { return x < 0 || y < 0 || x >= g.w || y >= g.h ? undefined : g.cells[y * g.w + x]; }
+  function inBounds(g, x, y) { return x >= 0 && y >= 0 && x < g.w && y < g.h; }
+  function owned(g, x, y) {
+    if (g.sandbox) return inBounds(g, x, y);
+    if (!inBounds(g, x, y)) return false;
+    return !!g.plots[Math.floor(x / C.PW) + "," + Math.floor(y / C.PH)];
+  }
+  function well(g, x, y) { var w = g.wells[y * g.w + x]; return w === undefined ? -1 : w; }
+  function unlocked(g, type) { return g.sandbox || (C.BUILD[type].tier <= g.tier && (!g.demo || C.BUILD[type].tier <= 2)); }
+
+  // --- building ---
+  function canPlace(g, type, x, y) {
+    if (!owned(g, x, y)) return "you don't own this land";
+    var c = at(g, x, y);
+    if (c && c.t === "hub") return "the hub is here";
+    if (!unlocked(g, type)) return "not unlocked yet";
+    if (type === "pump" && well(g, x, y) < 0 && !g.sandbox) return "pumps go on wells";
+    if (type !== "pump" && well(g, x, y) >= 0 && !g.sandbox) return "keep wells for pumps";
+    return null;
+  }
+  function cost(g, type) { return g.sandbox ? 0 : C.BUILD[type].cost; }
+  function place(g, type, x, y, d, pig) {
+    var why = canPlace(g, type, x, y);
+    if (why) return why;
+    var old = at(g, x, y), refund = old ? cost(g, old.t) : 0;
+    if (old && old.t === type && old.d === d) return "already there";
+    if (g.money + refund < cost(g, type)) return "not enough money";
+    g.money += refund - cost(g, type);
+    var c = { t: type, d: d & 3 };
+    if (type === "pump") { c.p = g.sandbox ? (pig || 0) : well(g, x, y); c.timer = 0; c.out = null; }
+    if (type === "mixer") { c.a = null; c.b = null; c.out = []; c.timer = 0; }
+    if (type === "splitter") { c.item = null; c.turn = 0; }
+    if (type === "merger") { c.item = null; }
+    if (type === "bridge") { c.h = null; c.v = null; }
+    if (type === "belt") { c.item = null; }
+    g.cells[y * g.w + x] = c;
+    return null;
+  }
+  function remove(g, x, y) {
+    var c = at(g, x, y);
+    if (!c || c.t === "hub") return false;
+    g.money += cost(g, c.t);
+    g.cells[y * g.w + x] = null;
+    return true;
+  }
+  function rotate(g, x, y) { var c = at(g, x, y); if (!c || c.t === "hub") return false; c.d = (c.d + 1) & 3; return true; }
+
+  // --- research and land ---
+  function lv(g, id) { return g.res[id] || 0; }
+  function resCost(g, id) { var r = C.RES[id], l = lv(g, id); return l >= r.max ? Infinity : Math.round(r.base * Math.pow(r.grow, l)); }
+  function canResearch(g, id) { var r = C.RES[id]; return (g.sandbox || g.tier >= r.tier) && lv(g, id) < r.max && g.money >= resCost(g, id); }
+  function research(g, id) { if (!canResearch(g, id)) return false; g.money -= resCost(g, id); g.res[id] = lv(g, id) + 1; return true; }
+  function rates(g) {
+    return { pump: 1.4 / Math.pow(1.35, lv(g, "PUMP")), belt: 2.2 * (1 + 0.3 * lv(g, "BELT")), mixer: 1.6 / Math.pow(1.35, lv(g, "MIXER")),
+      price: 1 + 0.25 * lv(g, "PRICE"), order: 2 * (1 + 0.5 * lv(g, "ORDERS")), idle: 0.2 + 0.1 * lv(g, "IDLE"), land: Math.pow(0.85, lv(g, "LAND")) };
+  }
+  function plotPrice(g, p) { return Math.round(p.price * rates(g).land); }
+  function plotOpen(g, p) { return !g.plots[p.c + "," + p.r] && g.tier >= (p.tier || 0) && (!g.demo || (p.tier || 0) <= 2); }
+  function buyPlot(g, c, r) {
+    var p = C.PLOTS.filter(function (q) { return q.c === c && q.r === r; })[0];
+    if (!p || !plotOpen(g, p) || g.money < plotPrice(g, p)) return false;
+    g.money -= plotPrice(g, p); g.plots[c + "," + r] = 1;
+    return true;
+  }
+
+  // --- orders ---
+  function tierDef(g) { return C.TIERS[g.tier]; }
+  function openOrders(g) { var t = tierDef(g); return t ? t.orders.filter(function (o) { return (g.delivered[o.id] || 0) < o.need; }) : []; }
+  function tierDone(g) { var t = tierDef(g); return t && t.orders.every(function (o) { return (g.delivered[o.id] || 0) >= o.need; }); }
+  function sell(g, c) {
+    var r = rates(g), v = P.value(c) * r.price, hit = null;
+    var t = tierDef(g);
+    if (t) t.orders.forEach(function (o) { if (!hit && P.same(o.color, c) && (g.delivered[o.id] || 0) < o.need) hit = o; });
+    if (hit) { g.delivered[hit.id] = (g.delivered[hit.id] || 0) + 1; v *= r.order; }
+    g.money += v; g.earned += v; g.stats.sold++;
+    g.events.push({ e: "sold", c: c, v: v, order: hit ? hit.id : null });
+    if (hit && tierDone(g)) {
+      var reward = t.reward;
+      g.money += reward; g.earned += reward;
+      g.events.push({ e: "tier", tier: g.tier, reward: reward });
+      g.tier++;
+      if (g.tier >= C.TIERS.length) { g.done = true; g.events.push({ e: "done" }); }
+    }
+  }
+
+  // --- moving paint ---
+  // can the building at (x, y) take this paint arriving from direction `from` (the side it comes in on)?
+  function accept(g, x, y, from, item, commit) {
+    var c = at(g, x, y);
+    if (!c) return false;
+    switch (c.t) {
+      case "belt":
+        if (c.item || from === c.d) return false;
+        if (commit) c.item = { c: item, p: 0, from: from, moved: true };
+        return true;
+      case "mixer":
+        var right = (c.d + 1) & 3, left = (c.d + 3) & 3;
+        if (from === right && !c.a) { if (commit) c.a = item; return true; }
+        if (from === left && !c.b) { if (commit) c.b = item; return true; }
+        return false;
+      case "splitter":
+        if (from !== opp(c.d) || c.item) return false;
+        if (commit) { c.item = item; c.fresh = true; }
+        return true;
+      case "merger":
+        if (from === c.d || c.item) return false;
+        if (commit) { c.item = item; c.fresh = true; }
+        return true;
+      case "bridge":
+        var lane = from & 1 ? "v" : "h";
+        if (c[lane]) return false;
+        if (commit) c[lane] = { c: item, dir: opp(from), p: 0 };
+        return true;
+      case "drain":
+        if (commit) g.events.push({ e: "drained", x: x, y: y });
+        return true;
+      case "hub":
+        if (commit) sell(g, item);
+        return true;
+    }
+    return false;
+  }
+  // hand a paint from (x, y) out towards direction d
+  function push(g, x, y, d, item) {
+    var nx = x + DX[d], ny = y + DY[d];
+    if (!accept(g, nx, ny, opp(d), item, false)) return false;
+    accept(g, nx, ny, opp(d), item, true);
+    return true;
+  }
+
+  function step(g, dt) {
+    var r = rates(g), W = g.w, H = g.h;
+    g.time += dt;
+    if (!g.sandbox && g.money < C.BUILD.pump.cost + 10 && !g.cells.some(function (c) { return c && c.t === "pump"; })) { g.money = C.BUILD.pump.cost + 10; g.events.push({ e: "grant" }); }
+    for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) {
+      var c = g.cells[y * W + x];
+      if (!c) continue;
+      switch (c.t) {
+        case "belt":
+          if (!c.item) break;
+          if (c.item.p < 1) c.item.p = Math.min(1, c.item.p + r.belt * dt);
+          if (c.item.p >= 1 && !c.item.moved && push(g, x, y, c.d, c.item.c)) c.item = null;
+          break;
+        case "pump":
+          if (c.out) { if (push(g, x, y, c.d, c.out)) c.out = null; else break; }
+          c.timer += dt;
+          if (c.timer >= r.pump) { c.timer = 0; c.out = P.primary(c.p); g.stats.made++; if (push(g, x, y, c.d, c.out)) c.out = null; }
+          break;
+        case "mixer":
+          if (c.out.length) { if (push(g, x, y, c.d, c.out[0])) c.out.shift(); break; }
+          if (c.a && c.b) {
+            c.timer += dt;
+            if (c.timer >= r.mixer) { var m = P.mix(c.a, c.b); c.out = [m, m]; c.a = c.b = null; c.timer = 0; g.stats.mixes++; g.events.push({ e: "mixed", x: x, y: y, c: m }); }
+          }
+          break;
+        case "splitter":
+          if (!c.item || c.fresh) break;
+          var sides = [(c.d + 3) & 3, (c.d + 1) & 3];
+          for (var k = 0; k < 2; k++) { var sd = sides[(c.turn + k) % 2]; if (push(g, x, y, sd, c.item)) { c.item = null; c.turn = (c.turn + k + 1) % 2; break; } }
+          break;
+        case "merger":
+          if (c.item && !c.fresh && push(g, x, y, c.d, c.item)) c.item = null;
+          break;
+        case "bridge":
+          ["h", "v"].forEach(function (lane) {
+            var it = c[lane];
+            if (!it) return;
+            if (it.p < 1) it.p = Math.min(1, it.p + r.belt * dt);
+            if (it.p >= 1 && push(g, x, y, it.dir, it.c)) c[lane] = null;
+          });
+          break;
+      }
+    }
+    // paint that arrived on a belt this step waits until the next step to move on
+    for (var i = 0; i < W * H; i++) { var b = g.cells[i]; if (!b) continue; if (b.item && b.item.moved) b.item.moved = false; b.fresh = false; }
+    // income per second, averaged over the last minute
+    g.rateLog.push([g.time, g.earned]);
+    while (g.rateLog.length > 2 && g.rateLog[0][0] < g.time - 60) g.rateLog.shift();
+    var a = g.rateLog[0], z = g.rateLog[g.rateLog.length - 1];
+    g.rate = z[0] > a[0] ? (z[1] - a[1]) / (z[0] - a[0]) : 0;
+  }
+
+  // --- saving ---
+  function save(g, now) {
+    var cells = [];
+    g.cells.forEach(function (c, i) { if (c && c.t !== "hub") cells.push([i, c.t, c.d, c.p === undefined ? -1 : c.p]); });
+    return JSON.stringify({ v: 1, w: g.w, h: g.h, demo: g.demo, money: g.money, tier: g.tier, delivered: g.delivered, res: g.res, plots: g.plots, time: g.time,
+      earned: g.earned, rate: g.rate, stats: g.stats, done: g.done, cells: cells, savedAt: now || 0 });
+  }
+  function load(str) {
+    var d = JSON.parse(str);
+    if (!d || d.v !== 1) throw new Error("not a TINCTORY save");
+    var g = newGame({ w: d.w, h: d.h, demo: d.demo });
+    ["money", "tier", "delivered", "res", "plots", "time", "earned", "rate", "stats", "done"].forEach(function (k) { if (d[k] !== undefined) g[k] = d[k]; });
+    d.cells.forEach(function (e) {
+      var c = { t: e[1], d: e[2] };
+      if (c.t === "pump") { c.p = e[3]; c.timer = 0; c.out = null; }
+      if (c.t === "mixer") { c.a = null; c.b = null; c.out = []; c.timer = 0; }
+      if (c.t === "splitter") { c.item = null; c.turn = 0; }
+      if (c.t === "merger" || c.t === "belt") c.item = null;
+      if (c.t === "bridge") { c.h = null; c.v = null; }
+      g.cells[e[0]] = c;
+    });
+    g.savedAt = d.savedAt;
+    return g;
+  }
+  // money earned while the page was closed: a share of the recent income rate, up to 8 hours
+  function offline(g, seconds) {
+    var s = Math.max(0, Math.min(seconds, 8 * 3600)), m = g.rate * rates(g).idle * s;
+    if (s < 30 || m <= 0) return 0;
+    g.money += m; g.earned += m;
+    return m;
+  }
+
+  var api = { DX: DX, DY: DY, newGame: newGame, placeHub: placeHub, at: at, owned: owned, well: well, unlocked: unlocked, canPlace: canPlace, cost: cost, place: place, remove: remove, rotate: rotate,
+    lv: lv, resCost: resCost, canResearch: canResearch, research: research, rates: rates, plotPrice: plotPrice, plotOpen: plotOpen, buyPlot: buyPlot,
+    openOrders: openOrders, tierDone: tierDone, step: step, accept: accept, save: save, load: load, offline: offline };
+  if (node) module.exports = api;
+  else root.SIM = api;
+})(this);
+
+</script>
+<script>
+// Generated by prove.js: the fewest mixers for every order, proven by exhaustive search.
+var TPROOFS = {"RED": {"min": 0, "recipe": []}, "YELLOW": {"min": 0, "recipe": []}, "BLUE": {"min": 0, "recipe": []}, "ORANGE": {"min": 1, "recipe": [["256,0,0,0,0", "0,256,0,0,0", "128,128,0,0,0"]]}, "GREEN": {"min": 1, "recipe": [["0,256,0,0,0", "0,0,256,0,0", "0,128,128,0,0"]]}, "VIOLET": {"min": 1, "recipe": [["256,0,0,0,0", "0,0,256,0,0", "128,0,128,0,0"]]}, "PINK": {"min": 1, "recipe": [["256,0,0,0,0", "0,0,0,256,0", "128,0,0,128,0"]]}, "SKY": {"min": 1, "recipe": [["0,0,256,0,0", "0,0,0,256,0", "0,0,128,128,0"]]}, "MAROON": {"min": 1, "recipe": [["256,0,0,0,0", "0,0,0,0,256", "128,0,0,0,128"]]}, "NAVY": {"min": 1, "recipe": [["0,0,256,0,0", "0,0,0,0,256", "0,0,128,0,128"]]}};
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var P = window.PAINT, C = window.CONTENT, S = window.SIM, PROOF = window.TPROOFS || {};
+  var ED = window.TINCTORY_EDITION || "full", DEMO = ED === "demo";
+  var STORE_URL = "https://kqmigqkqri.itch.io/tinctory";
+  var W = 1280, H = 800, TS = 25, MX = 268, MY = 72, STEP = 1 / 30;
+  var SANS = "'Segoe UI', system-ui, -apple-system, sans-serif", SERIF = "Georgia, 'Times New Roman', serif";
+  var COL = { bg: "#1d1813", panel: "#2a231c", panel2: "#352c23", line: "#4a3e31", text: "#f2e8d6", dim: "#b3a48c", gold: "#e3b55a", good: "#8fcf7a", bad: "#e66b5b", ground: "#cbbd9f", ground2: "#c2b392", locked: "#5a4f40" };
+  var cv = document.getElementById("c"), cx = cv.getContext("2d"), scale = 1, dpr = 1;
+
+  // ---------------- saving ----------------
+  var KEY = DEMO ? "tinctory.demo.v1" : "tinctory.v1", SKEY = KEY + ".settings";
+  var settings = { sound: true, music: true, seenHelp: false };
+  try { var ss = localStorage.getItem(SKEY); if (ss) { var so = JSON.parse(ss); for (var k0 in so) settings[k0] = so[k0]; } } catch (e) {}
+  function saveSettings() { try { localStorage.setItem(SKEY, JSON.stringify(settings)); } catch (e) {} }
+  var g = null, away = 0;
+  try { var raw = localStorage.getItem(KEY); if (raw) { g = S.load(raw); if (g.savedAt) away = (Date.now() - g.savedAt) / 1000; } } catch (e) { g = null; }
+  var hasSave = !!g;
+  if (!g) g = S.newGame({ demo: DEMO });
+  function persist() { try { localStorage.setItem(KEY, S.save(g, Date.now())); hasSave = true; } catch (e) {} }
+  var saveT = 0;
+
+  // ---------------- sound, all synthesised ----------------
+  var ac = null, master = null;
+  function audio() {
+    try { if (!ac) { ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = 0.8; master.connect(ac.destination); } if (ac.state === "suspended") ac.resume(); return ac; } catch (e) { return null; }
+  }
+  function tone(f, d, type, vol, delay, slide) {
+    if (!settings.sound) return;
+    var a = audio(); if (!a) return;
+    var t0 = a.currentTime + (delay || 0), o = a.createOscillator(), gn = a.createGain();
+    o.type = type || "sine"; o.frequency.setValueAtTime(f, t0); if (slide) o.frequency.exponentialRampToValueAtTime(slide, t0 + d);
+    gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol || 0.04, t0 + 0.008); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+    o.connect(gn); gn.connect(master); o.start(t0); o.stop(t0 + d + 0.03);
+  }
+  var sellT = 0, mixT = 0;
+  function sfx(k) {
+    if (k === "place") tone(520, 0.05, "triangle", 0.04);
+    else if (k === "remove") tone(260, 0.07, "triangle", 0.04, 0, 180);
+    else if (k === "bad") tone(140, 0.1, "square", 0.03);
+    else if (k === "sell") { if (sellT > 0) return; sellT = 0.09; tone(1200 + Math.random() * 400, 0.05, "sine", 0.018); }
+    else if (k === "order") { if (sellT > 0) return; sellT = 0.12; tone(1568, 0.06, "triangle", 0.03); tone(2093, 0.09, "triangle", 0.025, 0.05); }
+    else if (k === "mix") { if (mixT > 0) return; mixT = 0.15; tone(300, 0.12, "sine", 0.035, 0, 520); }
+    else if (k === "buy") { tone(660, 0.07, "triangle", 0.05); tone(990, 0.12, "triangle", 0.05, 0.06); }
+    else if (k === "tier") [523, 659, 784, 1047, 1319].forEach(function (f, i) { tone(f, 0.45, "triangle", 0.06, i * 0.1); });
+  }
+  // a slow music box: pentatonic notes over a soft drone
+  var music = { next: 0, i: 0 };
+  var MEL = [0, 2, 4, 7, 9, 7, 4, 2, 0, 4, 7, 12, 9, 7, 4, 2];
+  function musicTick() {
+    if (!settings.music || !ac || ac.state !== "running") return;
+    var spb = 0.62;
+    if (music.next < ac.currentTime) music.next = ac.currentTime + 0.05;
+    while (music.next < ac.currentTime + 0.3) {
+      var n = MEL[music.i % MEL.length] + (Math.floor(music.i / 16) % 2 ? 5 : 0), t = music.next;
+      if (music.i % 2 === 0 || Math.random() < 0.6) bell(392 * Math.pow(2, n / 12), t, 0.018);
+      if (music.i % 8 === 0) bell(98 * Math.pow(2, ((Math.floor(music.i / 8) % 4) * [0, 5, 7, 3][Math.floor(music.i / 8) % 4]) / 12), t, 0.025, 2.4);
+      music.i++; music.next += spb;
+    }
+  }
+  function bell(f, t0, vol, d) {
+    var o = ac.createOscillator(), o2 = ac.createOscillator(), gn = ac.createGain();
+    o.type = "sine"; o.frequency.value = f; o2.type = "sine"; o2.frequency.value = f * 2.01;
+    gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol, t0 + 0.01); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + (d || 1.2));
+    o.connect(gn); o2.connect(gn); gn.connect(master); o.start(t0); o2.start(t0); o.stop(t0 + (d || 1.2) + 0.05); o2.stop(t0 + (d || 1.2) + 0.05);
+  }
+
+  // ---------------- drawing helpers ----------------
+  function rr(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
+  function text(s, x, y, size, col, align, weight, font) { cx.font = (weight || 600) + " " + size + "px " + (font || SANS); cx.fillStyle = col || COL.text; cx.textAlign = align || "left"; cx.textBaseline = "middle"; cx.fillText(s, x, y); }
+  function tw(s, size, weight, font) { cx.font = (weight || 600) + " " + size + "px " + (font || SANS); return cx.measureText(s).width; }
+  function wrap(s, x, y, maxW, size, col, lh, weight, align) {
+    var lines = [];
+    String(s).split("\n").forEach(function (para) { var words = para.split(" "), line = ""; words.forEach(function (w) { var t = line ? line + " " + w : w; if (tw(t, size, weight) > maxW && line) { lines.push(line); line = w; } else line = t; }); lines.push(line); });
+    lines.forEach(function (l, i) { text(l, x, y + i * lh, size, col, align, weight); });
+    return y + lines.length * lh;
+  }
+  function money(n) {
+    if (n < 0) return "-" + money(-n);
+    if (n < 10000) return "$" + Math.floor(n).toLocaleString("en-US");
+    var u = ["K", "M", "B", "T"], i = -1;
+    while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }
+    return "$" + (n < 10 ? n.toFixed(2) : n < 100 ? n.toFixed(1) : Math.floor(n)) + u[i];
+  }
+  var buttons = [], mouse = { x: -1, y: -1, down: false, right: false };
+  function hot(x, y, w, h) { return mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h; }
+  function button(x, y, w, h, label, fn, o) {
+    o = o || {};
+    var on = hot(x, y, w, h) && !o.disabled;
+    rr(x, y, w, h, 8);
+    cx.fillStyle = o.disabled ? "#2b251e" : o.primary ? (on ? "#f0c66e" : COL.gold) : o.active ? "#5a4a33" : on ? "#4a3e31" : (o.fill || "#3a3027"); cx.fill();
+    cx.strokeStyle = o.primary ? "#ffe2a0" : o.active ? COL.gold : "#5c4d3c"; cx.lineWidth = o.active ? 2 : 1.2; cx.stroke();
+    text(label, x + w / 2, y + h / 2 + 1, o.size || 14, o.disabled ? "#6b5e4c" : o.primary ? "#2a1d08" : COL.text, "center", 700);
+    if (!o.disabled && fn) buttons.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+  function blob(c, x, y, r, outline) {
+    cx.beginPath(); cx.arc(x, y, r, 0, 7); cx.fillStyle = P.css(c); cx.fill();
+    cx.lineWidth = 1; cx.strokeStyle = outline || "rgba(0,0,0,0.45)"; cx.stroke();
+    cx.beginPath(); cx.arc(x - r * 0.35, y - r * 0.35, r * 0.3, 0, 7); cx.fillStyle = "rgba(255,255,255,0.35)"; cx.fill();
+  }
+
+  // ---------------- the floor ----------------
+  function tx(x) { return MX + x * TS; }
+  function ty(y) { return MY + y * TS; }
+  function arrow(x, y, d, size, col) {
+    cx.save(); cx.translate(x, y); cx.rotate(d * Math.PI / 2);
+    cx.beginPath(); cx.moveTo(size, 0); cx.lineTo(-size * 0.6, -size * 0.7); cx.lineTo(-size * 0.6, size * 0.7); cx.closePath(); cx.fillStyle = col; cx.fill();
+    cx.restore();
+  }
+  var beltPhase = 0;
+  function drawGround() {
+    rr(MX - 6, MY - 6, g.w * TS + 12, g.h * TS + 12, 8); cx.fillStyle = "#4a3e31"; cx.fill();
+    for (var y = 0; y < g.h; y++) for (var x = 0; x < g.w; x++) {
+      var own = S.owned(g, x, y);
+      cx.fillStyle = own ? ((x + y) % 2 ? COL.ground : COL.ground2) : ((x + y) % 2 ? "#5d5242" : "#574c3d");
+      cx.fillRect(tx(x), ty(y), TS, TS);
+      var w = S.well(g, x, y);
+      if (w >= 0) {
+        var pc = P.primary(w);
+        cx.beginPath(); cx.ellipse(tx(x) + TS / 2, ty(y) + TS / 2, TS * 0.42, TS * 0.34, 0, 0, 7); cx.fillStyle = "#3b3128"; cx.fill();
+        cx.beginPath(); cx.ellipse(tx(x) + TS / 2, ty(y) + TS / 2 + 1, TS * 0.34, TS * 0.26, 0, 0, 7); cx.fillStyle = P.css(pc); cx.globalAlpha = own ? 1 : 0.5; cx.fill(); cx.globalAlpha = 1;
+      }
+    }
+    // land for sale
+    C.PLOTS.forEach(function (p) {
+      if (g.plots[p.c + "," + p.r]) return;
+      var x0 = tx(p.c * C.PW), y0 = ty(p.r * C.PH), w = C.PW * TS, h = C.PH * TS, open = S.plotOpen(g, p), price = S.plotPrice(g, p), over = hot(x0, y0, w, h) && !tool;
+      cx.strokeStyle = "rgba(30,24,18,0.6)"; cx.lineWidth = 2; cx.strokeRect(x0 + 1, y0 + 1, w - 2, h - 2);
+      if (open) {
+        rr(x0 + w / 2 - 70, y0 + h / 2 - 22, 140, 44, 8); cx.fillStyle = over ? "rgba(227,181,90,0.95)" : "rgba(30,24,18,0.75)"; cx.fill();
+        text("Buy land " + money(price), x0 + w / 2, y0 + h / 2 - 6, 14, over ? "#2a1d08" : (g.money >= price ? COL.gold : COL.dim), "center", 800);
+        text(wellsIn(p), x0 + w / 2, y0 + h / 2 + 12, 11, over ? "#2a1d08" : COL.dim, "center", 700);
+      } else {
+        var why = DEMO && (p.tier || 0) > 2 ? "Full game" : "Opens at commission " + ((p.tier || 0) + 1);
+        text(why, x0 + w / 2, y0 + h / 2, 12, "rgba(242,232,214,0.45)", "center", 700);
+      }
+    });
+    cx.strokeStyle = "rgba(60,48,36,0.12)"; cx.lineWidth = 1;
+    for (var gx = 0; gx <= g.w; gx++) { cx.beginPath(); cx.moveTo(tx(gx), MY); cx.lineTo(tx(gx), MY + g.h * TS); cx.stroke(); }
+    for (var gy = 0; gy <= g.h; gy++) { cx.beginPath(); cx.moveTo(MX, ty(gy)); cx.lineTo(MX + g.w * TS, ty(gy)); cx.stroke(); }
+  }
+  function wellsIn(p) {
+    var n = {};
+    C.WELLS.forEach(function (w) { if (Math.floor(w.x / C.PW) === p.c && Math.floor(w.y / C.PH) === p.r) n[P.PIG[w.p].name] = (n[P.PIG[w.p].name] || 0) + 1; });
+    var s = Object.keys(n).map(function (k) { return n[k] > 1 ? n[k] + " " + k : k; }).join(", ");
+    return s ? "wells: " + s : "no wells";
+  }
+  function itemPos(x, y, it, d) {
+    // from the side it came in, to the middle, then out the front
+    var cxp = tx(x) + TS / 2, cyp = ty(y) + TS / 2, p = it.p;
+    if (p < 0.5 && it.from !== undefined) { var f = 0.5 - p; return [cxp + S.DX[it.from] * f * TS, cyp + S.DY[it.from] * f * TS]; }
+    var o = p - 0.5; return [cxp + S.DX[d] * o * TS, cyp + S.DY[d] * o * TS];
+  }
+  function drawBuildings() {
+    for (var y = 0; y < g.h; y++) for (var x = 0; x < g.w; x++) {
+      var c = S.at(g, x, y);
+      if (!c || c.t === "hub") continue;
+      drawBuilding(c, tx(x), ty(y), 1, x, y);
+    }
+    // the hub
+    var hb = g.hub, hx = tx(hb.x), hy = ty(hb.y);
+    rr(hx + 2, hy + 2, TS * 3 - 4, TS * 3 - 4, 8); cx.fillStyle = "#6d4f2d"; cx.fill(); cx.strokeStyle = COL.gold; cx.lineWidth = 2; cx.stroke();
+    rr(hx + 10, hy + 18, TS * 3 - 20, TS * 3 - 30, 6); cx.fillStyle = "#3a2a18"; cx.fill();
+    var pulse = hubFlash > 0 ? hubFlash : 0;
+    if (lastSold) { cx.beginPath(); cx.ellipse(hx + TS * 1.5, hy + TS * 1.6, 18, 9 + pulse * 3, 0, 0, 7); cx.fillStyle = P.css(lastSold); cx.fill(); }
+    text("HUB", hx + TS * 1.5, hy + 10, 10, COL.gold, "center", 800);
+    // paint on the move, drawn on top
+    for (y = 0; y < g.h; y++) for (x = 0; x < g.w; x++) {
+      c = S.at(g, x, y);
+      if (!c) continue;
+      if (c.t === "belt" && c.item) { var q = itemPos(x, y, c.item, c.d); blob(c.item.c, q[0], q[1], TS * 0.26); }
+      if (c.t === "bridge") ["h", "v"].forEach(function (lane) { var it = c[lane]; if (!it) return; var o = it.p - 0.5; blob(it.c, tx(x) + TS / 2 + S.DX[it.dir] * o * TS, ty(y) + TS / 2 + S.DY[it.dir] * o * TS, TS * 0.24); });
+    }
+  }
+  function drawBuilding(c, x, y, alpha, gx, gy) {
+    var s = TS, m = s / 2;
+    cx.save(); cx.globalAlpha = alpha;
+    if (c.t === "belt") {
+      cx.fillStyle = "#5e5346"; cx.fillRect(x + 2, y + 2, s - 4, s - 4);
+      cx.save(); cx.beginPath(); cx.rect(x + 2, y + 2, s - 4, s - 4); cx.clip();
+      cx.strokeStyle = "rgba(255,255,255,0.12)"; cx.lineWidth = 2;
+      var off = (beltPhase * S.rates(g).belt * s) % 8;
+      for (var k = -2; k < 5; k++) {
+        cx.beginPath();
+        var t0 = k * 8 + off - s / 2;
+        if (c.d === 0) { cx.moveTo(x + m + t0, y + 4); cx.lineTo(x + m + t0 + 4, y + m); cx.lineTo(x + m + t0, y + s - 4); }
+        if (c.d === 2) { cx.moveTo(x + m - t0, y + 4); cx.lineTo(x + m - t0 - 4, y + m); cx.lineTo(x + m - t0, y + s - 4); }
+        if (c.d === 1) { cx.moveTo(x + 4, y + m + t0); cx.lineTo(x + m, y + m + t0 + 4); cx.lineTo(x + s - 4, y + m + t0); }
+        if (c.d === 3) { cx.moveTo(x + 4, y + m - t0); cx.lineTo(x + m, y + m - t0 - 4); cx.lineTo(x + s - 4, y + m - t0); }
+        cx.stroke();
+      }
+      cx.restore();
+    } else if (c.t === "pump") {
+      rr(x + 2, y + 2, s - 4, s - 4, 5); cx.fillStyle = "#3f5f78"; cx.fill(); cx.strokeStyle = "#1e2f3c"; cx.lineWidth = 1.5; cx.stroke();
+      cx.beginPath(); cx.arc(x + m, y + m, s * 0.24, 0, 7); cx.fillStyle = P.css(P.primary(c.p || 0)); cx.fill(); cx.strokeStyle = "#1e2f3c"; cx.stroke();
+      arrow(x + m + S.DX[c.d] * s * 0.36, y + m + S.DY[c.d] * s * 0.36, c.d, 4.5, "#e8eef2");
+    } else if (c.t === "mixer") {
+      rr(x + 1, y + 1, s - 2, s - 2, 6); cx.fillStyle = "#7a5a3a"; cx.fill(); cx.strokeStyle = "#3d2b18"; cx.lineWidth = 1.5; cx.stroke();
+      var right = (c.d + 1) & 3, left = (c.d + 3) & 3;
+      [[right, c.a], [left, c.b]].forEach(function (pr) { var px = x + m + S.DX[pr[0]] * s * 0.3, py = y + m + S.DY[pr[0]] * s * 0.3; cx.beginPath(); cx.arc(px, py, 4, 0, 7); cx.fillStyle = pr[1] ? P.css(pr[1]) : "#3d2b18"; cx.fill(); });
+      cx.beginPath(); cx.arc(x + m, y + m, 6, 0, 7); cx.fillStyle = c.out && c.out.length ? P.css(c.out[0]) : "#2c1f12"; cx.fill();
+      if (c.a && c.b) { cx.save(); cx.translate(x + m, y + m); cx.rotate(performance.now() / 120); cx.strokeStyle = "#f2e8d6"; cx.lineWidth = 1.5; cx.beginPath(); cx.moveTo(-5, 0); cx.lineTo(5, 0); cx.stroke(); cx.restore(); }
+      arrow(x + m + S.DX[c.d] * s * 0.4, y + m + S.DY[c.d] * s * 0.4, c.d, 4, "#f2e8d6");
+    } else if (c.t === "splitter" || c.t === "merger") {
+      rr(x + 2, y + 2, s - 4, s - 4, 4); cx.fillStyle = c.t === "splitter" ? "#4f6a3f" : "#6a4f6a"; cx.fill(); cx.strokeStyle = "#2a2a20"; cx.lineWidth = 1.2; cx.stroke();
+      if (c.t === "splitter") { arrow(x + m + S.DX[(c.d + 1) & 3] * s * 0.3, y + m + S.DY[(c.d + 1) & 3] * s * 0.3, (c.d + 1) & 3, 4, "#e8f2dc"); arrow(x + m + S.DX[(c.d + 3) & 3] * s * 0.3, y + m + S.DY[(c.d + 3) & 3] * s * 0.3, (c.d + 3) & 3, 4, "#e8f2dc"); }
+      else arrow(x + m + S.DX[c.d] * s * 0.3, y + m + S.DY[c.d] * s * 0.3, c.d, 5, "#f2dcf2");
+      if (c.item) { cx.beginPath(); cx.arc(x + m, y + m, 4.5, 0, 7); cx.fillStyle = P.css(c.item); cx.fill(); }
+    } else if (c.t === "bridge") {
+      cx.fillStyle = "#5e5346"; cx.fillRect(x + 2, y + 8, s - 4, s - 16); cx.fillRect(x + 8, y + 2, s - 16, s - 4);
+      rr(x + 6, y + 6, s - 12, s - 12, 3); cx.fillStyle = "#8a7a62"; cx.fill();
+    } else if (c.t === "drain") {
+      rr(x + 3, y + 3, s - 6, s - 6, 5); cx.fillStyle = "#2b2b2b"; cx.fill();
+      for (var r2 = 0; r2 < 3; r2++) { cx.beginPath(); cx.arc(x + m, y + m, 3 + r2 * 3, 0, 7); cx.strokeStyle = "rgba(200,200,200,0.35)"; cx.lineWidth = 1; cx.stroke(); }
+    }
+    cx.restore();
+  }
+
+  // ---------------- tools ----------------
+  var tool = null, dir = 0, dragPath = null, lastTile = null, hoverTile = null, msg = null, flyers = [], hubFlash = 0, lastSold = null, panel = null;
+  function setTool(t) { tool = tool === t ? null : t; sfx("place"); }
+  function tileAt(m) { var x = Math.floor((m.x - MX) / TS), y = Math.floor((m.y - MY) / TS); return x >= 0 && y >= 0 && x < g.w && y < g.h ? { x: x, y: y } : null; }
+  function flash(s, col) { msg = { s: s, t: 0, col: col || COL.text }; }
+  function tryPlace(t, x, y, d, quiet) {
+    var err = S.place(g, t, x, y, d);
+    if (err && err !== "already there") { if (!quiet) { flash(cap(err) + ".", COL.bad); sfx("bad"); } return false; }
+    if (!err) sfx("place");
+    saveT = 2;
+    return !err;
+  }
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+  function pointerDownMap(m) {
+    var t = tileAt(m);
+    if (!t) return;
+    if (mouse.right || tool === "x") { if (S.remove(g, t.x, t.y)) sfx("remove"); dragPath = { remove: true }; saveT = 2; return; }
+    if (!tool) {
+      // buy land when clicking a plot for sale
+      var p = plotAt(t.x, t.y);
+      if (p && S.plotOpen(g, p)) { if (S.buyPlot(g, p.c, p.r)) { sfx("buy"); flash("Land bought.", COL.good); persist(); } else { sfx("bad"); flash("Not enough money for this land.", COL.bad); } }
+      return;
+    }
+    if (tool === "belt") { dragPath = { last: t }; tryPlace("belt", t.x, t.y, dir); return; }
+    tryPlace(tool, t.x, t.y, dir);
+    dragPath = { last: t, single: true };
+  }
+  function plotAt(x, y) { var c = Math.floor(x / C.PW), r = Math.floor(y / C.PH); return C.PLOTS.filter(function (p) { return p.c === c && p.r === r && !g.plots[c + "," + r]; })[0]; }
+  function pointerMoveMap(m) {
+    if (!dragPath || !mouse.down) return;
+    var t = tileAt(m);
+    if (!t) return;
+    if (dragPath.remove) { if (S.remove(g, t.x, t.y)) { sfx("remove"); saveT = 2; } return; }
+    var l = dragPath.last;
+    if (t.x === l.x && t.y === l.y) return;
+    if (tool === "belt") {
+      // walk one tile at a time towards the pointer, turning the previous belt to face the new one
+      while (l.x !== t.x || l.y !== t.y) {
+        var dx = t.x - l.x, dy = t.y - l.y, d = Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? 0 : 2) : (dy > 0 ? 1 : 3);
+        var prev = S.at(g, l.x, l.y);
+        if (prev && prev.t === "belt") prev.d = d;
+        var n = { x: l.x + S.DX[d], y: l.y + S.DY[d] };
+        tryPlace("belt", n.x, n.y, d, true);
+        l = n;
+      }
+      dragPath.last = l;
+    } else if (!dragPath.single) dragPath.last = t;
+    else { tryPlace(tool, t.x, t.y, dir, true); dragPath.last = t; }
+  }
+
+  // ---------------- the game loop ----------------
+  var acc = 0, speed = 1;
+  function update(dt) {
+    acc += dt * speed;
+    var n = 0;
+    while (acc >= STEP && n < 12) {
+      S.step(g, STEP); acc -= STEP; n++;
+      g.events.forEach(handle); g.events.length = 0;
+    }
+    if (n >= 12) acc = 0;
+    beltPhase += dt;
+    sellT -= dt; mixT -= dt; hubFlash = Math.max(0, hubFlash - dt * 3);
+    saveT -= dt;
+    if (saveT < -10 || (saveT < 0 && saveT > -dt * 1.5)) { persist(); saveT = 0; }
+  }
+  var tierModal = null;
+  function handle(e) {
+    if (e.e === "sold") {
+      lastSold = e.c; hubFlash = 1; sfx(e.order ? "order" : "sell");
+      if (flyers.length < 14) flyers.push({ x: tx(g.hub.x) + TS * 1.5 + (Math.random() - 0.5) * 30, y: ty(g.hub.y), s: "+" + money(e.v), t: 0, col: e.order ? COL.gold : COL.text });
+    } else if (e.e === "mixed") sfx("mix");
+    else if (e.e === "tier") { sfx("tier"); tierModal = { tier: e.tier, reward: e.reward, t: 0 }; persist(); }
+    else if (e.e === "grant") flash("The town council lends you enough for a pump.", COL.gold);
+  }
+
+  // ---------------- screens ----------------
+  function drawTop() {
+    cx.fillStyle = COL.panel; cx.fillRect(0, 0, W, 60);
+    cx.fillStyle = COL.line; cx.fillRect(0, 60, W, 1);
+    logo(20, 30, 1);
+    text(money(g.money), 420, 26, 28, COL.gold, "left", 800);
+    text("+" + money(g.rate) + " / s", 420, 48, 13, COL.dim, "left", 700);
+    var x = W - 20;
+    x -= 120; button(x, 12, 110, 36, "HELP", function () { panel = "help"; helpPage = 0; }, { size: 13 });
+    x -= 120; button(x, 12, 110, 36, settings.music ? "MUSIC ON" : "MUSIC OFF", function () { settings.music = !settings.music; saveSettings(); audio(); }, { size: 12 });
+    x -= 130; button(x, 12, 120, 36, "RESEARCH", function () { panel = panel === "research" ? null : "research"; }, { size: 13, active: panel === "research" });
+    x -= 150;
+    var sp = [1, 2, 4];
+    sp.forEach(function (v, i) { button(x + i * 46, 12, 42, 36, v + "x", function () { speed = v; }, { size: 13, active: speed === v }); });
+    text("SPEED", x - 10, 30, 11, COL.dim, "right", 800);
+  }
+  function logo(x, y, s) {
+    var letters = "TINCTORY", cols = [[1, 0, 0, 0, 0], [1, 1, 0, 0, 0], [0, 1, 0, 0, 0], [0, 1, 1, 0, 0], [0, 0, 1, 0, 0], [1, 0, 1, 0, 0], [1, 0, 0, 1, 0], [0, 0, 1, 0, 1]];
+    var xx = x;
+    for (var i = 0; i < letters.length; i++) {
+      var c = cols[i].map(function (v) { return v; }), tot = c.reduce(function (a, b) { return a + b; }, 0);
+      var pc = c.map(function (v) { return v * P.D / tot; });
+      text(letters[i], xx, y, 26 * s, P.css(pc), "left", 900, SERIF);
+      xx += tw(letters[i], 26 * s, 900, SERIF) + 2 * s;
+    }
+  }
+  // left: the commission
+  var orderHover = null, recipeFor = null;
+  function drawOrders() {
+    var x = 12, y = 72, w = 244;
+    rr(x, y, w, 716, 10); cx.fillStyle = COL.panel; cx.fill(); cx.strokeStyle = COL.line; cx.lineWidth = 1; cx.stroke();
+    var t = C.TIERS[g.tier];
+    if (!t) {
+      
+      text("DEMO COMPLETE", x + w / 2, y + 30, 14, COL.gold, "center", 800);
+      var dy = wrap("Five more commissions wait in the full game: uneven ratios, earth tones, fine shades, four-pigment paints and the Masterpiece.", x + 16, y + 64, w - 32, 13, COL.dim, 18, 600);
+      button(x + 16, dy + 16, w - 32, 40, "GET THE FULL GAME", openStore, { primary: true, size: 13 });
+      return;
+      
+      text("ALL COMMISSIONS DONE", x + w / 2, y + 30, 14, COL.gold, "center", 800);
+      wrap("The town hall has its mural. Your factory keeps selling paint: every paint sells, and finer mixes sell for more.", x + 16, y + 64, w - 32, 13, COL.dim, 18, 600);
+      return;
+    }
+    text("COMMISSION " + (g.tier + 1) + " OF " + C.TIERS.length, x + 16, y + 20, 11, COL.dim, "left", 800);
+    text(t.name, x + 16, y + 44, 20, COL.gold, "left", 700, SERIF);
+    var yy = wrap(t.desc, x + 16, y + 70, w - 32, 12, COL.dim, 16, 600) + 4;
+    text("Reward " + money(t.reward), x + 16, yy + 2, 12, COL.text, "left", 700);
+    yy += 18;
+    orderHover = null;
+    t.orders.forEach(function (o) {
+      var have = Math.min(g.delivered[o.id] || 0, o.need), done = have >= o.need, h = 92, oy = yy;
+      var on = hot(x + 8, oy, w - 16, h - 6);
+      rr(x + 8, oy, w - 16, h - 6, 8); cx.fillStyle = done ? "#2e3b26" : on ? COL.panel2 : "#2f271f"; cx.fill();
+      cx.strokeStyle = recipeFor === o.id ? COL.gold : "#4a3e31"; cx.lineWidth = recipeFor === o.id ? 2 : 1; cx.stroke();
+      cx.beginPath(); cx.arc(x + 36, oy + 30, 18, 0, 7); cx.fillStyle = P.css(o.color); cx.fill(); cx.strokeStyle = "rgba(0,0,0,0.5)"; cx.lineWidth = 1.5; cx.stroke();
+      text(o.name, x + 64, oy + 18, 15, COL.text, "left", 700);
+      text(P.parts(o.color), x + 64, oy + 36, 11, COL.dim, "left", 600);
+      var pr = PROOF[o.id];
+      if (pr) text(pr.min ? "Fewest mixers: " + pr.min + " (proven)" : "Straight from a well", x + 64, oy + 52, 11, "#c9a76a", "left", 700);
+      rr(x + 20, oy + 64, w - 40, 10, 5); cx.fillStyle = "#1d1813"; cx.fill();
+      if (have) { rr(x + 20, oy + 64, Math.max(10, (w - 40) * have / o.need), 10, 5); cx.fillStyle = done ? COL.good : P.css(o.color); cx.fill(); }
+      text(done ? "done" : have + " / " + o.need, x + w - 20, oy + 18, 12, done ? COL.good : COL.text, "right", 800);
+      if (on) orderHover = o;
+      buttons.push({ x: x + 8, y: oy, w: w - 16, h: h - 6, fn: (function (id) { return function () { recipeFor = recipeFor === id ? null : id; }; })(o.id) });
+      yy += h;
+    });
+    text("Click an order to see a recipe.", x + w / 2, Math.min(yy + 6, y + 700), 11, "rgba(179,164,140,0.7)", "center", 600);
+  }
+  // the recipe as a little tree of swatches
+  function drawRecipe() {
+    if (!recipeFor || !PROOF[recipeFor]) return;
+    var o = C.ORDERS.filter(function (q) { return q.id === recipeFor; })[0], pr = PROOF[recipeFor];
+    if (!o || o.tier !== g.tier) { recipeFor = null; return; }
+    var steps = pr.recipe.map(function (s) { return s.map(function (k) { return k.split(",").map(Number); }); });
+    var x = 268, y = 680 - 30 - steps.length * 34, w = 330, h = 44 + Math.max(1, steps.length) * 34;
+    rr(x, y, w, h, 10); cx.fillStyle = "rgba(29,24,19,0.95)"; cx.fill(); cx.strokeStyle = COL.gold; cx.lineWidth = 1.5; cx.stroke();
+    text("A recipe for " + o.name, x + 14, y + 20, 14, COL.gold, "left", 700, SERIF);
+    if (!steps.length) text("Pump " + P.PIG[o.color.indexOf(P.D)].name + " straight to the hub.", x + 14, y + 48, 13, COL.text, "left", 600);
+    steps.forEach(function (s, i) {
+      var yy = y + 52 + i * 34;
+      blob(s[0], x + 26, yy, 10); text("+", x + 46, yy, 16, COL.dim, "center", 800);
+      blob(s[1], x + 66, yy, 10); text("→", x + 88, yy, 16, COL.dim, "center", 800);
+      blob(s[2], x + 110, yy, 11, "#fff");
+      text(P.parts(s[2]), x + 130, yy, 12, COL.text, "left", 600);
+    });
+  }
+  // bottom: the toolbar
+  function drawToolbar() {
+    var x = 268, y = 690;
+    C.BUILD_ORDER.forEach(function (k, i) {
+      var b = C.BUILD[k], un = S.unlocked(g, k), bx = x + i * 112;
+      var on = hot(bx, y, 104, 96) && un;
+      rr(bx, y, 104, 96, 8); cx.fillStyle = tool === k ? "#5a4a33" : on ? "#3a3027" : COL.panel; cx.fill();
+      cx.strokeStyle = tool === k ? COL.gold : COL.line; cx.lineWidth = tool === k ? 2 : 1; cx.stroke();
+      if (un) {
+        var demoC = { t: k, d: tool === k ? dir : 0, p: 0, a: null, b: null, out: [] };
+        drawBuilding(demoC, bx + 40, y + 14, 1);
+        text(b.name, bx + 52, y + 56, 13, COL.text, "center", 700);
+        text(money(b.cost) + "   [" + b.key + "]", bx + 52, y + 76, 11, g.money >= b.cost ? COL.dim : COL.bad, "center", 700);
+        buttons.push({ x: bx, y: y, w: 104, h: 96, fn: (function (kk) { return function () { setTool(kk); }; })(k) });
+      } else {
+        text("?", bx + 52, y + 36, 22, "#5c4d3c", "center", 800);
+        text("Commission " + (b.tier + 1), bx + 52, y + 70, 11, "#6b5e4c", "center", 700);
+      }
+      if (on) toolTip = { title: b.name, body: b.desc + (k === "belt" ? "" : " Press R to turn it before you place it."), x: bx, y: y - 10 };
+    });
+    var rx = x + 7 * 112;
+    button(rx, y, 96, 44, "DEMOLISH [X]", function () { setTool("x"); }, { size: 12, active: tool === "x" });
+    button(rx, y + 52, 96, 44, "TURN [R]", function () { dir = (dir + 1) & 3; }, { size: 12 });
+    var hint = tool === "x" ? "Click or drag to demolish. You get the full price back." : tool === "belt" ? "Drag to lay belts; they follow your pointer." : tool ? "Click to place. R turns it. Right-click demolishes. Esc puts the tool down." : "Pick a building below. Click land for sale to buy it. Right-click demolishes.";
+    text(hint, x + 4, y - 8, 12, "rgba(242,232,214,0.6)", "left", 600);
+  }
+  var toolTip = null;
+  function drawHoverInfo() {
+    if (!hoverTile || toolTip) return;
+    var c = S.at(g, hoverTile.x, hoverTile.y), w = S.well(g, hoverTile.x, hoverTile.y), lines = [];
+    if (c && c.t === "mixer") lines = ["Mixer", "Left: " + (c.b ? P.parts(c.b) : "empty"), "Right: " + (c.a ? P.parts(c.a) : "empty"), "Out: " + (c.out && c.out.length ? P.parts(c.out[0]) : "-")];
+    else if (c && c.t === "pump") lines = ["Pump", P.PIG[c.p].name + " every " + S.rates(g).pump.toFixed(2) + " s"];
+    else if (c && c.t === "belt" && c.item) lines = ["Belt", P.parts(c.item.c) + "  (" + money(P.value(c.item.c) * S.rates(g).price) + ")"];
+    else if (c && c.t === "hub") lines = ["Hub", "Sells any paint. Paint that fills an order pays x" + S.rates(g).order.toFixed(1) + "."];
+    else if (!c && w >= 0) lines = [P.PIG[w].name + " well", "Put a pump on it."];
+    if (!lines.length) return;
+    var x = tx(hoverTile.x) + TS + 8, y = ty(hoverTile.y), wd = Math.max.apply(null, lines.map(function (l) { return tw(l, 12, 700); })) + 24;
+    if (x + wd > W - 8) x = tx(hoverTile.x) - wd - 8;
+    rr(x, y, wd, 12 + lines.length * 17, 6); cx.fillStyle = "rgba(29,24,19,0.92)"; cx.fill();
+    lines.forEach(function (l, i) { text(l, x + 12, y + 14 + i * 17, 12, i ? COL.text : COL.gold, "left", 700); });
+  }
+  function drawGhost() {
+    if (!tool || tool === "x" || !hoverTile || panel) return;
+    var t = hoverTile, err = S.canPlace(g, tool, t.x, t.y);
+    drawBuilding({ t: tool, d: dir, p: S.well(g, t.x, t.y) >= 0 ? S.well(g, t.x, t.y) : 0, a: null, b: null, out: [] }, tx(t.x), ty(t.y), 0.55);
+    cx.strokeStyle = err ? COL.bad : COL.good; cx.lineWidth = 2; cx.strokeRect(tx(t.x) + 1, ty(t.y) + 1, TS - 2, TS - 2);
+  }
+  function drawFlyers(dt) {
+    flyers = flyers.filter(function (f) { f.t += dt; return f.t < 1.1; });
+    flyers.forEach(function (f) { cx.globalAlpha = Math.min(1, (1.1 - f.t) * 2); text(f.s, f.x, f.y - f.t * 34, 12, f.col, "center", 800); cx.globalAlpha = 1; });
+  }
+  function drawMsg(dt) {
+    if (!msg) return;
+    msg.t += dt; if (msg.t > 3) { msg = null; return; }
+    var a = Math.min(1, (3 - msg.t) * 2), w = tw(msg.s, 14, 700) + 32;
+    cx.globalAlpha = a; rr(MX + 500 - w / 2, MY + 8, w, 30, 15); cx.fillStyle = "rgba(29,24,19,0.92)"; cx.fill();
+    text(msg.s, MX + 500, MY + 23, 14, msg.col, "center", 700); cx.globalAlpha = 1;
+  }
+
+  // research panel
+  function drawResearch() {
+    var x = 360, y = 84, w = 820, h = 600;
+    rr(x, y, w, h, 14); cx.fillStyle = "rgba(29,24,19,0.97)"; cx.fill(); cx.strokeStyle = COL.gold; cx.lineWidth = 2; cx.stroke();
+    text("RESEARCH", x + 30, y + 34, 24, COL.gold, "left", 700, SERIF);
+    text(money(g.money), x + w - 30, y + 34, 20, COL.gold, "right", 800);
+    C.RESEARCH.forEach(function (r, i) {
+      var ry = y + 70 + i * 62, l = S.lv(g, r.id), open = g.tier >= r.tier, cost = S.resCost(g, r.id), maxed = l >= r.max;
+      rr(x + 24, ry, w - 48, 54, 8); cx.fillStyle = COL.panel2; cx.fill();
+      text(r.name, x + 44, ry + 18, 16, open ? COL.text : COL.dim, "left", 700);
+      text(open ? r.desc : "Opens with commission " + (r.tier + 1), x + 44, ry + 38, 12, COL.dim, "left", 600);
+      for (var k = 0; k < r.max; k++) { rr(x + 420 + k * 22, ry + 20, 16, 14, 3); cx.fillStyle = k < l ? COL.gold : "#4a3e31"; cx.fill(); }
+      if (open) button(x + w - 190, ry + 9, 150, 36, maxed ? "MAX" : money(cost), function () { if (S.research(g, r.id)) { sfx("buy"); persist(); } else sfx("bad"); }, { primary: !maxed && g.money >= cost, disabled: maxed || g.money < cost, size: 14 });
+    });
+    button(x + w / 2 - 70, y + h - 54, 140, 40, "CLOSE", function () { panel = null; }, { size: 14 });
+  }
+  // the help pages
+  var helpPage = 0;
+  var HELP = [
+    ["Paint by the part", "Every paint is a ratio of five pigments: red, yellow, blue, white and black. A mixer takes one paint from its left side and one from its right, and makes two of the 1:1 blend. Orange is 1 red : 1 yellow. Mix orange with red again and you get 3 red : 1 yellow - vermilion."],
+    ["Build", "Put pumps on wells. Lay belts by dragging; paint rides them one way. Turn buildings with R before placing. A mixer's two inputs are its sides; its output is the front. Right-click demolishes (you get the full price back). Belts carry everything to the hub in the middle, which buys it."],
+    ["Commissions", "Each commission asks for paints in exact ratios. Paint that fills an order pays extra; any other paint still sells, and finer mixes are worth more. Finish a commission for a reward and new buildings. Each order shows the fewest mixers that can make it - proven by trying every smaller factory."],
+    ["Grow", "Buy land to reach new wells, and research to make pumps, belts and mixers faster and paint dearer. Your factory keeps earning a share while you're away. A mixer only mixes when both sides have paint, so a line that isn't needed just waits: ratios stay exact."]
+  ];
+  function drawHelp() {
+    var x = 300, y = 110, w = 860, h = 560, pg = HELP[helpPage];
+    rr(x, y, w, h, 14); cx.fillStyle = "rgba(29,24,19,0.97)"; cx.fill(); cx.strokeStyle = COL.gold; cx.lineWidth = 2; cx.stroke();
+    text("HOW TO PLAY  " + (helpPage + 1) + "/" + HELP.length, x + 30, y + 30, 12, COL.dim, "left", 800);
+    text(pg[0], x + 30, y + 66, 28, COL.gold, "left", 700, SERIF);
+    var yy = wrap(pg[1], x + 30, y + 110, w - 60, 17, COL.text, 26, 600);
+    // a little picture for each page
+    var px = x + 120, py = yy + 50;
+    if (helpPage === 0 || helpPage === 1) {
+      drawBuilding({ t: "pump", d: 0, p: 0 }, px, py, 1); beltRow(px + TS, py, 3, 0);
+      drawBuilding({ t: "pump", d: 2, p: 1 }, px + 8 * TS, py, 1); beltRow(px + 5 * TS, py, 3, 2);
+      drawBuilding({ t: "mixer", d: 3, a: P.primary(1), b: P.primary(0), out: [] }, px + 4 * TS, py, 1);
+      drawBuilding({ t: "belt", d: 3 }, px + 4 * TS, py - TS, 1); blob(P.ratio({ R: 1, Y: 1 }), px + 4 * TS + TS / 2, py - TS / 2, 7);
+      text("red  +  yellow  →  orange", px + 4.5 * TS, py + 2 * TS, 14, COL.dim, "center", 700);
+    }
+    if (helpPage === 2) C.TIERS[Math.min(3, C.TIERS.length - 1)].orders.slice(0, 4).forEach(function (o, i) { cx.beginPath(); cx.arc(px + i * 130, py, 22, 0, 7); cx.fillStyle = P.css(o.color); cx.fill(); text(o.name, px + i * 130, py + 38, 13, COL.text, "center", 700); text(P.short(o.color), px + i * 130, py + 56, 12, COL.dim, "center", 700); });
+    if (helpPage > 0) button(x + 30, y + h - 60, 120, 40, "BACK", function () { helpPage--; }, { size: 14 });
+    if (helpPage < HELP.length - 1) button(x + w - 150, y + h - 60, 120, 40, "NEXT", function () { helpPage++; }, { primary: true, size: 14 });
+    else button(x + w - 150, y + h - 60, 120, 40, "START", function () { panel = null; settings.seenHelp = true; saveSettings(); }, { primary: true, size: 14 });
+    button(x + w / 2 - 60, y + h - 60, 120, 40, "CLOSE", function () { panel = null; settings.seenHelp = true; saveSettings(); }, { size: 14 });
+  }
+  function beltRow(x, y, n, d) { for (var i = 0; i < n; i++) drawBuilding({ t: "belt", d: d }, x + i * TS, y, 1); }
+
+  function drawTierModal(dt) {
+    tierModal.t += dt;
+    var t = C.TIERS[tierModal.tier], next = C.TIERS[tierModal.tier + 1];
+    cx.fillStyle = "rgba(15,12,9,0.6)"; cx.fillRect(0, 0, W, H);
+    var x = 390, y = 200, w = 500, h = 340;
+    rr(x, y, w, h, 16); cx.fillStyle = COL.panel; cx.fill(); cx.strokeStyle = COL.gold; cx.lineWidth = 2; cx.stroke();
+    text(tierModal.tier === C.TIERS.length - 1 && !DEMO ? "THE MASTERPIECE IS FINISHED" : "COMMISSION COMPLETE", x + w / 2, y + 40, 14, COL.dim, "center", 800);
+    text(t.name, x + w / 2, y + 78, 30, COL.gold, "center", 700, SERIF);
+    text("+" + money(tierModal.reward), x + w / 2, y + 122, 26, COL.good, "center", 800);
+    var un = C.BUILD_ORDER.filter(function (k) { return C.BUILD[k].tier === tierModal.tier + 1; }).map(function (k) { return C.BUILD[k].name; });
+    var lines = [];
+    if (un.length) lines.push("New: " + un.join(", "));
+    var land = C.PLOTS.filter(function (p) { return p.tier === tierModal.tier + 1; }).length;
+    if (land) lines.push("New land for sale: " + land + " plot" + (land > 1 ? "s" : ""));
+    var res = C.RESEARCH.filter(function (r) { return r.tier === tierModal.tier + 1; }).map(function (r) { return r.name; });
+    if (res.length) lines.push("Research: " + res.join(", "));
+    if (next) lines.push("Next: " + next.name);
+    if (DEMO && !next) lines = ["That was the last commission in the demo."];
+    lines.forEach(function (l, i) { text(l, x + w / 2, y + 170 + i * 26, 15, COL.text, "center", 600); });
+    var last = DEMO && tierModal.tier >= 2;
+    if (tierModal.t > 0.8) button(x + w / 2 - 90, y + h - 64, 180, 44, last ? "CONTINUE" : "BACK TO WORK", function () { tierModal = null; if (last) panel = "demoend"; }, { primary: true, size: 15 });
+  }
+  
+  function drawDemoEnd() {
+    cx.fillStyle = "rgba(15,12,9,0.85)"; cx.fillRect(0, 0, W, H);
+    text("THE DEMO ENDS HERE", W / 2, 200, 36, COL.gold, "center", 700, SERIF);
+    var y = wrap("You finished the first three commissions. The full game has five more: uneven ratios, earth tones, fine shades, four-pigment paints and the Masterpiece - with bridges, the rest of the land, and every research level.", W / 2, 270, 720, 18, COL.text, 28, 600, "center");
+    text("Your factory keeps running here; it just can't take new commissions.", W / 2, y + 20, 15, COL.dim, "center", 600);
+    button(W / 2 - 160, y + 60, 320, 56, "GET THE FULL GAME", openStore, { primary: true, size: 18 });
+    button(W / 2 - 90, y + 132, 180, 44, "KEEP PLAYING", function () { panel = null; }, { size: 14 });
+  }
+  function openStore() { try { window.open(STORE_URL, "_blank", "noopener"); } catch (e) {} }
+  
+  var awayModal = null;
+  function drawAway() {
+    cx.fillStyle = "rgba(15,12,9,0.6)"; cx.fillRect(0, 0, W, H);
+    var x = 440, y = 260, w = 400, h = 220;
+    rr(x, y, w, h, 16); cx.fillStyle = COL.panel; cx.fill(); cx.strokeStyle = COL.gold; cx.lineWidth = 2; cx.stroke();
+    text("WHILE YOU WERE AWAY", x + w / 2, y + 40, 14, COL.dim, "center", 800);
+    text("+" + money(awayModal.m), x + w / 2, y + 90, 34, COL.good, "center", 800);
+    var hrs = awayModal.s / 3600;
+    text(hrs >= 1 ? hrs.toFixed(1) + " hours" : Math.round(awayModal.s / 60) + " minutes", x + w / 2, y + 128, 14, COL.dim, "center", 600);
+    button(x + w / 2 - 70, y + h - 60, 140, 42, "NICE", function () { awayModal = null; }, { primary: true, size: 15 });
+  }
+
+  // title
+  var screen = "title", titleT = 0, titleG = null;
+  function drawTitle(dt) {
+    titleT += dt;
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    // a little factory running behind the title
+    if (!titleG) titleG = makeTitleFactory();
+    for (var i = 0; i < 2; i++) { S.step(titleG.g, dt / 2); titleG.g.events.length = 0; }
+    var keepG = g; g = titleG.g; var mx0 = MX, my0 = MY;
+    MX = Math.round(W / 2 - g.w * TS / 2); MY = 410;
+    rr(MX - 10, MY - 10, g.w * TS + 20, g.h * TS + 20, 10); cx.fillStyle = "#4a3e31"; cx.fill();
+    for (var y = 0; y < g.h; y++) for (var x = 0; x < g.w; x++) { cx.fillStyle = (x + y) % 2 ? COL.ground : COL.ground2; cx.fillRect(tx(x), ty(y), TS, TS); }
+    beltPhase += dt;
+    drawBuildings();
+    g = keepG; MX = mx0; MY = my0;
+    logo(W / 2 - 250, 150, 2.4);
+    text("Mix paint by the part. Build the factory that makes it.", W / 2, 230, 21, COL.dim, "center", 600, SERIF);
+    text("FREE DEMO · the first three commissions", W / 2, 262, 14, COL.gold, "center", 800);
+    button(W / 2 - 150, 300, 300, 56, hasSave ? "CONTINUE" : "START", function () { start(); }, { primary: true, size: 19 });
+    if (hasSave) button(W / 2 - 150, 366, 300, 34, confirmNew ? "Click again to wipe your factory" : "NEW FACTORY", function () { if (!confirmNew) { confirmNew = true; return; } g = S.newGame({ demo: DEMO }); hasSave = false; confirmNew = false; away = 0; persist(); start(); }, { size: 12, fill: confirmNew ? "#6a2e26" : null });
+    button(W / 2 - 150, H - 70, 300, 40, "GET THE FULL GAME", openStore, { size: 14 });
+  }
+  var confirmNew = false;
+  function makeTitleFactory() {
+    var t = S.newGame({ sandbox: true, w: 20, h: 8, money: 0 });
+    S.placeHub(t, 9, 0);
+    // orange from below, sky from the left, maroon from the right
+    var plan = [["belt", 10, 3, 3], ["mixer", 10, 4, 3], ["belt", 9, 4, 0], ["belt", 8, 4, 0], ["belt", 7, 4, 0], ["belt", 7, 5, 3], ["pump", 7, 6, 3, 0],
+      ["belt", 11, 4, 2], ["belt", 12, 4, 2], ["belt", 13, 4, 2], ["belt", 13, 5, 3], ["pump", 13, 6, 3, 1],
+      ["belt", 8, 1, 0], ["belt", 7, 1, 0], ["mixer", 6, 1, 0], ["pump", 6, 0, 1, 2], ["belt", 6, 2, 3], ["belt", 6, 3, 3], ["pump", 6, 4, 3, 3],
+      ["belt", 12, 1, 2], ["belt", 13, 1, 2], ["mixer", 14, 1, 2], ["pump", 14, 0, 1, 4], ["belt", 14, 2, 3], ["belt", 14, 3, 3], ["pump", 14, 4, 3, 0]];
+    plan.forEach(function (p) { var err = S.place(t, p[0], p[1], p[2], p[3], p[4]); if (err) console.warn("title factory", err, p); });
+    return { g: t };
+  }
+  function start() {
+    audio(); screen = "game";
+    if (away > 30) { var m = S.offline(g, away); if (m > 0) awayModal = { m: m, s: away }; away = 0; }
+    if (!settings.seenHelp) { panel = "help"; helpPage = 0; }
+  }
+
+  // ---------------- main loop ----------------
+  var lastT = performance.now();
+  function frame(now) {
+    var dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
+    buttons = []; toolTip = null;
+    cx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    musicTick();
+    if (screen === "title") { drawTitle(dt); requestAnimationFrame(frame); return; }
+    if (!tierModal && !awayModal && panel !== "demoend") update(dt);
+    hoverTile = tileAt(mouse);
+    drawTop();
+    drawGround();
+    drawBuildings();
+    drawGhost();
+    drawFlyers(dt);
+    drawOrders();
+    drawToolbar();
+    drawRecipe();
+    if (!panel) drawHoverInfo();
+    if (toolTip) { var t = toolTip; rr(t.x, t.y - 74, 300, 70, 8); cx.fillStyle = "rgba(29,24,19,0.95)"; cx.fill(); cx.strokeStyle = COL.line; cx.stroke(); text(t.title, t.x + 12, t.y - 58, 14, COL.gold, "left", 700); wrap(t.body, t.x + 12, t.y - 38, 276, 12, COL.text, 15, 600); }
+    drawMsg(dt);
+    if (panel === "research") drawResearch();
+    if (panel === "help") drawHelp();
+    if (panel === "demoend") drawDemoEnd();
+    if (tierModal) drawTierModal(dt);
+    if (awayModal) drawAway();
+    requestAnimationFrame(frame);
+  }
+  function resize() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H); dpr = window.devicePixelRatio || 1;
+    cv.style.width = Math.floor(W * scale) + "px"; cv.style.height = Math.floor(H * scale) + "px";
+    cv.width = Math.floor(W * scale * dpr); cv.height = Math.floor(H * scale * dpr);
+  }
+  window.addEventListener("resize", resize); resize();
+  function local(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+  cv.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  cv.addEventListener("pointermove", function (e) { var m = local(e); mouse.x = m.x; mouse.y = m.y; if (screen === "game" && !panel && !tierModal && !awayModal) pointerMoveMap(m); });
+  cv.addEventListener("pointerdown", function (e) {
+    var m = local(e); mouse.x = m.x; mouse.y = m.y; mouse.down = true; mouse.right = e.button === 2;
+    cv.focus(); audio();
+    for (var i = buttons.length - 1; i >= 0; i--) { var b = buttons[i]; if (m.x >= b.x && m.x <= b.x + b.w && m.y >= b.y && m.y <= b.y + b.h) { b.fn(); return; } }
+    if (screen === "game" && !panel && !tierModal && !awayModal) pointerDownMap(m);
+  });
+  window.addEventListener("pointerup", function () { mouse.down = false; mouse.right = false; dragPath = null; });
+  window.addEventListener("keydown", function (e) {
+    if (screen !== "game") return;
+    var k = e.key.toLowerCase();
+    if (k === "r") { if (!tool && hoverTile && S.rotate(g, hoverTile.x, hoverTile.y)) { sfx("place"); saveT = 2; } else dir = (dir + 1) & 3; }
+    else if (k === "escape" || k === "q") { tool = null; panel = panel === "demoend" ? panel : null; recipeFor = null; }
+    else if (k === "x") setTool("x");
+    else C.BUILD_ORDER.forEach(function (b) { if (C.BUILD[b].key === k && S.unlocked(g, b)) setTool(b); });
+  });
+  window.addEventListener("beforeunload", function () { if (screen === "game") persist(); });
+
+  // hooks for the screenshot tool and tests
+  window.TINCTORY_APP = {
+    edition: ED,
+    game: function () { return g; },
+    setGame: function (str) { g = S.load(str); hasSave = true; },
+    start: function () { start(); },
+    screen: function () { return screen; },
+    tool: function (t, d) { tool = t; if (d !== undefined) dir = d; },
+    hover: function (x, y) { mouse.x = x; mouse.y = y; },
+    panel: function (p) { panel = p; },
+    recipe: function (id) { recipeFor = id; },
+    run: function (seconds) { for (var t = 0; t < seconds; t += STEP) { S.step(g, STEP); g.events.forEach(function (e) { if (e.e === "tier") tierModal = null; }); g.events.length = 0; } },
+    speed: function (v) { speed = v; },
+    settings: settings
+  };
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

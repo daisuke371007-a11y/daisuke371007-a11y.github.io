@@ -1,0 +1,1575 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NANDSMITH</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0d10; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  #wrap { position: relative; }
+  canvas { display: block; outline: none; }
+  #code { position: absolute; display: none; background: transparent; color: #e6e1d6; border: none; outline: none; resize: none;
+    font: 15px/20px ui-monospace, Consolas, "Courier New", monospace; padding: 0; margin: 0; white-space: pre; overflow: auto;
+    caret-color: #f0c35a; tab-size: 4; }
+  #code::selection { background: rgba(240,195,90,0.3); }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" tabindex="0"></canvas><textarea id="code" spellcheck="false" autocomplete="off"></textarea></div>
+<script>window.NAND_EDITION = "demo";</script>
+<script>
+// NANDSMITH circuit engine.
+// A design is { parts: [{id, kind, arr, x, y}], wires: [{a:[partId, outPin], b:[partId, inPin]}] }.
+// Kinds: primitives (NAND, HIGH, DFF, bus parts, RAM, ROM), the level's own IN/OUT pins, and "chip:NAME" for a part
+// the player built earlier. compile() flattens everything down to primitives, so the cost of a chip is always the
+// real number of NAND gates inside it, and the simulation runs the player's own gates.
+(function (root) {
+  "use strict";
+
+  function mask(w) { return w >= 32 ? 0xffffffff : (1 << w) - 1; }
+
+  // ---------- pins ----------
+  function bits(prefix, n, w) { var a = []; for (var i = 0; i < n; i++) a.push({ name: prefix + i, w: w }); return a; }
+  var PRIM = {
+    NAND:   { ins: [{ name: "a", w: 1 }, { name: "b", w: 1 }], outs: [{ name: "out", w: 1 }], arrayable: true, blurb: "Out is 0 only when both inputs are 1." },
+    HIGH:   { ins: [], outs: [{ name: "1", w: 1 }], arrayable: true, blurb: "Always 1." },
+    LOW:    { ins: [], outs: [{ name: "0", w: 1 }], arrayable: true, blurb: "Always 0." },
+    DFF:    { ins: [{ name: "d", w: 1 }], outs: [{ name: "q", w: 1 }], arrayable: true, blurb: "Memory: q shows what d was at the last tick." },
+    SPLIT8: { ins: [{ name: "in", w: 8 }], outs: bits("b", 8, 1), blurb: "Splits an 8-bit bus into bits (b0 is the lowest)." },
+    JOIN8:  { ins: bits("b", 8, 1), outs: [{ name: "out", w: 8 }], blurb: "Joins 8 bits into a bus (b0 is the lowest)." },
+    SPLIT4: { ins: [{ name: "in", w: 4 }], outs: bits("b", 4, 1), blurb: "Splits a 4-bit bus into bits." },
+    JOIN4:  { ins: bits("b", 4, 1), outs: [{ name: "out", w: 4 }], blurb: "Joins 4 bits into a bus." },
+    HALVES: { ins: [{ name: "in", w: 8 }], outs: [{ name: "lo", w: 4 }, { name: "hi", w: 4 }], blurb: "Splits a byte into its low and high halves." },
+    BYTE:   { ins: [{ name: "lo", w: 4 }, { name: "hi", w: 4 }], outs: [{ name: "out", w: 8 }], blurb: "Joins two halves into a byte." },
+    FAN8:   { ins: [{ name: "in", w: 1 }], outs: [{ name: "out", w: 8 }], blurb: "Copies one bit to all 8 bits of a bus." },
+    FAN4:   { ins: [{ name: "in", w: 1 }], outs: [{ name: "out", w: 4 }], blurb: "Copies one bit to all 4 bits of a bus." },
+    RAM:    { ins: [{ name: "addr", w: 8 }, { name: "data", w: 8 }, { name: "write", w: 1 }], outs: [{ name: "q", w: 8 }],
+              blurb: "16 bytes. q shows the byte at addr (low 4 bits). On a tick with write=1, data is stored there. Address 15 is the output port." },
+    ROM:    { ins: [{ name: "addr", w: 8 }], outs: [{ name: "op", w: 8 }, { name: "arg", w: 8 }], blurb: "The program. Shows the instruction at addr." }
+  };
+
+  // pins of any kind; lib maps chip names to {ins, outs, design}
+  function pinsOf(kind, lib, arr) {
+    var p;
+    if (PRIM[kind]) p = PRIM[kind];
+    else if (kind.indexOf("chip:") === 0) { p = lib[kind.slice(5)]; if (!p) throw new Error("unknown chip " + kind); }
+    else if (kind.indexOf("IN:") === 0) { var wi = +kind.split(":")[2]; return { ins: [], outs: [{ name: kind.split(":")[1], w: wi }] }; }
+    else if (kind.indexOf("OUT:") === 0) { var wo = +kind.split(":")[2]; return { ins: [{ name: kind.split(":")[1], w: wo }], outs: [] }; }
+    else throw new Error("unknown part " + kind);
+    arr = arr || 1;
+    if (arr === 1) return { ins: p.ins, outs: p.outs };
+    return {
+      ins: p.ins.map(function (q) { return { name: q.name, w: q.w * arr }; }),
+      outs: p.outs.map(function (q) { return { name: q.name, w: q.w * arr }; })
+    };
+  }
+  // a chip can be laid out as a row of 4 or 8 when every pin is a single bit and nothing inside cares about bit order
+  function arrayable(kind, lib) {
+    if (PRIM[kind]) return !!PRIM[kind].arrayable;
+    var c = lib[kind.slice(5)];
+    return !!(c && c.arrayable);
+  }
+
+  // ---------- flattening ----------
+  // Produces nodes over numbered signals. node = {op, ins:[sig], outs:[sig], w, part:"path"}.
+  function compile(design, lib, io) {
+    var sigs = [], nodes = [], errors = [], warnings = [];
+    function newSig(w) { sigs.push(w); return sigs.length - 1; }
+    var inputs = {}, outputs = {};
+
+    function inline(d, scale, path, bind) {
+      // bind: for an inlined chip, map of its IN/OUT pin name -> outer signal
+      var outSig = {};             // partId -> [sig per out pin]
+      var parts = {};
+      d.parts.forEach(function (p) { parts[p.id] = p; });
+      // first give every part's outputs a signal
+      d.parts.forEach(function (p) {
+        var arr = (p.arr || 1) * scale;
+        if (p.kind.indexOf("OUT:") === 0) return;
+        if (p.kind.indexOf("IN:") === 0) {
+          var nm = p.kind.split(":")[1];
+          if (bind) outSig[p.id] = [bind.ins[nm]];
+          else { var s0 = newSig(+p.kind.split(":")[2] * scale); inputs[nm] = s0; outSig[p.id] = [s0]; }
+          return;
+        }
+        var pins = pinsOf(p.kind, lib, arr);
+        outSig[p.id] = pins.outs.map(function (o) { return newSig(o.w); });
+      });
+      // where does each input pin get its value from
+      if (!bind) top = outSig;           // the player's own parts: which signal each output pin carries
+      var drive = {};
+      d.wires.forEach(function (w) {
+        var key = w.b[0] + "#" + w.b[1];
+        if (drive[key] !== undefined) errors.push({ msg: "Two wires drive the same input.", part: path + w.b[0] });
+        var src = outSig[w.a[0]];
+        if (!src || src[w.a[1]] === undefined) { errors.push({ msg: "A wire starts from nowhere.", part: path + w.a[0] }); return; }
+        drive[key] = src[w.a[1]];
+      });
+      function inSig(p, i, w) {
+        var s = drive[p.id + "#" + i];
+        if (s === undefined) {
+          if (!bind) warnings.push({ msg: "Unconnected input reads as 0.", part: path + p.id, pin: i });
+          var z = newSig(w); nodes.push({ op: "ZERO", ins: [], outs: [z], w: w, part: path + p.id }); return z;
+        }
+        if (sigs[s] !== w) errors.push({ msg: "A " + sigs[s] + "-bit wire is plugged into a " + w + "-bit pin.", part: path + p.id });
+        return s;
+      }
+      d.parts.forEach(function (p) {
+        var arr = (p.arr || 1) * scale, here = path + p.id;
+        if (p.kind.indexOf("IN:") === 0) return;
+        if (p.kind.indexOf("OUT:") === 0) {
+          var nm = p.kind.split(":")[1], w = +p.kind.split(":")[2] * scale, s = inSig(p, 0, w);
+          if (bind) nodes.push({ op: "BUF", ins: [s], outs: [bind.outs[nm]], w: w, part: here });
+          else outputs[nm] = s;
+          return;
+        }
+        var pins = pinsOf(p.kind, lib, arr);
+        var ins = pins.ins.map(function (q, i) { return inSig(p, i, q.w); });
+        var outs = outSig[p.id];
+        if (p.kind.indexOf("chip:") === 0) {
+          var chip = lib[p.kind.slice(5)];
+          var b = { ins: {}, outs: {} };
+          chip.ins.forEach(function (q, i) { b.ins[q.name] = ins[i]; });
+          chip.outs.forEach(function (q, i) { b.outs[q.name] = outs[i]; });
+          // a chip used in a row of 4 or 8 is inlined with every signal widened: its gates then work bit by bit
+          inline(chip.design, arr, here + "/", b);
+          return;
+        }
+        nodes.push({ op: p.kind, ins: ins, outs: outs, w: arr, part: here });
+      });
+    }
+    var top = null;
+    inline(design, 1, "", null);
+    var C = { sigs: sigs, nodes: nodes, inputs: inputs, outputs: outputs, errors: errors, warnings: warnings, top: top };
+    if (!errors.length) order(C);
+    if (!errors.length) measure(C);
+    return C;
+  }
+
+  // ---------- evaluation order ----------
+  // Memory outputs (DFF, RAM contents) are known at the start of every tick; everything else must form no loop.
+  function order(C) {
+    var producer = {};
+    C.nodes.forEach(function (n, i) { n.outs.forEach(function (s) { producer[s] = i; }); });
+    var state = new Int8Array(C.nodes.length), out = [], bad = null;
+    function visit(i, stack) {
+      if (state[i] === 2 || bad) return;
+      if (state[i] === 1) { bad = stack.slice(stack.indexOf(i)); return; }
+      state[i] = 1; stack.push(i);
+      var n = C.nodes[i];
+      if (n.op !== "DFF") n.ins.forEach(function (s, k) {
+        if (n.op === "RAM" && k > 0) return;            // the RAM's read only depends on its address
+        var p = producer[s]; if (p !== undefined) visit(p, stack);
+      });
+      stack.pop(); state[i] = 2; out.push(i);
+    }
+    for (var i = 0; i < C.nodes.length && !bad; i++) visit(i, []);
+    if (bad) {
+      C.errors.push({ msg: "A loop with no memory in it: signals would chase their own tail. Put a DFF in the loop.",
+        parts: bad.map(function (k) { return C.nodes[k].part; }) });
+      return;
+    }
+    C.order = out;
+  }
+
+  // ---------- cost ----------
+  function measure(C) {
+    var nand = 0, dff = 0, depth = new Int32Array(C.sigs.length), maxd = 0;
+    C.order.forEach(function (i) {
+      var n = C.nodes[i];
+      if (n.op === "NAND") nand += n.w;
+      if (n.op === "DFF") dff += n.w;
+      var d = 0;
+      if (n.op !== "DFF") n.ins.forEach(function (s, k) { if (!(n.op === "RAM" && k > 0)) d = Math.max(d, depth[s]); });
+      if (n.op === "NAND") d += 1;
+      if (n.op === "DFF") d = 0;
+      n.outs.forEach(function (s) { depth[s] = d; });
+      if (d > maxd) maxd = d;
+    });
+    C.cost = { nand: nand, dff: dff, delay: maxd };
+  }
+
+  // ---------- running ----------
+  function Machine(C, opts) {
+    opts = opts || {};
+    this.C = C;
+    this.v = new Array(C.sigs.length).fill(0);
+    this.mem = {};                               // node index -> state (DFF value or RAM array)
+    this.rom = opts.rom || [];                   // [[op, arg], ...]
+    this.outLog = [];                            // bytes written to RAM address 15
+    var self = this;
+    C.nodes.forEach(function (n, i) {
+      if (n.op === "DFF") self.mem[i] = 0;
+      if (n.op === "RAM") { var a = new Array(16).fill(0); (opts.ram || []).forEach(function (x, k) { a[k] = x & 255; }); self.mem[i] = a; }
+    });
+  }
+  Machine.prototype.set = function (name, val) { var s = this.C.inputs[name]; if (s !== undefined) this.v[s] = val & mask(this.C.sigs[s]); };
+  Machine.prototype.get = function (name) { var s = this.C.outputs[name]; return s === undefined ? 0 : this.v[s]; };
+  Machine.prototype.eval = function () {
+    var v = this.v, C = this.C, mem = this.mem, rom = this.rom;
+    for (var k = 0; k < C.order.length; k++) {
+      var i = C.order[k], n = C.nodes[i], o = n.outs, x = n.ins, m = mask(n.w), j, a;
+      switch (n.op) {
+        case "NAND": v[o[0]] = ~(v[x[0]] & v[x[1]]) & m; break;
+        case "HIGH": v[o[0]] = m; break;
+        case "ZERO": case "LOW": v[o[0]] = 0; break;
+        case "BUF": v[o[0]] = v[x[0]]; break;
+        case "DFF": v[o[0]] = mem[i]; break;
+        case "SPLIT8": case "SPLIT4": for (j = 0; j < o.length; j++) v[o[j]] = (v[x[0]] >>> j) & 1; break;
+        case "JOIN8": case "JOIN4": a = 0; for (j = 0; j < x.length; j++) a |= (v[x[j]] & 1) << j; v[o[0]] = a; break;
+        case "HALVES": v[o[0]] = v[x[0]] & 15; v[o[1]] = (v[x[0]] >>> 4) & 15; break;
+        case "BYTE": v[o[0]] = (v[x[0]] & 15) | ((v[x[1]] & 15) << 4); break;
+        case "FAN8": v[o[0]] = v[x[0]] & 1 ? 255 : 0; break;
+        case "FAN4": v[o[0]] = v[x[0]] & 1 ? 15 : 0; break;
+        case "RAM": v[o[0]] = mem[i][v[x[0]] & 15]; break;
+        case "ROM": a = rom[v[x[0]] & 255] || [0, 0]; v[o[0]] = a[0] & 255; v[o[1]] = a[1] & 255; break;
+      }
+    }
+  };
+  // the clock edge: every memory takes in what it is being given now
+  Machine.prototype.tick = function () {
+    var v = this.v, C = this.C, mem = this.mem, self = this;
+    C.nodes.forEach(function (n, i) {
+      if (n.op === "DFF") mem[i] = v[n.ins[0]];
+      if (n.op === "RAM" && (v[n.ins[2]] & 1)) {
+        var addr = v[n.ins[0]] & 15;
+        mem[i][addr] = v[n.ins[1]] & 255;
+        if (addr === 15) self.outLog.push(v[n.ins[1]] & 255);
+      }
+    });
+  };
+  Machine.prototype.ram = function () { for (var i in this.mem) if (Array.isArray(this.mem[i])) return this.mem[i]; return null; };
+
+  var API = { PRIM: PRIM, pinsOf: pinsOf, arrayable: arrayable, compile: compile, Machine: Machine, mask: mask };
+  if (typeof module !== "undefined" && module.exports) module.exports = API;
+  else root.NSIM = API;
+})(this);
+
+</script>
+<script>
+// The parts the player builds, in order. Each solved part becomes a chip for every later level.
+// test kinds: "table" (every input combination, or a fixed sample when there are too many),
+//             "seq"   (a run of ticks: set inputs, check outputs, tick),
+//             "cpu"   (programs run on the player's computer against the reference machine),
+//             "prog"  (the player writes a program for the computer they built).
+(function (root) {
+  "use strict";
+  function I(name, w) { return { name: name, w: w || 1 }; }
+  var L = [];
+  function add(o) { L.push(o); }
+
+  // ---------------- I. GATES ----------------
+  add({ id: "NOT", ch: 1, ins: [I("a")], outs: [I("out")], prims: ["NAND"], proven: true,
+    text: "Everything in this workshop starts from one part: NAND. Its output is 0 only when both inputs are 1.\nBuild NOT: out is the opposite of a.",
+    hint: "A NAND with both inputs tied to the same wire.",
+    f: function (i) { return { out: i.a ^ 1 }; } });
+  add({ id: "AND", ch: 1, ins: [I("a"), I("b")], outs: [I("out")], proven: true,
+    text: "out is 1 only when a and b are both 1.\nYour NOT is in the parts list now - every part you finish becomes a chip.",
+    hint: "AND is NAND, then NOT.",
+    f: function (i) { return { out: i.a & i.b }; } });
+  add({ id: "OR", ch: 1, ins: [I("a"), I("b")], outs: [I("out")], proven: true,
+    text: "out is 1 when a or b (or both) is 1.",
+    hint: "NAND gives 1 unless both are 1. What if you flip its inputs first?",
+    f: function (i) { return { out: i.a | i.b }; } });
+  add({ id: "NOR", ch: 1, ins: [I("a"), I("b")], outs: [I("out")], proven: true,
+    text: "out is 1 only when neither input is 1.",
+    hint: "The opposite of OR.",
+    f: function (i) { return { out: (i.a | i.b) ^ 1 }; } });
+  add({ id: "XOR", ch: 1, ins: [I("a"), I("b")], outs: [I("out")], proven: true,
+    text: "out is 1 when exactly one input is 1. This is the heart of adding numbers.",
+    hint: "Built from OR and AND it takes more gates than the proven minimum. Try sharing one NAND between two others.",
+    f: function (i) { return { out: i.a ^ i.b }; } });
+  add({ id: "XNOR", ch: 1, ins: [I("a"), I("b")], outs: [I("out")], proven: true,
+    text: "out is 1 when both inputs are the same.",
+    hint: "The opposite of XOR.",
+    f: function (i) { return { out: (i.a ^ i.b) ^ 1 }; } });
+  add({ id: "MUX", ch: 1, ins: [I("a"), I("b"), I("sel")], outs: [I("out")], proven: true,
+    text: "A switch for signals. When sel is 0, out follows a. When sel is 1, out follows b.",
+    hint: "Two ANDs (one with sel, one with NOT sel) feeding an OR. Then shrink it.",
+    f: function (i) { return { out: i.sel ? i.b : i.a }; } });
+  add({ id: "DEMUX", ch: 1, ins: [I("in"), I("sel")], outs: [I("a"), I("b")], proven: true,
+    text: "The other way round: send in to output a when sel is 0, to b when sel is 1. The unused output is 0.",
+    hint: "a is in AND NOT sel, b is in AND sel. Four NANDs is the floor: share one between both outputs.",
+    f: function (i) { return { a: i.sel ? 0 : i.in, b: i.sel ? i.in : 0 }; } });
+
+  
+
+  var CONTROL_TABLE = [
+    { load: 1, write: 0, imm: 1, sub: 0, pass: 1, jmp: 0, jz: 0, jn: 0 },
+    { load: 1, write: 0, imm: 0, sub: 0, pass: 1, jmp: 0, jz: 0, jn: 0 },
+    { load: 0, write: 1, imm: 0, sub: 0, pass: 0, jmp: 0, jz: 0, jn: 0 },
+    { load: 1, write: 0, imm: 0, sub: 0, pass: 0, jmp: 0, jz: 0, jn: 0 },
+    { load: 1, write: 0, imm: 0, sub: 1, pass: 0, jmp: 0, jz: 0, jn: 0 },
+    { load: 0, write: 0, imm: 0, sub: 0, pass: 0, jmp: 1, jz: 0, jn: 0 },
+    { load: 0, write: 0, imm: 0, sub: 0, pass: 0, jmp: 0, jz: 1, jn: 0 },
+    { load: 0, write: 0, imm: 0, sub: 0, pass: 0, jmp: 0, jz: 0, jn: 1 }
+  ];
+
+  function rng(s) { return function () { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }; }
+  function bitSeq(w) {
+    var st = [], q = 0, r = rng(w * 11 + 1), m = w === 8 ? 255 : 1;
+    for (var k = 0; k < 40; k++) {
+      var d = Math.floor(r() * (m + 1)), ld = r() < 0.4 ? 1 : 0;
+      if (k < 4) { d = [m, 0, m, 0][k]; ld = [1, 0, 0, 1][k]; }
+      st.push({ set: { d: d, load: ld }, expect: { q: q } });
+      if (ld) q = d;
+    }
+    return st;
+  }
+
+  // defaults: titles, which primitive parts and chips each level may use
+  var prims = [];
+  L.forEach(function (lv, idx) {
+    lv.title = lv.title || lv.id;
+    lv.kind = lv.kind || "table";
+    lv.index = idx;
+    (lv.prims || []).forEach(function (p) { if (prims.indexOf(p) < 0) prims.push(p); });
+    lv.allPrims = prims.slice();
+    lv.chips = L.slice(0, idx).filter(function (o) { return o.kind !== "prog"; }).map(function (o) { return o.id; });
+  });
+
+  // the input cases a "table" level is checked against
+  function cases(lv) {
+    if (lv.cases) return lv.cases();
+    var total = 0; lv.ins.forEach(function (p) { total += p.w; });
+    var out = [];
+    if (total <= 12) {
+      for (var v = 0; v < (1 << total); v++) {
+        var o = {}, sh = 0;
+        lv.ins.forEach(function (p) { o[p.name] = (v >> sh) & ((1 << p.w) - 1); sh += p.w; });
+        out.push(o);
+      }
+      return out;
+    }
+    var r = rng(total * 31 + lv.index), edges = [0, 1, 127, 128, 254, 255];
+    edges.forEach(function (e) { var o = {}; lv.ins.forEach(function (p) { o[p.name] = e & ((1 << p.w) - 1); }); out.push(o); });
+    for (var k = 0; k < 250; k++) { var q = {}; lv.ins.forEach(function (p) { q[p.name] = Math.floor(r() * (1 << p.w)); }); out.push(q); }
+    return out;
+  }
+
+  // the programs the SMITH-8 level is tested with: [name, program, ram]
+  var CPU_TESTS = [
+    ["load and store", "LDI 7\nST 3\nLDI 0\nLD 3\nST 15\nLDI 200\nST 15\ndone: JMP done", []],
+    ["add and subtract", "LD 0\nADD 1\nST 15\nSUB 2\nST 15\nSUB 2\nSUB 2\nST 15\ndone: JMP done", [100, 55, 70]],
+    ["jumps", "LDI 3\nST 1\nloop: LD 1\nJZ end\nST 15\nLDI 1\nST 2\nLD 1\nSUB 2\nST 1\nJMP loop\nend: LDI 0\nSUB 2\nJN neg\nJMP end\nneg: ST 15\ndone: JMP done", []],
+    ["every instruction", "LDI 250\nST 4\nADD 4\nST 15\nJN n1\nLDI 1\nST 15\nn1: LDI 0\nJZ z1\nST 15\nz1: LDI 9\nJZ bad\nJN bad\nST 15\nLDI 128\nJN ok\nbad: LDI 66\nST 15\nok: JMP ok", []]
+  ];
+
+  var API = { LEVELS: L, cases: cases, CPU_TESTS: CPU_TESTS, CONTROL_TABLE: CONTROL_TABLE };
+  if (typeof module !== "undefined" && module.exports) module.exports = API;
+  else root.NLEVELS = API;
+})(this);
+
+</script>
+<script>
+// SMITH-8: the computer the player builds.  One accumulator A, a program counter, 16 bytes of RAM.
+// An instruction is two bytes: op (only the low 3 bits matter) and arg. One instruction runs per tick.
+//   0 LDI k   A = k              4 SUB m   A = A - RAM[m]
+//   1 LD m    A = RAM[m]         5 JMP t   go to t
+//   2 ST m    RAM[m] = A         6 JZ t    go to t if A is 0
+//   3 ADD m   A = A + RAM[m]     7 JN t    go to t if A is negative (its top bit is 1)
+// RAM address 15 is the output port: storing there writes a number out. A JMP to itself means "done".
+(function (root) {
+  "use strict";
+  var OPS = ["LDI", "LD", "ST", "ADD", "SUB", "JMP", "JZ", "JN"];
+  var HELP = {
+    LDI: "A = k", LD: "A = RAM[m]", ST: "RAM[m] = A (m = 15 writes to the output)", ADD: "A = A + RAM[m]",
+    SUB: "A = A - RAM[m]", JMP: "go to t", JZ: "go to t if A = 0", JN: "go to t if A is negative (128-255)"
+  };
+
+  // text -> { rom: [[op, arg]], errors: [{line, msg}], lines: [source line of each instruction] }
+  function assemble(src) {
+    var lines = String(src).split(/\r?\n/), labels = {}, items = [], errors = [];
+    lines.forEach(function (raw, ln) {
+      var s = raw.replace(/[;#].*$/, "").trim();
+      while (true) {
+        var m = s.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/);
+        if (!m) break;
+        var name = m[1].toLowerCase();
+        if (labels[name] !== undefined) errors.push({ line: ln, msg: "Label \"" + m[1] + "\" is used twice." });
+        labels[name] = items.length; s = m[2].trim();
+      }
+      if (!s) return;
+      var parts = s.split(/[\s,]+/), op = parts[0].toUpperCase(), k = OPS.indexOf(op);
+      if (k < 0) { errors.push({ line: ln, msg: "Unknown instruction \"" + parts[0] + "\"." }); return; }
+      if (parts.length !== 2) { errors.push({ line: ln, msg: op + " needs exactly one value." }); return; }
+      items.push({ op: k, arg: parts[1], line: ln });
+    });
+    var rom = [], map = [];
+    items.forEach(function (it) {
+      var a = it.arg, v;
+      if (/^-?\d+$/.test(a)) v = parseInt(a, 10);
+      else if (/^0x[0-9a-f]+$/i.test(a)) v = parseInt(a, 16);
+      else if (labels[a.toLowerCase()] !== undefined) v = labels[a.toLowerCase()];
+      else { errors.push({ line: it.line, msg: "Unknown label \"" + a + "\"." }); v = 0; }
+      if (v < -128 || v > 255) errors.push({ line: it.line, msg: "Values go from -128 to 255." });
+      if ((it.op === 1 || it.op === 2 || it.op === 3 || it.op === 4) && (v < 0 || v > 15)) errors.push({ line: it.line, msg: "RAM addresses go from 0 to 15." });
+      rom.push([it.op, v & 255]); map.push(it.line);
+    });
+    if (rom.length > 64) errors.push({ line: 0, msg: "Programs hold at most 64 instructions." });
+    return { rom: rom, errors: errors, lines: map };
+  }
+
+  // the reference machine: what a correct SMITH-8 must do, tick by tick
+  function Emu(rom, ram) { this.rom = rom; this.ram = new Array(16).fill(0); (ram || []).forEach(function (x, i) { this.ram[i] = x & 255; }, this); this.a = 0; this.pc = 0; this.out = []; this.ticks = 0; }
+  Emu.prototype.halted = function () { var ins = this.rom[this.pc] || [0, 0]; return (ins[0] & 7) === 5 && ins[1] === this.pc; };
+  Emu.prototype.step = function () {
+    var ins = this.rom[this.pc] || [0, 0], op = ins[0] & 7, k = ins[1] & 255, m = k & 15, next = (this.pc + 1) & 255, a = this.a;
+    switch (op) {
+      case 0: a = k; break;
+      case 1: a = this.ram[m]; break;
+      case 2: this.ram[m] = a; if (m === 15) this.out.push(a); break;
+      case 3: a = (a + this.ram[m]) & 255; break;
+      case 4: a = (a - this.ram[m]) & 255; break;
+      case 5: next = k; break;
+      case 6: if (this.a === 0) next = k; break;
+      case 7: if (this.a & 128) next = k; break;
+    }
+    this.a = a; this.pc = next; this.ticks++;
+  };
+  function run(rom, ram, limit) {
+    var e = new Emu(rom, ram);
+    while (!e.halted() && e.ticks < (limit || 5000)) e.step();
+    return e;
+  }
+
+  var API = { OPS: OPS, HELP: HELP, assemble: assemble, Emu: Emu, run: run };
+  if (typeof module !== "undefined" && module.exports) module.exports = API;
+  else root.NISA = API;
+})(this);
+
+</script>
+<script>
+// Checks a design (or a program) against a level. Used by the game and by the automated tests alike.
+(function (root) {
+  "use strict";
+  var S = typeof module !== "undefined" && module.exports ? require("./sim.js") : root.NSIM;
+  var LV = typeof module !== "undefined" && module.exports ? require("./levels.js") : root.NLEVELS;
+  var ISA = typeof module !== "undefined" && module.exports ? require("./isa.js") : root.NISA;
+
+  // a library entry for a finished design, so later levels can use it as a chip
+  function makeChip(level, design, lib) {
+    var C = S.compile(design, lib);
+    var simple = level.ins.concat(level.outs).every(function (p) { return p.w === 1; }) &&
+      C.nodes.every(function (n) { return n.op === "NAND" || n.op === "HIGH" || n.op === "LOW" || n.op === "ZERO" || n.op === "BUF" || n.op === "DFF"; });
+    return { ins: level.ins, outs: level.outs, design: design, arrayable: simple, cost: C.cost };
+  }
+
+  // the outer pins of a level as parts: "IN:name:w" and "OUT:name:w"
+  function ioParts(level) {
+    return level.ins.map(function (p) { return "IN:" + p.name + ":" + p.w; }).concat(level.outs.map(function (p) { return "OUT:" + p.name + ":" + p.w; }));
+  }
+
+  function fmt(v, w) { return w === 1 ? String(v) : String(v); }
+
+  // result: { ok, error, cost, tried, fail: {inputs, expect, got, step} }
+  function check(level, design, lib) {
+    var C = S.compile(design, lib);
+    if (C.errors.length) return { ok: false, error: C.errors[0].msg, errors: C.errors, cost: null };
+    var res = { ok: true, cost: C.cost, tried: 0, compiled: C };
+    if (level.kind === "table") {
+      var cs = LV.cases(level), M = new S.Machine(C);
+      for (var k = 0; k < cs.length; k++) {
+        var inp = cs[k], want = level.f(inp);
+        for (var n in inp) M.set(n, inp[n]);
+        M.eval(); res.tried++;
+        var got = {}, bad = false;
+        level.outs.forEach(function (p) { got[p.name] = M.get(p.name); if (got[p.name] !== (want[p.name] & S.mask(p.w))) bad = true; });
+        if (bad) { res.ok = false; res.fail = { inputs: inp, expect: want, got: got }; return res; }
+      }
+      return res;
+    }
+    if (level.kind === "seq") {
+      var steps = level.seq(), M2 = new S.Machine(C);
+      for (var t = 0; t < steps.length; t++) {
+        var s = steps[t];
+        for (var n2 in s.set) M2.set(n2, s.set[n2]);
+        M2.eval(); res.tried++;
+        var got2 = {}, bad2 = false;
+        level.outs.forEach(function (p) { got2[p.name] = M2.get(p.name); if (got2[p.name] !== s.expect[p.name]) bad2 = true; });
+        if (bad2) { res.ok = false; res.fail = { inputs: s.set, expect: s.expect, got: got2, step: t, history: steps.slice(Math.max(0, t - 4), t) }; return res; }
+        M2.tick();
+      }
+      return res;
+    }
+    if (level.kind === "cpu") {
+      for (var p = 0; p < LV.CPU_TESTS.length; p++) {
+        var T = LV.CPU_TESTS[p], asm = ISA.assemble(T[1]);
+        var r = runCpu(C, asm.rom, T[2], 400, true);
+        res.tried += r.ticks;
+        if (!r.ok) { res.ok = false; res.fail = { program: T[0], source: T[1], detail: r.detail, tick: r.ticks }; return res; }
+      }
+      return res;
+    }
+    return res;
+  }
+
+  // run a compiled computer next to the reference machine, comparing pc and A after every tick
+  function runCpu(C, rom, ram, limit, compare) {
+    var M = new S.Machine(C, { rom: rom, ram: ram }), E = new ISA.Emu(rom, ram), ticks = 0;
+    M.eval();
+    while (ticks < limit) {
+      var pc = M.get("pc"), a = M.get("a");
+      if (compare && (pc !== E.pc || a !== E.a)) {
+        return { ok: false, ticks: ticks, detail: "After " + ticks + " ticks your computer has pc=" + pc + " a=" + a + ", the reference has pc=" + E.pc + " a=" + E.a + "." };
+      }
+      if (E.halted() && (!compare || pc === E.pc)) break;
+      M.tick(); E.step(); ticks++; M.eval();
+      if (compare && M.outLog.join() !== E.out.join()) {
+        return { ok: false, ticks: ticks, detail: "Output mismatch: yours " + JSON.stringify(M.outLog) + ", reference " + JSON.stringify(E.out) + "." };
+      }
+    }
+    return { ok: true, ticks: ticks, out: M.outLog, machine: M };
+  }
+
+  // a program level: assemble, run on the player's own computer (gate by gate), compare outputs
+  function checkProgram(level, src, cpuChip, lib) {
+    var asm = ISA.assemble(src);
+    if (asm.errors.length) return { ok: false, error: "Line " + (asm.errors[0].line + 1) + ": " + asm.errors[0].msg, asm: asm };
+    var C = cpuMachineDesign(lib);
+    if (C.errors.length) return { ok: false, error: "Your computer has a problem: " + C.errors[0].msg };
+    var tests = level.tests(), total = 0, res = { ok: true, size: asm.rom.length, asm: asm };
+    for (var k = 0; k < tests.length; k++) {
+      var t = tests[k], M = new S.Machine(C, { rom: asm.rom, ram: t.ram }), ticks = 0;
+      M.eval();
+      while (ticks < 3000) {
+        var pc = M.get("pc"), ins = asm.rom[pc] || [0, 0];
+        if ((ins[0] & 7) === 5 && ins[1] === pc) break;
+        M.tick(); ticks++; M.eval();
+        if (M.outLog.length > t.out.length + 5) break;
+      }
+      total += ticks;
+      if (M.outLog.join() !== t.out.join() || ticks >= 3000) {
+        res.ok = false;
+        res.fail = { ram: t.ram, expect: t.out, got: M.outLog, ticks: ticks, timeout: ticks >= 3000 };
+        return res;
+      }
+    }
+    res.cycles = total;
+    return res;
+  }
+  function cpuMachineDesign(lib) {
+    var d = { parts: [{ id: "cpu", kind: "chip:CPU", x: 0, y: 0 }, { id: "o1", kind: "OUT:pc:8" }, { id: "o2", kind: "OUT:a:8" }],
+      wires: [{ a: ["cpu", 0], b: ["o1", 0] }, { a: ["cpu", 1], b: ["o2", 0] }] };
+    return S.compile(d, lib);
+  }
+
+  var API = { check: check, checkProgram: checkProgram, makeChip: makeChip, ioParts: ioParts, runCpu: runCpu };
+  if (typeof module !== "undefined" && module.exports) module.exports = API;
+  else root.NCHECK = API;
+})(this);
+
+</script>
+<script>
+// Generated by prove.js: the proven fewest NAND gates for each small part.
+var NPROOFS = {"NOT":{"min":1,"searched":3},"AND":{"min":2,"searched":16},"OR":{"min":3,"searched":38},"NOR":{"min":4,"searched":139},"XOR":{"min":4,"searched":166},"XNOR":{"min":5,"searched":309},"MUX":{"min":4,"searched":1253},"DEMUX":{"min":4,"searched":54},"HALF":{"min":5,"searched":210},"FULL":{"min":9,"searched":12943997}};
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var S = window.NSIM, LV = window.NLEVELS, ISA = window.NISA, CK = window.NCHECK, PROOF = window.NPROOFS || {};
+  var ED = window.NAND_EDITION || "full", DEMO = ED === "demo";
+  var STORE_URL = "https://kqmigqkqri.itch.io/nandsmith";
+  var LEVELS = LV.LEVELS;
+  var W = 1200, H = 760, BX = 180, BY = 48, BW = 700, BH = H - BY, PX = 880, PW = W - PX;
+  var FONT = "'Segoe UI', system-ui, -apple-system, sans-serif", MONO = "ui-monospace, Consolas, 'Courier New', monospace";
+  var COL = { bg: "#0d1014", dot: "#1b212a", panel: "#141920", panel2: "#1a2029", line: "#2a323e", text: "#e6e1d6", dim: "#8a93a3",
+    copper: "#d9934a", hot: "#ffb648", cold: "#5a4632", bus: "#62b6dd", busDim: "#2c4f62", ok: "#7fd18b", bad: "#ff6b5e", gold: "#f0c35a",
+    part: "#1c232d", part2: "#232c38", edge: "#3b4656", chip: "#2a2433", chipEdge: "#6b5a86", sel: "#f0c35a" };
+  var CH_NAMES = ["", "GATES", "ARITHMETIC", "MEMORY", "COMPUTER", "PROGRAMS"];
+  var ROMAN = ["", "I", "II", "III", "IV", "V"];
+  var cv = document.getElementById("c"), cx = cv.getContext("2d"), code = document.getElementById("code"), scale = 1, dpr = 1;
+
+  // ---------------- save ----------------
+  var KEY = DEMO ? "nandsmith.demo.v1" : "nandsmith.v1";
+  var store = { designs: {}, solved: {}, progs: {}, progSolved: {}, hints: {}, muted: false };
+  try { var raw = localStorage.getItem(KEY); if (raw) { var o = JSON.parse(raw); for (var k in o) store[k] = o[k]; } } catch (e) {}
+  function persist() { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) {} }
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  // ---------------- chips the player has built ----------------
+  var libCache = {};
+  function libUpTo(idx) {
+    if (libCache[idx]) return libCache[idx];
+    var lib = {};
+    for (var i = 0; i < idx; i++) {
+      var lv = LEVELS[i];
+      if (lv.kind === "prog" || !store.solved[lv.id]) continue;
+      try { lib[lv.id] = CK.makeChip(lv, store.solved[lv.id].design, lib); } catch (e) {}
+    }
+    libCache[idx] = lib;
+    return lib;
+  }
+  function unlocked(lv) {
+    if (lv.index === 0) return true;
+    var prev = LEVELS[lv.index - 1];
+    return prev.kind === "prog" ? !!store.progSolved[prev.id] : !!store.solved[prev.id];
+  }
+  function isSolved(lv) { return lv.kind === "prog" ? !!store.progSolved[lv.id] : !!store.solved[lv.id]; }
+
+  // ---------------- sound ----------------
+  var ac = null;
+  function tone(f, d, type, vol, delay) {
+    if (store.muted) return;
+    try {
+      if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+      if (ac.state === "suspended") ac.resume();
+      var t0 = ac.currentTime + (delay || 0), o = ac.createOscillator(), g = ac.createGain();
+      o.type = type || "triangle"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol || 0.06, t0 + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+      o.connect(g); g.connect(ac.destination); o.start(t0); o.stop(t0 + d + 0.02);
+    } catch (e) {}
+  }
+  function sfx(k) {
+    if (k === "place") tone(520, 0.06, "triangle", 0.05);
+    else if (k === "wire") { tone(660, 0.05, "square", 0.03); tone(990, 0.06, "triangle", 0.04, 0.03); }
+    else if (k === "del") tone(220, 0.08, "triangle", 0.05);
+    else if (k === "deny") tone(140, 0.1, "square", 0.04);
+    else if (k === "tick") tone(880, 0.03, "square", 0.03);
+    else if (k === "pass") [523, 659, 784, 1047].forEach(function (f, i) { tone(f, 0.25, "triangle", 0.07, i * 0.08); });
+    else if (k === "fail") [330, 262].forEach(function (f, i) { tone(f, 0.25, "sawtooth", 0.04, i * 0.12); });
+  }
+
+  // ---------------- drawing helpers ----------------
+  function rr(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
+  function text(s, x, y, size, col, align, weight, font) { cx.font = (weight || 500) + " " + size + "px " + (font || FONT); cx.fillStyle = col || COL.text; cx.textAlign = align || "left"; cx.textBaseline = "middle"; cx.fillText(s, x, y); }
+  function tw(s, size, weight, font) { cx.font = (weight || 500) + " " + size + "px " + (font || FONT); return cx.measureText(s).width; }
+  function wrap(s, x, y, maxW, size, col, lh, font) {
+    var paras = String(s).split("\n");
+    paras.forEach(function (para) {
+      if (/^\s\s/.test(para)) {                       // fixed-width lines (tables, code): wrap by characters
+        var per = Math.max(10, Math.floor(maxW / tw("M", size - 1, 500, MONO)));
+        for (var c = 0; c < para.length; c += per) { text((c ? "    " : "") + para.slice(c, c + per - (c ? 4 : 0)), x, y, size - 1, col, "left", 500, MONO); y += lh; if (c) c -= 4; }
+        return;
+      }
+      var words = para.split(" "), line = "";
+      for (var i = 0; i < words.length; i++) {
+        var t = line ? line + " " + words[i] : words[i];
+        if (tw(t, size, 500, font) > maxW && line) { text(line, x, y, size, col, "left", 500, font); line = words[i]; y += lh; } else line = t;
+      }
+      text(line, x, y, size, col, "left", 500, font); y += lh;
+    });
+    return y;
+  }
+  var buttons = [], hover = { x: -1, y: -1 };
+  function button(x, y, w, h, label, fn, o) {
+    o = o || {};
+    var hot = hover.x >= x && hover.x <= x + w && hover.y >= y && hover.y <= y + h && !o.disabled;
+    rr(x, y, w, h, 7);
+    cx.fillStyle = o.disabled ? "#191e25" : o.primary ? (hot ? "#e0a855" : "#c98d3c") : hot ? "#2b3441" : (o.fill || "#222a35"); cx.fill();
+    cx.strokeStyle = o.primary ? "#f0c35a" : o.on ? COL.gold : "#38424f"; cx.lineWidth = o.on ? 2 : 1; cx.stroke();
+    text(label, x + w / 2, y + h / 2 + 1, o.size || 13, o.disabled ? "#4b5360" : o.primary ? "#1a1208" : (o.col || COL.text), "center", 700);
+    if (!o.disabled && fn) buttons.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+
+  // ---------------- the editor ----------------
+  var screen = "title", ed = null, msg = "", msgT = 0, lib = {}, palScroll = 0, tipText = "";
+
+  function freshDesign(lv) {
+    var d = { parts: [], wires: [] };
+    var nIn = lv.ins.length, nOut = lv.outs.length;
+    lv.ins.forEach(function (p, i) { d.parts.push({ id: "in_" + p.name, kind: "IN:" + p.name + ":" + p.w, x: 0, y: 40 + i * 80 + (nIn < 4 ? 60 : 0) }); });
+    lv.outs.forEach(function (p, i) { d.parts.push({ id: "out_" + p.name, kind: "OUT:" + p.name + ":" + p.w, x: 600, y: 40 + i * (nOut > 5 ? 60 : 80) + (nOut < 4 ? 60 : 0) }); });
+    return d;
+  }
+  function openLevel(lv) {
+    if (lv.kind === "prog") return openProg(lv);
+    lib = libUpTo(lv.index);
+    var d = store.designs[lv.id] ? clone(store.designs[lv.id]) : freshDesign(lv);
+    // make sure every pin of the level is on the board, even in an old save
+    var have = {}; d.parts.forEach(function (p) { have[p.id] = 1; });
+    freshDesign(lv).parts.forEach(function (p) { if (!have[p.id]) d.parts.push(p); });
+    ed = { lv: lv, design: d, sel: [], selWire: -1, view: { x: -60, y: 0, z: 1 }, inVals: {}, undo: [], redo: [], result: null, hint: !!store.hints[lv.id],
+      drag: null, C: null, M: null, ticks: 0, cpuProg: 0, tableGot: null };
+    lv.ins.forEach(function (p) { ed.inVals[p.name] = 0; });
+    screen = "edit";
+    recompile(true);
+    fitView();
+  }
+  function saveDesign() { store.designs[ed.lv.id] = ed.design; persist(); }
+  function snapshot() { ed.undo.push(JSON.stringify(ed.design)); if (ed.undo.length > 200) ed.undo.shift(); ed.redo = []; }
+  function undo() { if (!ed.undo.length) return; ed.redo.push(JSON.stringify(ed.design)); ed.design = JSON.parse(ed.undo.pop()); ed.sel = []; ed.selWire = -1; changed(); }
+  function redo() { if (!ed.redo.length) return; ed.undo.push(JSON.stringify(ed.design)); ed.design = JSON.parse(ed.redo.pop()); ed.sel = []; ed.selWire = -1; changed(); }
+  function changed() { ed.result = null; saveDesign(); recompile(true); }
+  function partById(id) { for (var i = 0; i < ed.design.parts.length; i++) if (ed.design.parts[i].id === id) return ed.design.parts[i]; return null; }
+  function isIO(p) { return p.kind.indexOf("IN:") === 0 || p.kind.indexOf("OUT:") === 0; }
+  function newId() { var n = 1; while (partById("p" + n)) n++; return "p" + n; }
+
+  // compile the board and run it with the current inputs; memory restarts when the circuit changes
+  function recompile(reset) {
+    var C;
+    try { C = S.compile(ed.design, lib); } catch (e) { C = { errors: [{ msg: String(e.message || e) }], warnings: [] }; }
+    ed.C = C;
+    if (C.errors.length) { ed.M = null; ed.tableGot = null; return; }
+    if (reset || !ed.M) {
+      var opts = {};
+      if (ed.lv.kind === "cpu") { var T = LV.CPU_TESTS[ed.cpuProg]; opts = { rom: ISA.assemble(T[1]).rom, ram: T[2] }; }
+      ed.M = new S.Machine(C, opts); ed.ticks = 0;
+    } else ed.M.C = C;
+    for (var n in ed.inVals) ed.M.set(n, ed.inVals[n]);
+    ed.M.eval();
+    liveTable();
+  }
+  // for small table levels: run every row now, so the panel can show ticks and crosses while you build
+  function liveTable() {
+    ed.tableGot = null;
+    var lv = ed.lv;
+    if (lv.kind !== "table" || !ed.C || ed.C.errors.length) return;
+    var bitsIn = 0; lv.ins.forEach(function (p) { bitsIn += p.w; });
+    if (bitsIn > 4 && !lv.cases) return;
+    var rows = LV.cases(lv);
+    if (rows.length > 16) return;
+    var M = new S.Machine(ed.C);
+    ed.tableGot = rows.map(function (r) {
+      for (var n in r) M.set(n, r[n]);
+      M.eval();
+      var got = {}, want = lv.f(r), ok = true;
+      lv.outs.forEach(function (p) { got[p.name] = M.get(p.name); if (got[p.name] !== (want[p.name] & S.mask(p.w))) ok = false; });
+      return { inp: r, want: want, got: got, ok: ok };
+    });
+  }
+  function setInput(name, v) {
+    var p = ed.lv.ins.filter(function (q) { return q.name === name; })[0];
+    ed.inVals[name] = v & S.mask(p.w);
+    if (ed.M) { ed.M.set(name, ed.inVals[name]); ed.M.eval(); }
+  }
+
+  // ---------------- geometry ----------------
+  function pinsOf(p) { try { return S.pinsOf(p.kind, lib, p.arr || 1); } catch (e) { return { ins: [], outs: [] }; } }
+  function partLabel(p) {
+    if (p.kind.indexOf("IN:") === 0 || p.kind.indexOf("OUT:") === 0) return p.kind.split(":")[1];
+    var n = p.kind.indexOf("chip:") === 0 ? p.kind.slice(5) : p.kind;
+    var lv = LEVELS.filter(function (l) { return l.id === n; })[0];
+    return (lv ? lv.title : n) + ((p.arr || 1) > 1 ? " ×" + p.arr : "");
+  }
+  var geoCache = {};
+  function geom(p) {
+    var pins = pinsOf(p), io = isIO(p), lab = partLabel(p);
+    if (io) {
+      var w = Math.max(70, tw(lab, 13, 700) + 52), h = 30;
+      var isIn = p.kind.indexOf("IN:") === 0;
+      return { x: p.x, y: p.y, w: w, h: h, io: true, isIn: isIn,
+        ins: isIn ? [] : [{ x: p.x, y: p.y + 15, name: pins.ins[0].name, w: pins.ins[0].w }],
+        outs: isIn ? [{ x: p.x + w, y: p.y + 15, name: pins.outs[0].name, w: pins.outs[0].w }] : [] };
+    }
+    var rows = Math.max(pins.ins.length, pins.outs.length, 1);
+    var showPinNames = !(p.kind === "NAND" || p.kind === "HIGH" || p.kind === "LOW" || p.kind === "DFF");
+    var lw = 0;
+    if (showPinNames) {
+      pins.ins.forEach(function (q) { lw = Math.max(lw, tw(q.name, 10)); });
+      var rw = 0; pins.outs.forEach(function (q) { rw = Math.max(rw, tw(q.name, 10)); });
+      lw += rw;
+    }
+    var w2 = Math.max(rows > 2 ? 64 : 58, tw(lab, 12, 700) + lw + (showPinNames ? 44 : 26)), h2 = rows * 20 + 14;
+    function at(list, x) { var off = (rows - list.length) * 10; return list.map(function (q, i) { return { x: x, y: p.y + 17 + i * 20 + off, name: q.name, w: q.w }; }); }
+    return { x: p.x, y: p.y, w: w2, h: h2, ins: at(pins.ins, p.x), outs: at(pins.outs, p.x + w2), showPins: showPinNames, label: lab };
+  }
+  function toScreen(wx, wy) { var v = ed.view; return [BX + (wx - v.x) * v.z, BY + (wy - v.y) * v.z]; }
+  function toWorld(sx, sy) { var v = ed.view; return [(sx - BX) / v.z + v.x, (sy - BY) / v.z + v.y]; }
+  function fitView() {
+    var minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    ed.design.parts.forEach(function (p) { var g = geom(p); minX = Math.min(minX, g.x); minY = Math.min(minY, g.y); maxX = Math.max(maxX, g.x + g.w); maxY = Math.max(maxY, g.y + g.h); });
+    if (minX > maxX) return;
+    var pad = 60, z = Math.min(1.25, (BW - 2 * pad) / Math.max(200, maxX - minX), (BH - 2 * pad) / Math.max(200, maxY - minY));
+    z = Math.max(0.35, z);
+    ed.view.z = z;
+    ed.view.x = (minX + maxX) / 2 - BW / 2 / z;
+    ed.view.y = (minY + maxY) / 2 - BH / 2 / z;
+  }
+
+  // the value on a wire, read from the running machine
+  function sigOf(partId, pin) { return ed.C && ed.C.top && ed.C.top[partId] ? ed.C.top[partId][pin] : undefined; }
+  function valOf(partId, pin) { var s = sigOf(partId, pin); return s === undefined || !ed.M ? null : ed.M.v[s]; }
+
+  // ---------------- hit testing ----------------
+  function hitPin(wx, wy) {
+    var best = null, bd = 9 / ed.view.z;
+    for (var i = ed.design.parts.length - 1; i >= 0; i--) {
+      var p = ed.design.parts[i], g = geom(p);
+      g.ins.forEach(function (q, k) { var d = Math.hypot(q.x - wx, q.y - wy); if (d < bd) { bd = d; best = { part: p, dir: "in", idx: k, x: q.x, y: q.y, w: q.w }; } });
+      g.outs.forEach(function (q, k) { var d = Math.hypot(q.x - wx, q.y - wy); if (d < bd) { bd = d; best = { part: p, dir: "out", idx: k, x: q.x, y: q.y, w: q.w }; } });
+    }
+    return best;
+  }
+  function hitPart(wx, wy) {
+    for (var i = ed.design.parts.length - 1; i >= 0; i--) {
+      var p = ed.design.parts[i], g = geom(p);
+      if (wx >= g.x && wx <= g.x + g.w && wy >= g.y && wy <= g.y + g.h) return p;
+    }
+    return null;
+  }
+  function wirePts(w) {
+    var a = partById(w.a[0]), b = partById(w.b[0]);
+    if (!a || !b) return null;
+    var ga = geom(a).outs[w.a[1]], gb = geom(b).ins[w.b[1]];
+    if (!ga || !gb) return null;
+    return [ga.x, ga.y, gb.x, gb.y];
+  }
+  function bez(x1, y1, x2, y2, t) {
+    var dx = Math.max(30, Math.abs(x2 - x1) * 0.5), u = 1 - t;
+    var c1x = x1 + dx, c2x = x2 - dx;
+    return [u * u * u * x1 + 3 * u * u * t * c1x + 3 * u * t * t * c2x + t * t * t * x2, u * u * u * y1 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y2];
+  }
+  function hitWire(wx, wy) {
+    var best = -1, bd = 7 / ed.view.z;
+    ed.design.wires.forEach(function (w, i) {
+      var pts = wirePts(w); if (!pts) return;
+      for (var t = 0; t <= 1; t += 0.04) { var q = bez(pts[0], pts[1], pts[2], pts[3], t), d = Math.hypot(q[0] - wx, q[1] - wy); if (d < bd) { bd = d; best = i; } }
+    });
+    return best;
+  }
+
+  // ---------------- editing ----------------
+  function connect(p1, p2) {
+    if (p1.dir === p2.dir) { say(p1.dir === "out" ? "Connect an output (right side) to an input (left side)." : "Inputs connect to outputs, not to other inputs."); sfx("deny"); return; }
+    var src = p1.dir === "out" ? p1 : p2, dst = p1.dir === "out" ? p2 : p1;
+    if (src.part.id === dst.part.id && !(src.part.kind === "DFF" || /chip:(BIT|REG8)/.test(src.part.kind))) { /* allowed: loops are checked by the simulator */ }
+    if (src.w !== dst.w) { say("That is a " + src.w + "-bit wire going into a " + dst.w + "-bit pin."); sfx("deny"); return; }
+    snapshot();
+    ed.design.wires = ed.design.wires.filter(function (w) { return !(w.b[0] === dst.part.id && w.b[1] === dst.idx); });
+    ed.design.wires.push({ a: [src.part.id, src.idx], b: [dst.part.id, dst.idx] });
+    sfx("wire");
+    changed();
+  }
+  function placePart(kind, wx, wy) {
+    snapshot();
+    var p = { id: newId(), kind: kind, arr: 1, x: Math.round(wx / 10) * 10, y: Math.round(wy / 10) * 10 };
+    ed.design.parts.push(p);
+    ed.sel = [p.id]; ed.selWire = -1;
+    sfx("place");
+    changed();
+  }
+  function deleteSelection() {
+    if (ed.selWire >= 0) { snapshot(); ed.design.wires.splice(ed.selWire, 1); ed.selWire = -1; sfx("del"); changed(); return; }
+    var ids = ed.sel.filter(function (id) { var p = partById(id); return p && !isIO(p); });
+    if (!ids.length) return;
+    snapshot();
+    ed.design.parts = ed.design.parts.filter(function (p) { return ids.indexOf(p.id) < 0; });
+    ed.design.wires = ed.design.wires.filter(function (w) { return ids.indexOf(w.a[0]) < 0 && ids.indexOf(w.b[0]) < 0; });
+    ed.sel = []; sfx("del"); changed();
+  }
+  var clipboard = null;
+  function copySel() {
+    var ids = ed.sel.filter(function (id) { var p = partById(id); return p && !isIO(p); });
+    if (!ids.length) return false;
+    clipboard = { parts: ids.map(function (id) { return clone(partById(id)); }), wires: ed.design.wires.filter(function (w) { return ids.indexOf(w.a[0]) >= 0 && ids.indexOf(w.b[0]) >= 0; }).map(clone) };
+    return true;
+  }
+  function paste() {
+    if (!clipboard) return;
+    snapshot();
+    var map = {}, ids = [];
+    clipboard.parts.forEach(function (p) {
+      var q = clone(p); q.id = newId(); q.x += 40; q.y += 40; map[p.id] = q.id; ed.design.parts.push(q); ids.push(q.id);
+    });
+    clipboard.wires.forEach(function (w) { ed.design.wires.push({ a: [map[w.a[0]], w.a[1]], b: [map[w.b[0]], w.b[1]] }); });
+    clipboard.parts.forEach(function (p) { p.x += 40; p.y += 40; });
+    ed.sel = ids; sfx("place"); changed();
+  }
+  function setArray(n) {
+    var ps = ed.sel.map(partById).filter(function (p) { return p && !isIO(p); });
+    if (!ps.length) return;
+    var okAll = ps.every(function (p) { return S.arrayable(p.kind, lib); });
+    if (!okAll) { say("Only parts whose pins are all single wires can be made into a row."); sfx("deny"); return; }
+    snapshot();
+    ps.forEach(function (p) {
+      p.arr = n;
+      // wires that no longer fit come off
+      var g = geom(p);
+      ed.design.wires = ed.design.wires.filter(function (w) {
+        if (w.b[0] === p.id) { var src = partById(w.a[0]); return src && geom(src).outs[w.a[1]] && geom(src).outs[w.a[1]].w === g.ins[w.b[1]].w; }
+        if (w.a[0] === p.id) { var dst = partById(w.b[0]); return dst && geom(dst).ins[w.b[1]] && geom(dst).ins[w.b[1]].w === g.outs[w.a[1]].w; }
+        return true;
+      });
+    });
+    sfx("place"); changed();
+  }
+  function say(s) { msg = s; msgT = 3; }
+
+  // ---------------- testing ----------------
+  function runTest() {
+    var lv = ed.lv;
+    if (ed.C && ed.C.errors.length) { ed.result = { ok: false, error: ed.C.errors[0].msg }; sfx("fail"); return; }
+    var r = CK.check(lv, ed.design, lib);
+    ed.result = r;
+    if (r.ok) {
+      var prev = store.solved[lv.id];
+      var best = prev ? prev.best || prev : null;
+      var rec = { design: clone(ed.design), nand: r.cost.nand, dff: r.cost.dff, delay: r.cost.delay };
+      rec.best = best && best.nand <= rec.nand ? { nand: best.nand, delay: Math.min(best.delay, rec.delay) } : { nand: rec.nand, delay: rec.delay };
+      store.solved[lv.id] = rec;
+      libCache = {};
+      persist();
+      sfx("pass");
+    } else {
+      sfx("fail");
+      if (r.fail && r.fail.inputs && lv.kind === "table") { for (var n in r.fail.inputs) setInput(n, r.fail.inputs[n]); }
+    }
+  }
+  function nextLevel() {
+    var nx = LEVELS[ed.lv.index + 1];
+    if (DEMO && (!nx || nx.ch > 1)) { screen = "demoend"; return; }
+    if (!nx) { screen = "map"; return; }
+    openLevel(nx);
+  }
+
+  // ---------------- drawing: board ----------------
+  function drawBoard() {
+    cx.save();
+    cx.beginPath(); cx.rect(BX, BY, BW, BH); cx.clip();
+    cx.fillStyle = COL.bg; cx.fillRect(BX, BY, BW, BH);
+    var v = ed.view, step = 20 * v.z;
+    if (step > 7) {
+      cx.fillStyle = COL.dot;
+      var ox = BX - ((v.x * v.z) % step + step) % step, oy = BY - ((v.y * v.z) % step + step) % step;
+      for (var gx = ox; gx < BX + BW; gx += step) for (var gy = oy; gy < BY + BH; gy += step) cx.fillRect(gx, gy, 1.5, 1.5);
+    }
+    cx.translate(BX - v.x * v.z, BY - v.y * v.z);
+    cx.scale(v.z, v.z);
+    // wires under parts
+    ed.design.wires.forEach(function (w, i) { drawWire(w, i === ed.selWire); });
+    if (ed.drag && ed.drag.type === "wire") {
+      var a = ed.drag.pin, m = toWorld(hover.x, hover.y);
+      var x1 = a.dir === "out" ? a.x : m[0], y1 = a.dir === "out" ? a.y : m[1], x2 = a.dir === "out" ? m[0] : a.x, y2 = a.dir === "out" ? m[1] : a.y;
+      cx.strokeStyle = COL.gold; cx.lineWidth = a.w > 1 ? 4 : 2.5; cx.setLineDash([6, 5]);
+      bezPath(x1, y1, x2, y2); cx.stroke(); cx.setLineDash([]);
+    }
+    var errParts = {};
+    if (ed.C && ed.C.errors.length) ed.C.errors.forEach(function (e) {
+      (e.parts || [e.part]).forEach(function (pp) { if (pp) errParts[String(pp).split("/")[0]] = 1; });
+    });
+    ed.design.parts.forEach(function (p) { drawPart(p, ed.sel.indexOf(p.id) >= 0, errParts[p.id]); });
+    if (ed.drag && ed.drag.type === "box") {
+      var b = ed.drag, w0 = toWorld(b.sx, b.sy), w1 = toWorld(hover.x, hover.y);
+      cx.strokeStyle = COL.gold; cx.lineWidth = 1 / v.z; cx.setLineDash([4 / v.z, 4 / v.z]);
+      cx.strokeRect(Math.min(w0[0], w1[0]), Math.min(w0[1], w1[1]), Math.abs(w1[0] - w0[0]), Math.abs(w1[1] - w0[1])); cx.setLineDash([]);
+    }
+    cx.restore();
+    if (ed.drag && ed.drag.type === "palette") {
+      text(partLabelKind(ed.drag.kind), hover.x, hover.y, 13, COL.gold, "center", 700);
+    }
+    // a hint for brand-new boards
+    if (ed.design.parts.length === ed.lv.ins.length + ed.lv.outs.length && ed.lv.index < 2 && ed.design.wires.length === 0) {
+      text("Drag a part from the left onto the board. Then drag from pin to pin to wire it.", BX + BW / 2, BY + BH - 26, 13, COL.dim, "center", 600);
+    }
+  }
+  function partLabelKind(k) { return k.indexOf("chip:") === 0 ? k.slice(5) : k; }
+  function bezPath(x1, y1, x2, y2) {
+    var dx = Math.max(30, Math.abs(x2 - x1) * 0.5);
+    cx.beginPath(); cx.moveTo(x1, y1); cx.bezierCurveTo(x1 + dx, y1, x2 - dx, y2, x2, y2);
+  }
+  function drawWire(w, selected) {
+    var pts = wirePts(w); if (!pts) return;
+    var src = partById(w.a[0]), width = geom(src).outs[w.a[1]].w, val = valOf(w.a[0], w.a[1]);
+    var col;
+    if (width === 1) col = val === null ? "#57493a" : val ? COL.hot : COL.cold;
+    else col = val === null ? "#2d4552" : val ? COL.bus : COL.busDim;
+    if (selected) { cx.strokeStyle = "rgba(240,195,90,0.45)"; cx.lineWidth = width > 1 ? 10 : 8; bezPath(pts[0], pts[1], pts[2], pts[3]); cx.stroke(); }
+    if (width === 1 && val) { cx.strokeStyle = "rgba(255,182,72,0.18)"; cx.lineWidth = 7; bezPath(pts[0], pts[1], pts[2], pts[3]); cx.stroke(); }
+    cx.strokeStyle = col; cx.lineWidth = width > 1 ? 4 : 2.4;
+    bezPath(pts[0], pts[1], pts[2], pts[3]); cx.stroke();
+    if (width > 1 && val !== null) {
+      var m = bez(pts[0], pts[1], pts[2], pts[3], 0.5), s = String(val), ww = tw(s, 10, 700, MONO) + 8;
+      rr(m[0] - ww / 2, m[1] - 8, ww, 16, 4); cx.fillStyle = "#0c1a22"; cx.fill(); cx.strokeStyle = col; cx.lineWidth = 1; cx.stroke();
+      text(s, m[0], m[1] + 1, 10, "#cfeaf7", "center", 700, MONO);
+    }
+  }
+  function drawPart(p, selected, bad) {
+    var g = geom(p);
+    if (g.io) {
+      var isIn = g.isIn, name = p.kind.split(":")[1], wv = +p.kind.split(":")[2];
+      var val = isIn ? ed.inVals[name] : (ed.C && ed.C.outputs && ed.M ? ed.M.get(name) : null);
+      rr(g.x, g.y, g.w, g.h, 15);
+      cx.fillStyle = isIn ? "#1d2a22" : "#2a2420"; cx.fill();
+      var want = null;
+      if (!isIn && ed.lv.kind === "table" && val !== null) want = ed.lv.f(ed.inVals)[name] & S.mask(wv);
+      cx.strokeStyle = selected ? COL.sel : want === null ? "#4a5a50" : (want === val ? COL.ok : COL.bad); cx.lineWidth = selected || want !== null ? 2 : 1.2; cx.stroke();
+      text(name, g.x + 12, g.y + 15, 13, COL.text, "left", 700);
+      var vs = val === null ? "?" : String(val);
+      text(vs, g.x + g.w - 12, g.y + 15, 13, wv === 1 ? (val ? COL.hot : COL.dim) : COL.bus, "right", 800, MONO);
+      (isIn ? g.outs : g.ins).forEach(function (q) { pin(q, wv > 1); });
+      return;
+    }
+    var chip = p.kind.indexOf("chip:") === 0;
+    rr(g.x, g.y, g.w, g.h, 6);
+    cx.fillStyle = chip ? COL.chip : COL.part; cx.fill();
+    cx.strokeStyle = bad ? COL.bad : selected ? COL.sel : chip ? COL.chipEdge : COL.edge; cx.lineWidth = selected || bad ? 2.2 : 1.3; cx.stroke();
+    text(g.label, g.x + g.w / 2, g.y + g.h / 2 + 1, 12, chip ? "#e3d6f7" : COL.text, "center", 700);
+    if (g.showPins) {
+      g.ins.forEach(function (q) { text(q.name, q.x + 7, q.y, 10, COL.dim, "left", 500); });
+      g.outs.forEach(function (q) { text(q.name, q.x - 7, q.y, 10, COL.dim, "right", 500); });
+    }
+    g.ins.forEach(function (q) { pin(q, q.w > 1); });
+    g.outs.forEach(function (q) { pin(q, q.w > 1); });
+  }
+  function pin(q, bus) {
+    cx.fillStyle = bus ? "#1a3a4a" : "#3a2a1a"; cx.strokeStyle = bus ? COL.bus : COL.copper; cx.lineWidth = 1.5;
+    if (bus) { cx.fillRect(q.x - 4.5, q.y - 4.5, 9, 9); cx.strokeRect(q.x - 4.5, q.y - 4.5, 9, 9); }
+    else { cx.beginPath(); cx.arc(q.x, q.y, 4.5, 0, 7); cx.fill(); cx.stroke(); }
+  }
+
+  // ---------------- drawing: palette, top bar, panel ----------------
+  var PRIM_ORDER = ["NAND", "HIGH", "LOW", "DFF", "SPLIT4", "JOIN4", "HALVES", "BYTE", "SPLIT8", "JOIN8", "FAN4", "FAN8", "ROM", "RAM"];
+  function paletteItems() {
+    var lv = ed.lv, items = [];
+    PRIM_ORDER.forEach(function (k) { if (lv.allPrims.indexOf(k) >= 0 || (k === "NAND")) items.push({ kind: k, label: k, cost: null }); });
+    lv.chips.forEach(function (id) { if (lib[id]) items.push({ kind: "chip:" + id, label: LEVELS.filter(function (l) { return l.id === id; })[0].title, cost: lib[id].cost, chip: true }); });
+    return items;
+  }
+  function drawPalette() {
+    cx.fillStyle = COL.panel; cx.fillRect(0, BY, BX, BH);
+    cx.strokeStyle = COL.line; cx.beginPath(); cx.moveTo(BX - 0.5, BY); cx.lineTo(BX - 0.5, H); cx.stroke();
+    var items = paletteItems(), y = BY + 8 - palScroll, colW = (BX - 24) / 2;
+    cx.save(); cx.beginPath(); cx.rect(0, BY, BX, BH); cx.clip();
+    function section(list, title) {
+      if (!list.length) return;
+      text(title, 12, y + 8, 11, COL.dim, "left", 700); y += 20;
+      list.forEach(function (it, i) {
+        var x = 8 + (i % 2) * (colW + 8), yy = y + Math.floor(i / 2) * 30;
+        var hot = hover.x >= x && hover.x <= x + colW && hover.y >= yy && hover.y <= yy + 26 && hover.y > BY;
+        rr(x, yy, colW, 26, 5);
+        cx.fillStyle = hot ? "#2a3240" : it.chip ? "#211d29" : "#1d232c"; cx.fill();
+        cx.strokeStyle = it.chip ? "#4d4061" : "#323b48"; cx.lineWidth = 1; cx.stroke();
+        var lab = it.label, fs = 11;
+        while (tw(lab, fs, 700) > colW - 10 && fs > 8) fs -= 0.5;
+        text(lab, x + colW / 2, yy + 13, fs, it.chip ? "#e3d6f7" : COL.text, "center", 700);
+        it.x = x; it.y = yy; it.w = colW;
+        if (hot) tipText = it.chip ? it.label + ": your chip, " + it.cost.nand + " NAND" + (it.cost.dff ? " + " + it.cost.dff + " DFF" : "") + ". Drag it onto the board, or click to drop it in the middle." : (S.PRIM[it.kind] ? it.kind + ": " + S.PRIM[it.kind].blurb : "");
+      });
+      y += Math.ceil(list.length / 2) * 30 + 8;
+    }
+    section(items.filter(function (it) { return !it.chip; }), "PARTS");
+    section(items.filter(function (it) { return it.chip; }), "YOUR CHIPS");
+    cx.restore();
+    paletteHits = items;
+    palMax = Math.max(0, y + palScroll - (H - 20));
+  }
+  var paletteHits = [], palMax = 0;
+
+  function drawTopBar() {
+    cx.fillStyle = COL.panel2; cx.fillRect(0, 0, W, BY);
+    cx.strokeStyle = COL.line; cx.beginPath(); cx.moveTo(0, BY - 0.5); cx.lineTo(W, BY - 0.5); cx.stroke();
+    button(10, 9, 84, 30, "◂ LEVELS", function () { screen = "map"; });
+    var lv = ed.lv;
+    text(ROMAN[lv.ch] + "  ·  " + lv.title, 110, 24, 17, COL.text, "left", 800);
+    var x = 110 + tw(ROMAN[lv.ch] + "  ·  " + lv.title, 17, 800) + 26;
+    if (ed.C && !ed.C.errors.length) {
+      var c = ed.C.cost;
+      text("NAND " + c.nand, x, 24, 14, COL.gold, "left", 700, MONO); x += tw("NAND " + c.nand, 14, 700, MONO) + 16;
+      if (c.dff) { text("DFF " + c.dff, x, 24, 14, COL.bus, "left", 700, MONO); x += tw("DFF " + c.dff, 14, 700, MONO) + 16; }
+      text("delay " + c.delay, x, 24, 14, COL.dim, "left", 600, MONO); x += tw("delay " + c.delay, 14, 600, MONO) + 18;
+    }
+    var pf = PROOF[lv.id];
+    if (pf) text("proven minimum " + pf.min, x, 24, 13, COL.ok, "left", 700);
+    var sv = store.solved[lv.id];
+    if (sv && sv.best) text("your best " + sv.best.nand, W - 340, 24, 13, COL.dim, "right", 600);
+    button(W - 330, 9, 46, 30, "FIT", function () { fitView(); });
+    button(W - 278, 9, 56, 30, "UNDO", undo, { disabled: !ed.undo.length });
+    button(W - 216, 9, 56, 30, "REDO", redo, { disabled: !ed.redo.length });
+    button(W - 154, 9, 64, 30, "HELP", function () { helpFrom = "edit"; screen = "help"; });
+    button(W - 84, 9, 74, 30, store.muted ? "SOUND OFF" : "SOUND", function () { store.muted = !store.muted; persist(); }, { size: 11 });
+  }
+
+  function drawPanel() {
+    cx.fillStyle = COL.panel; cx.fillRect(PX, BY, PW, BH);
+    cx.strokeStyle = COL.line; cx.beginPath(); cx.moveTo(PX + 0.5, BY); cx.lineTo(PX + 0.5, H); cx.stroke();
+    var lv = ed.lv, x = PX + 18, y = BY + 22, mw = PW - 36;
+    text(CH_NAMES[lv.ch], x, y, 11, COL.dim, "left", 700); y += 20;
+    y = wrap(lv.text, x, y, mw, 13, COL.text, 18);
+    y += 4;
+    if (ed.hint && lv.hint) { y = wrap("Hint: " + lv.hint, x, y, mw, 12, "#c9b47a", 17); y += 4; }
+    // live truth table
+    if (ed.tableGot) {
+      y += 4;
+      var cols = lv.ins.concat(lv.outs), cw = Math.min(46, (mw - 30) / cols.length);
+      cols.forEach(function (c, i) { text(c.name, x + i * cw + cw / 2, y, 11, i < lv.ins.length ? COL.dim : COL.gold, "center", 700); });
+      y += 16;
+      ed.tableGot.forEach(function (row) {
+        var cur = lv.ins.every(function (p) { return ed.inVals[p.name] === row.inp[p.name]; });
+        if (cur) { rr(x - 6, y - 8, mw + 10, 16, 4); cx.fillStyle = "#222b37"; cx.fill(); }
+        lv.ins.forEach(function (p, i) { text(String(row.inp[p.name]), x + i * cw + cw / 2, y, 12, COL.text, "center", 600, MONO); });
+        lv.outs.forEach(function (p, i) {
+          var w = row.want[p.name], g = row.got[p.name];
+          text(String(w), x + (lv.ins.length + i) * cw + cw / 2, y, 12, g === (w & S.mask(p.w)) ? COL.ok : COL.bad, "center", 700, MONO);
+        });
+        text(row.ok ? "✓" : "✗", x + mw - 6, y, 13, row.ok ? COL.ok : COL.bad, "right", 800);
+        buttons.push({ x: x - 6, y: y - 8, w: mw + 10, h: 16, fn: (function (r) { return function () { for (var n in r.inp) setInput(n, r.inp[n]); }; })(row) });
+        y += 17;
+      });
+      text("green = your circuit agrees. Click a row to try it.", x, y + 4, 11, COL.dim, "left", 500); y += 18;
+    }
+    // memory and computer controls
+    if (lv.kind === "seq" || lv.kind === "cpu") {
+      y += 6;
+      if (lv.kind === "cpu") {
+        var T = LV.CPU_TESTS[ed.cpuProg];
+        text("ROM program: " + T[0], x, y + 8, 12, COL.dim, "left", 600);
+        button(x + mw - 64, y - 4, 64, 24, "NEXT", function () { ed.cpuProg = (ed.cpuProg + 1) % LV.CPU_TESTS.length; recompile(true); }, { size: 11 });
+        y += 28;
+      }
+      text("tick " + ed.ticks, x, y + 14, 13, COL.text, "left", 700, MONO);
+      button(x + 80, y, 76, 28, "STEP", stepTick, { disabled: !ed.M });
+      button(x + 162, y, 60, 28, "RUN", function () { for (var i = 0; i < 20; i++) stepTick(true); }, { disabled: !ed.M });
+      button(x + 228, y, mw - 228, 28, "RESET", function () { recompile(true); }, { disabled: !ed.M });
+      y += 40;
+      if (lv.kind === "cpu" && ed.M) { text("output port: " + (ed.M.outLog.length ? ed.M.outLog.join(", ") : "-"), x, y, 12, COL.bus, "left", 600, MONO); y += 20; }
+    }
+    // errors / warnings
+    if (ed.C && ed.C.errors.length) { y = wrap(ed.C.errors[0].msg, x, y + 4, mw, 12, COL.bad, 17); }
+    else if (ed.C && ed.C.warnings.length) { text(ed.C.warnings.length + " input" + (ed.C.warnings.length > 1 ? "s" : "") + " not connected (they read 0).", x, y + 6, 11, "#c9a25a", "left", 600); y += 18; }
+
+    // bottom: test and results
+    var by = H - 196;
+    if (ed.result) drawResult(x, by - 4, mw);
+    button(x, H - 52, mw - 110, 38, ed.result && ed.result.ok ? "TEST AGAIN" : "TEST", runTest, { primary: !(ed.result && ed.result.ok), size: 15 });
+    button(x + mw - 100, H - 52, 100, 38, ed.hint ? "HINT SHOWN" : "HINT", function () { ed.hint = true; store.hints[lv.id] = 1; persist(); }, { disabled: !lv.hint || ed.hint, size: 12 });
+  }
+  function drawResult(x, y, mw) {
+    var r = ed.result, lv = ed.lv;
+    rr(x - 6, y - 6, mw + 12, 140, 8);
+    cx.fillStyle = r.ok ? "#16261b" : "#2a1716"; cx.fill();
+    cx.strokeStyle = r.ok ? "#2f6b3d" : "#6b2f2a"; cx.lineWidth = 1; cx.stroke();
+    if (r.ok) {
+      text("SOLVED", x + 4, y + 12, 18, COL.ok, "left", 900);
+      var pf = PROOF[lv.id], c = r.cost;
+      var line = c.nand + " NAND" + (c.dff ? " + " + c.dff + " DFF" : "") + "  ·  delay " + c.delay;
+      text(line, x + 4, y + 38, 13, COL.text, "left", 700, MONO);
+      if (pf) {
+        var at = c.nand === pf.min;
+        text(at ? "★ at the proven minimum (" + pf.min + ")" : "Proven minimum: " + pf.min + ". It can be done smaller.", x + 4, y + 60, 12, at ? COL.gold : COL.dim, "left", 700);
+      } else text("This chip is now in your parts list.", x + 4, y + 60, 12, COL.dim, "left", 600);
+      button(x + 4, y + 86, mw - 8, 36, nextLabel(), nextLevel, { primary: true, size: 14 });
+      return;
+    }
+    text("NOT YET", x + 4, y + 12, 16, COL.bad, "left", 900);
+    if (r.error) { wrap(r.error, x + 4, y + 36, mw - 8, 12, COL.text, 17); return; }
+    var f = r.fail;
+    if (f && f.program) { text("Program: " + f.program, x + 4, y + 36, 12, COL.text, "left", 700); wrap(f.detail, x + 4, y + 56, mw - 8, 12, COL.text, 16); return; }
+    if (f) {
+      var s1 = Object.keys(f.inputs).map(function (n) { return n + "=" + f.inputs[n]; }).join("  ");
+      var s2 = Object.keys(f.expect).map(function (n) { return n + "=" + f.expect[n]; }).join("  ");
+      var s3 = Object.keys(f.got).map(function (n) { return n + "=" + f.got[n]; }).join("  ");
+      if (f.step !== undefined) text("At tick " + f.step + (f.history && f.history.length ? " (after " + f.history.length + " earlier ticks)" : ""), x + 4, y + 34, 12, COL.dim, "left", 600);
+      text("in:  " + s1, x + 4, y + 54, 12, COL.text, "left", 600, MONO);
+      text("want " + s2, x + 4, y + 74, 12, COL.ok, "left", 600, MONO);
+      text("got  " + s3, x + 4, y + 94, 12, COL.bad, "left", 600, MONO);
+      if (lv.kind === "table") text("The board now shows this case.", x + 4, y + 116, 11, COL.dim, "left", 500);
+    }
+  }
+  function nextLabel() {
+    var nx = LEVELS[ed.lv.index + 1];
+    if (DEMO && (!nx || nx.ch > 1)) return "CHAPTER I COMPLETE ▸";
+    if (!nx) return "LEVELS";
+    return "NEXT: " + nx.title + " ▸";
+  }
+  function stepTick(quiet) {
+    if (!ed.M) return;
+    ed.M.tick(); ed.ticks++; ed.M.eval();
+    if (!quiet) sfx("tick");
+  }
+
+  // ---------------- program levels ----------------
+  var pg = null;
+  function openProg(lv) {
+    lib = libUpTo(LEVELS.length);
+    var C = null;
+    try { C = S.compile({ parts: [{ id: "cpu", kind: "chip:CPU", x: 0, y: 0 }, { id: "o1", kind: "OUT:pc:8" }, { id: "o2", kind: "OUT:a:8" }],
+      wires: [{ a: ["cpu", 0], b: ["o1", 0] }, { a: ["cpu", 1], b: ["o2", 0] }] }, lib); } catch (e) {}
+    pg = { lv: lv, C: C, test: 0, M: null, running: false, result: null, asm: null, ticks: 0, err: "" };
+    code.value = store.progs[lv.id] || "; Your program for SMITH-8.\n; Labels end with a colon. ; starts a comment.\n\n";
+    screen = "prog";
+    resetProg();
+  }
+  function resetProg() {
+    pg.running = false; pg.err = ""; pg.ticks = 0;
+    var asm = ISA.assemble(code.value);
+    pg.asm = asm;
+    if (asm.errors.length) { pg.err = "Line " + (asm.errors[0].line + 1) + ": " + asm.errors[0].msg; pg.M = null; return; }
+    if (!pg.C || pg.C.errors.length) { pg.err = "Your SMITH-8 does not compile."; pg.M = null; return; }
+    var t = pg.lv.tests()[pg.test];
+    pg.M = new S.Machine(pg.C, { rom: asm.rom, ram: t.ram });
+    pg.M.eval();
+  }
+  function progHalted() { var pc = pg.M.get("pc"), ins = pg.asm.rom[pc] || [0, 0]; return (ins[0] & 7) === 5 && ins[1] === pc; }
+  function progStep() {
+    if (!pg.M) { resetProg(); if (!pg.M) return; }
+    if (progHalted() || pg.ticks >= 3000) { pg.running = false; return; }
+    pg.M.tick(); pg.ticks++; pg.M.eval();
+  }
+  function progTest() {
+    store.progs[pg.lv.id] = code.value; persist();
+    var r = CK.checkProgram(pg.lv, code.value, lib.CPU, lib);
+    pg.result = r;
+    if (r.ok) {
+      var prev = store.progSolved[pg.lv.id];
+      store.progSolved[pg.lv.id] = { size: prev ? Math.min(prev.size, r.size) : r.size, cycles: prev ? Math.min(prev.cycles, r.cycles) : r.cycles };
+      persist(); sfx("pass");
+    } else sfx("fail");
+  }
+  var REF_PROG = {};
+  
+  function drawProg() {
+    var lv = pg.lv, cxL = 20, cyT = BY + 16, cwid = 520, chei = H - BY - 32;
+    cx.fillStyle = COL.panel2; cx.fillRect(0, 0, W, BY);
+    button(10, 9, 84, 30, "◂ LEVELS", function () { store.progs[pg.lv.id] = code.value; persist(); screen = "map"; });
+    text(ROMAN[lv.ch] + "  ·  " + lv.title, 110, 24, 17, COL.text, "left", 800);
+    var cost = pg.C && pg.C.cost ? pg.C.cost : null;
+    if (cost) text("running on your SMITH-8: " + cost.nand + " NAND + " + cost.dff + " DFF, simulated gate by gate", 110 + tw(ROMAN[lv.ch] + "  ·  " + lv.title, 17, 800) + 24, 24, 12, COL.dim, "left", 600);
+    button(W - 84, 9, 74, 30, "HELP", function () { helpFrom = "prog"; store.progs[pg.lv.id] = code.value; screen = "help"; });
+    // code area
+    rr(cxL - 6, cyT - 6, cwid + 12, chei + 12, 8); cx.fillStyle = "#10141a"; cx.fill(); cx.strokeStyle = COL.line; cx.stroke();
+    var gutter = 34, lh = 20;
+    var first = Math.floor(code.scrollTop / lh), n = Math.ceil(chei / lh) + 1;
+    if (pg.M && pg.asm && !pg.err) {
+      var pc = pg.M.get("pc"), line = pg.asm.lines[pc];
+      if (line !== undefined) { var yy = cyT + line * lh - code.scrollTop; if (yy > cyT - lh && yy < cyT + chei) { cx.fillStyle = "rgba(240,195,90,0.16)"; cx.fillRect(cxL, Math.max(cyT, yy), cwid, lh); } }
+    }
+    if (pg.err && pg.asm && pg.asm.errors.length) { var el = pg.asm.errors[0].line, ey = cyT + el * lh - code.scrollTop; if (ey >= cyT && ey < cyT + chei) { cx.fillStyle = "rgba(255,107,94,0.16)"; cx.fillRect(cxL, ey, cwid, lh); } }
+    for (var i = 0; i < n; i++) {
+      var ly = cyT + (first + i) * lh - code.scrollTop + lh / 2;
+      if (ly > cyT + chei) break;
+      text(String(first + i + 1), cxL + gutter - 8, ly, 11, "#4c5564", "right", 500, MONO);
+    }
+    placeCode(cxL + gutter, cyT, cwid - gutter, chei);
+    // right side
+    var x = 570, y = BY + 22, mw = W - x - 20;
+    y = wrap(lv.text, x, y, mw, 13, COL.text, 18) + 6;
+    var tests = lv.tests(), t = tests[pg.test];
+    text("Test " + (pg.test + 1) + " of " + tests.length + "   RAM: " + (t.ram.length ? t.ram.join(", ") : "all 0"), x, y + 4, 12, COL.dim, "left", 600, MONO);
+    button(x + mw - 60, y - 8, 60, 24, "NEXT", function () { pg.test = (pg.test + 1) % tests.length; resetProg(); }, { size: 11 });
+    y += 28;
+    text("expected output: " + t.out.join(", "), x, y, 12, COL.ok, "left", 600, MONO); y += 26;
+    button(x, y, 80, 30, "STEP", function () { if (!pg.M) resetProg(); progStep(); });
+    button(x + 88, y, 80, 30, pg.running ? "PAUSE" : "RUN", function () { if (!pg.M) resetProg(); pg.running = !pg.running; });
+    button(x + 176, y, 80, 30, "RESET", resetProg);
+    button(x + 264, y, mw - 264, 30, "TEST ALL", progTest, { primary: true });
+    y += 44;
+    if (pg.err) { y = wrap(pg.err, x, y, mw, 12, COL.bad, 17) + 6; }
+    else if (pg.M) {
+      var pcv = pg.M.get("pc"), av = pg.M.get("a"), ram = pg.M.ram() || [];
+      text("PC " + pcv + "    A " + av + (av >= 128 ? " (" + (av - 256) + ")" : "") + "    tick " + pg.ticks + (progHalted() ? "    done" : ""), x, y, 13, COL.text, "left", 700, MONO); y += 24;
+      for (var r = 0; r < 16; r++) {
+        var bx = x + (r % 8) * (mw / 8), byy = y + Math.floor(r / 8) * 40;
+        rr(bx + 2, byy, mw / 8 - 4, 34, 5); cx.fillStyle = r === 15 ? "#1d2a33" : "#1a2029"; cx.fill();
+        text(String(r), bx + 7, byy + 9, 9, COL.dim, "left", 600, MONO);
+        text(String(ram[r] || 0), bx + mw / 16, byy + 22, 13, ram[r] ? COL.text : "#4c5564", "center", 700, MONO);
+      }
+      y += 86;
+      text("output: " + (pg.M.outLog.length ? pg.M.outLog.join(", ") : "-"), x, y, 13, COL.bus, "left", 700, MONO); y += 26;
+    }
+    // reference card
+    y = Math.max(y, H - 300);
+    text("INSTRUCTIONS", x, y, 11, COL.dim, "left", 700); y += 18;
+    ISA.OPS.forEach(function (op, i) { text(op.padEnd(4) + " " + (i < 5 && i !== 0 ? "m" : i === 0 ? "k" : "t"), x, y, 12, COL.gold, "left", 700, MONO); text(ISA.HELP[op], x + 70, y, 12, COL.text, "left", 500); y += 17; });
+    // result
+    var rr2 = pg.result;
+    if (rr2) {
+      var ry = H - 140 + 52;
+      if (rr2.ok) {
+        var ref = REF_PROG[lv.id];
+        text("SOLVED  ·  " + rr2.size + " instructions  ·  " + rr2.cycles + " ticks over all tests", x + mw, ry - 10, 13, COL.ok, "right", 800);
+        if (ref) text("reference: " + ref[0] + " instructions, " + ref[1] + " ticks", x + mw, ry + 10, 11, COL.dim, "right", 600);
+        var nx = LEVELS[lv.index + 1];
+        button(x + mw - 180, ry + 24, 180, 30, nx ? "NEXT: " + nx.title + " ▸" : "LEVELS", function () { store.progs[pg.lv.id] = code.value; persist(); if (nx) openLevel(nx); else screen = "map"; }, { primary: true, size: 12 });
+      } else {
+        var why = rr2.error || (rr2.fail ? (rr2.fail.timeout ? "Still running after 3000 ticks (RAM " + rr2.fail.ram.join(",") + ")." : "RAM " + rr2.fail.ram.join(",") + ": wanted " + rr2.fail.expect.join(", ") + ", got " + (rr2.fail.got.join(", ") || "nothing") + ".") : "");
+        wrap("NOT YET: " + why, x, ry - 10, mw, 12, COL.bad, 17);
+      }
+    }
+  }
+  function placeCode(x, y, w, h) {
+    code.style.display = "block";
+    code.style.left = (x * scale) + "px"; code.style.top = (y * scale) + "px";
+    code.style.width = (w * scale) + "px"; code.style.height = (h * scale) + "px";
+    code.style.fontSize = (15 * scale) + "px"; code.style.lineHeight = (20 * scale) + "px";
+  }
+  code.addEventListener("input", function () { if (pg) { store.progs[pg.lv.id] = code.value; persist(); pg.result = null; resetProg(); } });
+  code.addEventListener("keydown", function (e) {
+    if (e.key === "Tab") { e.preventDefault(); var s = code.selectionStart; code.value = code.value.slice(0, s) + "    " + code.value.slice(code.selectionEnd); code.selectionStart = code.selectionEnd = s + 4; code.dispatchEvent(new Event("input")); }
+    e.stopPropagation();
+  });
+
+  // ---------------- title, map, help ----------------
+  function drawTitle() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    var t = performance.now() / 1000;
+    // a NAND gate drawn large, its output pulsing
+    cx.save(); cx.translate(W / 2 - 60, 250);
+    cx.strokeStyle = COL.copper; cx.lineWidth = 6; cx.fillStyle = "#1c232d";
+    cx.beginPath(); cx.moveTo(-70, -60); cx.lineTo(0, -60); cx.arc(0, 0, 60, -Math.PI / 2, Math.PI / 2); cx.lineTo(-70, 60); cx.closePath(); cx.fill(); cx.stroke();
+    cx.beginPath(); cx.arc(72, 0, 10, 0, 7); cx.stroke();
+    var a = (Math.sin(t * 1.3) > 0) ? 1 : 0, b = (Math.sin(t * 0.7) > 0) ? 1 : 0, o = (a & b) ^ 1;
+    [[-30, a], [30, b]].forEach(function (q) { cx.strokeStyle = q[1] ? COL.hot : COL.cold; cx.lineWidth = 5; cx.beginPath(); cx.moveTo(-170, q[0]); cx.lineTo(-72, q[0]); cx.stroke(); });
+    cx.strokeStyle = o ? COL.hot : COL.cold; cx.beginPath(); cx.moveTo(83, 0); cx.lineTo(200, 0); cx.stroke();
+    text(String(a), -186, -30, 18, a ? COL.hot : COL.dim, "center", 800, MONO);
+    text(String(b), -186, 30, 18, b ? COL.hot : COL.dim, "center", 800, MONO);
+    text(String(o), 216, 0, 18, o ? COL.hot : COL.dim, "center", 800, MONO);
+    cx.restore();
+    text("NANDSMITH", W / 2, 400, 64, COL.text, "center", 900);
+    text("One gate. Build the rest. Then make it think.", W / 2, 448, 19, COL.gold, "center", 600);
+    var solved = LEVELS.filter(isSolved).length, total = DEMO ? LEVELS.filter(function (l) { return l.ch === 1; }).length : LEVELS.length;
+    var nextLv = LEVELS.filter(function (l) { return unlocked(l) && !isSolved(l) && (!DEMO || l.ch === 1); })[0];
+    button(W / 2 - 150, 500, 300, 50, solved ? "CONTINUE" : "START", function () { if (nextLv) openLevel(nextLv); else screen = "map"; }, { primary: true, size: 17 });
+    button(W / 2 - 150, 562, 300, 42, "LEVELS", function () { screen = "map"; });
+    button(W / 2 - 150, 614, 300, 42, "HOW TO PLAY", function () { helpFrom = "title"; screen = "help"; });
+    text(solved + " / " + total + " solved", W / 2, 690, 13, COL.dim, "center", 600);
+    text("FREE DEMO · CHAPTER I", W / 2, 716, 13, COL.gold, "center", 700);
+  }
+  function drawMap() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    button(20, 16, 90, 32, "◂ TITLE", function () { screen = "title"; });
+    text("THE WORKSHOP", W / 2, 34, 24, COL.text, "center", 900);
+    var chs = DEMO ? [1] : [1, 2, 3, 4, 5], colW = (W - 60) / 5;
+    for (var c = 1; c <= 5; c++) {
+      var x = 30 + (c - 1) * colW, y = 84;
+      var locked = DEMO && c > 1;
+      text(ROMAN[c] + ". " + CH_NAMES[c], x + 8, y, 14, locked ? "#4c5564" : COL.gold, "left", 800);
+      y += 24;
+      if (locked) {
+        rr(x + 4, y, colW - 16, 120, 8); cx.fillStyle = "#151a21"; cx.fill();
+        wrap(c === 2 ? "Adders, subtraction and your own ALU." : c === 3 ? "Memory, registers, a counter and an instruction decoder." : c === 4 ? "Wire it all into SMITH-8, a working computer." : "Write programs for the computer you built.", x + 16, y + 22, colW - 40, 12, COL.dim, 17);
+        text("FULL GAME", x + 16, y + 100, 11, COL.gold, "left", 800);
+        continue;
+      }
+      LEVELS.filter(function (l) { return l.ch === c; }).forEach(function (lv) {
+        var un = unlocked(lv), sv = isSolved(lv), h = 40;
+        rr(x + 4, y, colW - 16, h - 6, 7);
+        cx.fillStyle = sv ? "#18261d" : un ? "#1d2430" : "#14181e"; cx.fill();
+        cx.strokeStyle = sv ? "#2f6b3d" : un ? "#3a4555" : "#22282f"; cx.lineWidth = 1; cx.stroke();
+        text(lv.title, x + 16, y + (h - 6) / 2, 13, un ? COL.text : "#4c5564", "left", 700);
+        var info = "";
+        if (lv.kind === "prog" && store.progSolved[lv.id]) info = store.progSolved[lv.id].size + " ins";
+        else if (store.solved[lv.id]) info = (store.solved[lv.id].best || store.solved[lv.id]).nand + "";
+        var star = PROOF[lv.id] && store.solved[lv.id] && (store.solved[lv.id].best || store.solved[lv.id]).nand === PROOF[lv.id].min;
+        if (info) text((star ? "★ " : "") + info, x + colW - 24, y + (h - 6) / 2, 12, star ? COL.gold : COL.dim, "right", 700, MONO);
+        if (un) buttons.push({ x: x + 4, y: y, w: colW - 16, h: h - 6, fn: (function (l) { return function () { openLevel(l); }; })(lv) });
+        y += h;
+      });
+    }
+    text("Numbers are NAND gates in your best design. ★ = at the proven minimum.", W / 2, H - 24, 12, COL.dim, "center", 600);
+    button(W / 2 - 140, H - 86, 280, 40, "GET THE FULL GAME", function () { window.open(STORE_URL, "_blank"); }, { primary: true });
+  }
+  var helpFrom = "title";
+  function drawHelp() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    text("HOW TO PLAY", W / 2, 40, 24, COL.text, "center", 900);
+    var x = 90, y = 90, rows = [
+      ["Place", "Drag a part from the left onto the board. Ctrl+V pastes, Ctrl+D duplicates the selection."],
+      ["Wire", "Drag from one pin to another. Outputs are on the right of a part, inputs on the left. An input takes one wire; an output can feed many."],
+      ["Remove", "Select a part or wire and press Delete, or right-click it."],
+      ["Select", "Click a part. Shift-click adds more. Shift-drag on empty board draws a box."],
+      ["Move", "Drag a part. Drag empty board to pan; the mouse wheel zooms. FIT shows everything."],
+      ["Try it", "Click an input pin on the left of the board to flip it. For a number, click it and type, or scroll on it. Wires glow when they carry 1; buses show their number. Output pins turn green when they match what the level wants."],
+      ["Rows", "Select a part whose pins are all single wires and press 4 or 8: it becomes a row of copies working on a 4- or 8-bit bus. Press 1 to undo."],
+      ["Test", "TEST checks every case (or a long run of them). Pass, and the part is yours for every later level."],
+      ["Score", "NAND counts the gates inside your design, all the way down through your own chips. Small parts have a proven minimum: a program tried every smaller circuit and none works."],
+      ["Keys", "Ctrl+Z / Ctrl+Y undo and redo  ·  Delete removes  ·  F fits the view  ·  T tests  ·  S steps the clock"]
+    ];
+    rows.forEach(function (r) { text(r[0], x, y + 9, 15, COL.gold, "left", 800); y = wrap(r[1], x + 110, y + 9, W - x - 200, 14, COL.text, 20) + 10; });
+    button(W / 2 - 100, H - 70, 200, 42, "BACK", function () { if (helpFrom === "edit" && ed) screen = "edit"; else if (helpFrom === "prog" && pg) { screen = "prog"; } else screen = "title"; });
+  }
+  
+  function drawDemoEnd() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    text("CHAPTER I COMPLETE", W / 2, 140, 40, COL.gold, "center", 900);
+    var stars = LEVELS.filter(function (l) { return l.ch === 1 && PROOF[l.id] && store.solved[l.id] && (store.solved[l.id].best || store.solved[l.id]).nand === PROOF[l.id].min; }).length;
+    text("Eight gates from one. " + stars + " of 8 at the proven minimum.", W / 2, 190, 17, COL.text, "center", 600);
+    var y = 260;
+    ["The full game keeps going, all the way to a computer:", "II  Arithmetic: adders (the full adder's proven minimum is 9), subtraction, an ALU",
+      "III Memory: the DFF, registers, a program counter, an instruction decoder", "IV  Computer: wire SMITH-8 together and watch it run real programs, gate by gate",
+      "V   Programs: write code for the computer you built - multiply, divide, Fibonacci..."].forEach(function (s, i) {
+      text(s, i ? 300 : W / 2, y, i ? 15 : 16, i ? COL.text : COL.gold, i ? "left" : "center", i ? 600 : 800); y += i ? 32 : 44;
+    });
+    button(W / 2 - 160, y + 30, 320, 54, "GET THE FULL GAME", function () { window.open(STORE_URL, "_blank"); }, { primary: true, size: 17 });
+    button(W / 2 - 120, y + 100, 240, 40, "LEVELS", function () { screen = "map"; });
+  }
+  
+
+  // ---------------- main loop ----------------
+  var last = 0;
+  function frame(ts) {
+    var dt = Math.min(0.05, (ts - last) / 1000 || 0); last = ts;
+    if (msgT > 0) msgT -= dt;
+    if (screen === "prog" && pg && pg.running) { for (var i = 0; i < 6; i++) progStep(); }
+    draw();
+    requestAnimationFrame(frame);
+  }
+  function draw() {
+    cx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+    buttons = []; tipText = "";
+    if (screen !== "prog") code.style.display = "none";
+    if (screen === "title") drawTitle();
+    else if (screen === "map") drawMap();
+    else if (screen === "help") drawHelp();
+    else if (screen === "edit") { drawBoard(); drawPalette(); drawTopBar(); drawPanel(); }
+    else if (screen === "prog") { cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H); drawProg(); }
+    else if (screen === "demoend") drawDemoEnd();
+    if (screen === "edit") {
+      var tip = msgT > 0 ? msg : tipText || hoverTip();
+      if (tip) {
+        var ww = Math.min(BW - 20, tw(tip, 12, 600) + 20);
+        rr(BX + 10, H - 34, ww, 24, 6); cx.fillStyle = msgT > 0 ? "rgba(60,30,20,0.92)" : "rgba(20,25,32,0.92)"; cx.fill();
+        text(tip, BX + 20, H - 22, 12, msgT > 0 ? "#ffcfa8" : COL.dim, "left", 600);
+      }
+    }
+  }
+  function hoverTip() {
+    if (!ed || hover.x < BX || hover.x > BX + BW || hover.y < BY) return "";
+    var wpt = toWorld(hover.x, hover.y), pn = hitPin(wpt[0], wpt[1]);
+    if (pn) {
+      var v = pn.dir === "out" ? valOf(pn.part.id, pn.idx) : null;
+      if (pn.dir === "in") { var w = ed.design.wires.filter(function (x) { return x.b[0] === pn.part.id && x.b[1] === pn.idx; })[0]; if (w) v = valOf(w.a[0], w.a[1]); }
+      return pn.name !== undefined ? "" : (pn.dir === "in" ? "input " : "output ") + pinName(pn) + " · " + pn.w + " bit" + (pn.w > 1 ? "s" : "") + (v !== null && v !== undefined ? " · now " + v : "");
+    }
+    var p = hitPart(wpt[0], wpt[1]);
+    if (p && p.kind.indexOf("IN:") === 0) return +p.kind.split(":")[2] === 1 ? "Click to flip this input." : "Click it, then type a number. Or scroll on it (Shift: 16 at a time).";
+    if (p && !isIO(p) && S.arrayable(p.kind, lib)) return partLabel(p) + " · press 4 or 8 to make a row of copies";
+    return "";
+  }
+  function pinName(pn) { var g = geom(pn.part); return (pn.dir === "in" ? g.ins : g.outs)[pn.idx].name; }
+
+  function resize() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H); dpr = window.devicePixelRatio || 1;
+    cv.style.width = Math.floor(W * scale) + "px"; cv.style.height = Math.floor(H * scale) + "px";
+    cv.width = Math.floor(W * scale * dpr); cv.height = Math.floor(H * scale * dpr);
+    document.getElementById("wrap").style.width = cv.style.width; document.getElementById("wrap").style.height = cv.style.height;
+  }
+  window.addEventListener("resize", resize); resize();
+
+  // ---------------- input ----------------
+  function local(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+  cv.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  cv.addEventListener("mousedown", function (e) {
+    cv.focus();
+    var m = local(e); hover = m;
+    if (screen !== "edit") return;
+    if (m.y < BY || m.x > PX) return;
+    if (m.x < BX) {
+      var it = paletteHits.filter(function (q) { return m.x >= q.x && m.x <= q.x + q.w && m.y >= q.y && m.y <= q.y + 26 && m.y > BY; })[0];
+      if (it) ed.drag = { type: "palette", kind: it.kind, sx: m.x, sy: m.y };
+      return;
+    }
+    var wpt = toWorld(m.x, m.y);
+    if (e.button === 2) {
+      var pr = hitPart(wpt[0], wpt[1]);
+      if (pr && pr.kind.indexOf("IN:") === 0) { var nm = pr.kind.split(":")[1]; setInput(nm, ed.inVals[nm] - 1); return; }
+      if (pr && !isIO(pr)) { ed.sel = [pr.id]; ed.selWire = -1; deleteSelection(); return; }
+      var wi = hitWire(wpt[0], wpt[1]);
+      if (wi >= 0) { ed.selWire = wi; ed.sel = []; deleteSelection(); }
+      return;
+    }
+    var pn = hitPin(wpt[0], wpt[1]);
+    if (pn) { ed.drag = { type: "wire", pin: pn }; return; }
+    var p = hitPart(wpt[0], wpt[1]);
+    if (p) {
+      if (e.shiftKey) { var k = ed.sel.indexOf(p.id); if (k >= 0) ed.sel.splice(k, 1); else ed.sel.push(p.id); }
+      else if (ed.sel.indexOf(p.id) < 0) ed.sel = [p.id];
+      ed.selWire = -1;
+      ed.drag = { type: "move", sx: m.x, sy: m.y, moved: false, part: p, start: ed.sel.map(function (id) { var q = partById(id); return [id, q.x, q.y]; }), before: JSON.stringify(ed.design) };
+      return;
+    }
+    var w = hitWire(wpt[0], wpt[1]);
+    if (w >= 0) { ed.selWire = w; ed.sel = []; return; }
+    ed.sel = []; ed.selWire = -1;
+    if (e.shiftKey) ed.drag = { type: "box", sx: m.x, sy: m.y };
+    else ed.drag = { type: "pan", sx: m.x, sy: m.y, vx: ed.view.x, vy: ed.view.y };
+  });
+  window.addEventListener("mousemove", function (e) {
+    var m = local(e); hover = m;
+    if (screen !== "edit" || !ed || !ed.drag) return;
+    var d = ed.drag;
+    if (d.type === "pan") { ed.view.x = d.vx - (m.x - d.sx) / ed.view.z; ed.view.y = d.vy - (m.y - d.sy) / ed.view.z; }
+    if (d.type === "move") {
+      var dx = (m.x - d.sx) / ed.view.z, dy = (m.y - d.sy) / ed.view.z;
+      if (Math.abs(dx) + Math.abs(dy) > 2) d.moved = true;
+      d.start.forEach(function (s) { var q = partById(s[0]); if (q) { q.x = Math.round((s[1] + dx) / 10) * 10; q.y = Math.round((s[2] + dy) / 10) * 10; } });
+    }
+  });
+  window.addEventListener("mouseup", function (e) {
+    var m = local(e); hover = m;
+    if (screen === "edit" && ed && ed.drag) {
+      var d = ed.drag; ed.drag = null;
+      if (d.type === "palette") {
+        if (m.x > BX && m.x < PX && m.y > BY) { var wp = toWorld(m.x, m.y); placePart(d.kind, wp[0] - 30, wp[1] - 15); }
+        else if (Math.hypot(m.x - d.sx, m.y - d.sy) < 5) { var c0 = toWorld(BX + BW / 2, BY + BH / 2); placePart(d.kind, c0[0] - 30 + (Math.random() * 60 - 30), c0[1] - 15 + (Math.random() * 60 - 30)); }
+        return;
+      }
+      if (d.type === "wire") {
+        var wpt = toWorld(m.x, m.y), pn = hitPin(wpt[0], wpt[1]);
+        if (pn && !(pn.part.id === d.pin.part.id && pn.idx === d.pin.idx && pn.dir === d.pin.dir)) connect(d.pin, pn);
+        return;
+      }
+      if (d.type === "move") {
+        if (d.moved) { ed.undo.push(d.before); ed.redo = []; saveDesign(); }
+        else if (d.part.kind.indexOf("IN:") === 0) {
+          var nm = d.part.kind.split(":")[1], w = +d.part.kind.split(":")[2];
+          if (w === 1) setInput(nm, ed.inVals[nm] ^ 1);
+          else { ed.typing = { name: nm, buf: "" }; say("Type a number for " + nm + " (0-" + S.mask(w) + "), or scroll on it."); }
+          sfx("tick");
+        }
+        return;
+      }
+      if (d.type === "box") {
+        var a = toWorld(d.sx, d.sy), b = toWorld(m.x, m.y), x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]), y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
+        ed.sel = ed.design.parts.filter(function (p) { var g = geom(p); return !isIO(p) && g.x >= x0 && g.x + g.w <= x1 && g.y >= y0 && g.y + g.h <= y1; }).map(function (p) { return p.id; });
+        return;
+      }
+      return;
+    }
+    for (var i = buttons.length - 1; i >= 0; i--) {
+      var bt = buttons[i];
+      if (m.x >= bt.x && m.x <= bt.x + bt.w && m.y >= bt.y && m.y <= bt.y + bt.h) { bt.fn(); return; }
+    }
+  });
+  // buttons inside the editor's panels are pressed on mouse up too, but only when no drag was started there
+  cv.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var m = local(e);
+    if (screen !== "edit") return;
+    if (m.x < BX) { palScroll = Math.max(0, Math.min(palMax, palScroll + e.deltaY * 0.6)); return; }
+    if (m.x > PX || m.y < BY) return;
+    var wpt = toWorld(m.x, m.y), p = hitPart(wpt[0], wpt[1]);
+    if (p && p.kind.indexOf("IN:") === 0 && +p.kind.split(":")[2] > 1) { var nm = p.kind.split(":")[1]; setInput(nm, ed.inVals[nm] + (e.deltaY < 0 ? 1 : -1) * (e.shiftKey ? 16 : 1)); return; }
+    var z0 = ed.view.z, z1 = Math.max(0.3, Math.min(2.2, z0 * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+    ed.view.x = wpt[0] - (m.x - BX) / z1; ed.view.y = wpt[1] - (m.y - BY) / z1; ed.view.z = z1;
+  }, { passive: false });
+  window.addEventListener("keydown", function (e) {
+    if (screen !== "edit" || !ed) return;
+    var k = e.key, ctrl = e.ctrlKey || e.metaKey;
+    if (ctrl && (k === "z" || k === "Z")) { e.shiftKey ? redo() : undo(); e.preventDefault(); return; }
+    if (ctrl && (k === "y" || k === "Y")) { redo(); e.preventDefault(); return; }
+    if (ctrl && (k === "c" || k === "C")) { copySel(); e.preventDefault(); return; }
+    if (ctrl && (k === "v" || k === "V")) { paste(); e.preventDefault(); return; }
+    if (ctrl && (k === "d" || k === "D")) { if (copySel()) paste(); e.preventDefault(); return; }
+    if (ctrl && (k === "a" || k === "A")) { ed.sel = ed.design.parts.filter(function (p) { return !isIO(p); }).map(function (p) { return p.id; }); e.preventDefault(); return; }
+    if (ed.typing && ed.sel.length === 1 && ed.sel[0] === "in_" + ed.typing.name) {
+      if (/^[0-9]$/.test(k)) { ed.typing.buf = (ed.typing.buf + k).slice(-3); setInput(ed.typing.name, parseInt(ed.typing.buf, 10)); say(ed.typing.name + " = " + ed.inVals[ed.typing.name]); return; }
+      if (k === "Backspace") { ed.typing.buf = ed.typing.buf.slice(0, -1); setInput(ed.typing.name, parseInt(ed.typing.buf || "0", 10)); e.preventDefault(); return; }
+      if (k === "Enter" || k === "Escape") { ed.typing = null; return; }
+    } else ed.typing = null;
+    if (k === "Delete" || k === "Backspace") { deleteSelection(); e.preventDefault(); return; }
+    if (k === "1" || k === "4" || k === "8") { setArray(+k); return; }
+    if (k === "f" || k === "F") { fitView(); return; }
+    if (k === "t" || k === "T") { runTest(); return; }
+    if ((k === "s" || k === "S") && (ed.lv.kind === "seq" || ed.lv.kind === "cpu")) { stepTick(); return; }
+    if (k === "Escape") { ed.sel = []; ed.selWire = -1; }
+  });
+
+  // hooks for automated checks and the store capture
+  window.NAND_APP = {
+    state: function () { return { screen: screen, ed: ed, pg: pg, store: store }; },
+    open: function (id) { var lv = LEVELS.filter(function (l) { return l.id === id; })[0]; if (lv) openLevel(lv); },
+    setDesign: function (d) { snapshot(); ed.design = clone(d); changed(); fitView(); },
+    test: function () { runTest(); return ed.result; },
+    setInput: setInput, step: stepTick, fit: fitView, view: function () { return ed && ed.view; },
+    screen: function (s) { screen = s; }, code: function (s) { code.value = s; code.dispatchEvent(new Event("input")); },
+    progTest: function () { progTest(); return pg.result; }, progRun: function (on) { if (!pg.M) resetProg(); pg.running = on; }
+  };
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

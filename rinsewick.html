@@ -1,0 +1,1706 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RINSEWICK</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0f1a24; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; outline: none; cursor: default; }
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0"></canvas>
+<script>window.RINSE_EDITION = "demo";</script>
+<script>
+// core.js — RINSEWICK: the grime grid, the spray, the drones, the money and the upgrade tree.
+// Pure logic: the page and the balance bot both drive it with the same step function.
+(function (root) {
+  "use strict";
+  var W = 192, H = 112;
+
+  // --- grime: hit points and pay at the first site; later sites scale both ---
+  var GRIME = [
+    null,
+    { id: 1, key: "dust", name: "Dust", hp: 1, val: 1, col: [148, 128, 98] },
+    { id: 2, key: "mud", name: "Mud", hp: 5, val: 4, col: [92, 68, 44] },
+    { id: 3, key: "moss", name: "Moss", hp: 15, val: 10, col: [66, 104, 46] },
+    { id: 4, key: "gum", name: "Gum", hp: 120, val: 70, col: [214, 116, 166] },
+    { id: 5, key: "rust", name: "Rust", hp: 50, val: 30, col: [158, 74, 34] },
+    { id: 6, key: "barnacle", name: "Barnacles", hp: 300, val: 150, col: [204, 198, 172] },
+    { id: 7, key: "soot", name: "Soot", hp: 200, val: 110, col: [44, 42, 46] },
+    { id: 8, key: "tar", name: "Tar", hp: 800, val: 350, col: [22, 20, 26] }
+  ];
+  var DUST = 1, MUD = 2, MOSS = 3, GUM = 4, RUST = 5, BARN = 6, SOOT = 7, TAR = 8;
+
+  // --- the ten sites of Rinsewick ---
+  // layer: { t, cover (0..1 of the masked area), scale (noise size), bias ('low'|'high'|'edge'), on (material list) }
+  // spots: { t, spots, r }
+  var SITES = [
+    { id: "FENCE", item: "a tennis ball", name: "Garden Fence", hpMul: 1, valMul: 1, regrow: 0,
+      layers: [{ t: DUST, cover: 1 }, { t: MUD, cover: 0.42, scale: 18, bias: "low" }] },
+    { id: "STEPS", item: "the spare key", name: "Front Steps", hpMul: 1600, valMul: 5, regrow: 0,
+      layers: [{ t: DUST, cover: 1 }, { t: MUD, cover: 0.5, scale: 14, bias: "low" }, { t: GUM, spots: 26, r: [1, 2] }] },
+    { id: "PATH", item: "the gnome's lost hat", name: "Mailbox Path", hpMul: 28000, valMul: 25, regrow: 25,
+      layers: [{ t: DUST, cover: 1 }, { t: MUD, cover: 0.35, scale: 16 }, { t: MOSS, cover: 0.45, scale: 10, on: [3, 5] }, { t: GUM, spots: 14, r: [1, 2] }] },
+    
+  ];
+
+  // --- the upgrade tree ---
+  // x, y: place on the tree board (units); from: the nodes that reveal it; cur: "$" money, "tip", "pearl"
+  // base, grow: price of level 1 and the factor per level; site: shown once this site is reached (index)
+  var NODES = [
+    { id: "HOSE", name: "Garden Hose", desc: "Where it all starts.", x: 0, y: 0, max: 1, base: 0, grow: 1, cur: "$" },
+    { id: "PUMP", name: "Stronger Pump", desc: "+15% pressure.", x: 0, y: -1, from: ["HOSE"], max: 60, base: 15, grow: 2.2, cur: "$" },
+    { id: "NOZZLE", name: "Wider Nozzle", desc: "+0.3 spray radius.", x: 1, y: 0, from: ["HOSE"], max: 12, base: 25, grow: 1.95, cur: "$" },
+    { id: "TANK", name: "Bigger Tank", desc: "+1 s of water each shift.", x: 0, y: 1, from: ["HOSE"], max: 20, base: 20, grow: 1.6, cur: "$" },
+    { id: "SOAP", name: "Soap", desc: "+20% pay.", x: -1, y: 0, from: ["HOSE"], max: 50, base: 40, grow: 1.6, cur: "$" },
+
+    { id: "SPLASH", name: "Splashback", desc: "Each cleared cell has +3% chance to splash its neighbours.", x: 2, y: -0.5, from: ["NOZZLE"], max: 10, base: 90, grow: 1.9, cur: "$" },
+    { id: "HARDSPLASH", name: "Hard Splash", desc: "Splashes hit +60% harder.", x: 3, y: -1, from: ["SPLASH"], max: 6, base: 600, grow: 2.3, cur: "$" },
+    { id: "FAN", name: "Fan Tip", desc: "+12% spray radius.", x: 2, y: 0.5, from: ["NOZZLE"], max: 6, base: 1500, grow: 2.6, cur: "$" },
+    { id: "BURST", name: "Pressure Burst", desc: "Every few seconds the nozzle bursts: a ring hit worth 4 s of spray.", x: 1, y: -2, from: ["PUMP"], max: 1, base: 250, grow: 1, cur: "$" },
+    { id: "BURSTRATE", name: "Quick Valve", desc: "Bursts come 0.4 s sooner.", x: 2, y: -2.5, from: ["BURST"], max: 5, base: 700, grow: 2.2, cur: "$" },
+    { id: "BURSTSIZE", name: "Big Burst", desc: "+1.5 burst radius.", x: 1, y: -3, from: ["BURST"], max: 5, base: 900, grow: 2.3, cur: "$" },
+    { id: "INDUSTRIAL", name: "Industrial Pump", desc: "x1.4 pressure.", x: -1, y: -2, from: ["PUMP"], max: 30, base: 2500, grow: 4.5, cur: "$" },
+    { id: "HYDRO", name: "Hydro Cannon", desc: "x1.8 pressure.", x: -1, y: -3, from: ["INDUSTRIAL"], max: 30, base: 100000.0, grow: 7, cur: "$", site: 4 },
+
+    { id: "DRIP", name: "Drip Catcher", desc: "Water drops hide in the grime: +0.2% per cleared cell. Each refills 0.5 s (a shift grows by half at most).", x: 1, y: 2, from: ["TANK"], max: 5, base: 120, grow: 2.1, cur: "$" },
+    { id: "TOWER", name: "Water Tower", desc: "+20% water.", x: 0, y: 3, from: ["TANK"], max: 6, base: 3000, grow: 2.8, cur: "$" },
+    { id: "DRONE", name: "Helper Drone", desc: "A little drone sprays the dirtiest spot it can find.", x: -1, y: 2, from: ["TANK"], max: 1, base: 400, grow: 1, cur: "$" },
+    { id: "DRONES", name: "More Drones", desc: "+1 drone.", x: -2, y: 2.5, from: ["DRONE"], max: 5, base: 2500, grow: 3.4, cur: "$" },
+    { id: "DRONEPOW", name: "Drone Jets", desc: "Drones spray +30% harder.", x: -1, y: 3, from: ["DRONE"], max: 40, base: 1200, grow: 2.6, cur: "$" },
+    { id: "DRONESPD", name: "Drone Motors", desc: "Drones fly +30% faster.", x: -2, y: 3.5, from: ["DRONEPOW"], max: 4, base: 5000, grow: 3, cur: "$" },
+
+    { id: "WAX", name: "Premium Wax", desc: "+50% pay (on top of soap).", x: -2, y: -0.5, from: ["SOAP"], max: 30, base: 2000, grow: 2.2, cur: "$" },
+    { id: "CHANGE", name: "Loose Change", desc: "Tips hide in the grime: +0.1% per cleared cell.", x: -2, y: 0.5, from: ["SOAP"], max: 5, base: 200, grow: 2.2, cur: "$" },
+    { id: "SCRUB", name: "Scrub Brush", desc: "Dust and mud come off x2 faster.", x: -3, y: -1, from: ["WAX"], max: 3, base: 3000, grow: 4, cur: "$" },
+    { id: "WEED", name: "Weed Killer", desc: "Moss comes off x3 faster and stops growing back.", x: 1, y: 1, from: ["NOZZLE", "TANK"], max: 1, base: 1500, grow: 1, cur: "$", site: 2 },
+    { id: "GUMSCRAPE", name: "Gum Scraper", desc: "Gum comes off x2 faster.", x: 1, y: -1, from: ["PUMP", "NOZZLE"], max: 3, base: 800, grow: 4, cur: "$", site: 1 },
+    
+
+    { id: "NIGHT", name: "Night Shift", desc: "Drones keep cleaning while you shop: 15% speed per level.", x: -2, y: 1.5, from: ["DRONE"], max: 4, base: 3, grow: 2, cur: "tip" },
+    { id: "LUCKY", name: "Lucky Sponge", desc: "Water drops refill +0.3 s more.", x: 2, y: 1.5, from: ["DRIP"], max: 4, base: 4, grow: 2, cur: "tip" },
+    { id: "TIPJAR", name: "Tip Jar", desc: "+1 tip per tip found.", x: -3, y: 1, from: ["CHANGE"], max: 3, base: 6, grow: 2.5, cur: "tip" },
+    { id: "POWERTIP", name: "Brass Nozzle", desc: "x1.25 pressure.", x: 3, y: -2, from: ["HARDSPLASH", "BURSTRATE"], max: 12, base: 5, grow: 1.9, cur: "tip" },
+
+    { id: "TWIN", name: "Twin Hose", desc: "A second hose sprays the mirror spot.", x: 2, y: 3, from: ["DRIP", "TOWER"], max: 1, base: 2, grow: 1, cur: "pearl" },
+    { id: "RAIN", name: "Rain Maker", desc: "Every 2 s a shower falls on the dirtiest places.", x: 3, y: 2, from: ["LUCKY"], max: 3, base: 1, grow: 2, cur: "pearl" },
+    { id: "PRO", name: "Pro Washer", desc: "x2 pressure.", x: 0, y: -4, from: ["BURSTSIZE", "HYDRO", "INDUSTRIAL"], max: 3, base: 1, grow: 2, cur: "pearl" }
+  ];
+  var NODE = {};
+  NODES.forEach(function (n) { NODE[n.id] = n; });
+
+  // --- small helpers ---
+  function rng(seed) {
+    var a = seed >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      var t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function noiseField(rand, scale) {
+    // value noise, two octaves, 0..1
+    var gw = Math.ceil(W / scale) + 2, gh = Math.ceil(H / scale) + 2, g = [], g2 = [];
+    for (var i = 0; i < gw * gh; i++) g.push(rand());
+    var s2 = scale / 2, gw2 = Math.ceil(W / s2) + 2, gh2 = Math.ceil(H / s2) + 2;
+    for (i = 0; i < gw2 * gh2; i++) g2.push(rand());
+    function sm(t) { return t * t * (3 - 2 * t); }
+    function at(grid, w, x, y, s) {
+      var fx = x / s, fy = y / s, ix = Math.floor(fx), iy = Math.floor(fy), tx = sm(fx - ix), ty = sm(fy - iy);
+      var a = grid[iy * w + ix], b = grid[iy * w + ix + 1], c = grid[(iy + 1) * w + ix], d = grid[(iy + 1) * w + ix + 1];
+      return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * ty;
+    }
+    var out = new Float32Array(W * H);
+    for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) out[y * W + x] = at(g, gw, x, y, scale) * 0.7 + at(g2, gw2, x, y, s2) * 0.3;
+    return out;
+  }
+
+  // --- building a site's grime ---
+  function buildGrid(k, mat) {
+    var site = SITES[k], rand = rng(9001 + k * 7919);
+    var type = new Uint8Array(W * H), max = new Float32Array(W * H), thick = new Float32Array(W * H);
+    site.layers.forEach(function (L) {
+      if (L.spots) {
+        for (var s = 0; s < L.spots; s++) {
+          var cx = Math.floor(rand() * W), cy = Math.floor(rand() * H), r = L.r[0] + rand() * (L.r[1] - L.r[0]);
+          for (var y = Math.floor(cy - r); y <= cy + r; y++) for (var x = Math.floor(cx - r); x <= cx + r; x++) {
+            if (x < 0 || y < 0 || x >= W || y >= H) continue;
+            if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r + 0.5) type[y * W + x] = L.t;
+          }
+        }
+        return;
+      }
+      var n = L.cover >= 1 ? null : noiseField(rand, L.scale || 12);
+      for (var i = 0; i < W * H; i++) {
+        if (L.on && L.on.indexOf(mat[i]) < 0) continue;
+        if (n) {
+          var v = n[i], y = (i / W) | 0, x = i % W;
+          if (L.bias === "low") v += (y / H - 0.5) * 0.5;
+          if (L.bias === "high") v += (0.5 - y / H) * 0.5;
+          if (L.bias === "edge") v += (Math.max(Math.abs(x / W - 0.5), Math.abs(y / H - 0.5)) - 0.3) * 0.8;
+          if (v < 1 - L.cover * 0.62 - 0.19) continue;
+        }
+        type[i] = L.t;
+      }
+    });
+    var hp = new Float32Array(W * H), total = 0;
+    for (var i = 0; i < W * H; i++) {
+      thick[i] = 0.75 + 0.5 * rand();
+      if (!type[i]) continue;
+      max[i] = hp[i] = GRIME[type[i]].hp * site.hpMul * thick[i];
+      total++;
+    }
+    // the lost item hides under the thickest grime near the middle
+    var item = -1, best = -1;
+    for (var j = 0; j < 400; j++) {
+      var c = Math.floor((0.2 + 0.6 * rand()) * W) + Math.floor((0.2 + 0.6 * rand()) * H) * W;
+      if (type[c] && max[c] > best) { best = max[c]; item = c; }
+    }
+    return { k: k, type: type, hp: hp, max: max, thick: thick, total: total, remaining: total, item: item, mat: mat, dirty: [] };
+  }
+
+  // --- the game ---
+  function newGame(paint) {
+    var g = { v: 1, site: 0, reached: 0, money: 0, tips: 0, pearls: 0, lv: { HOSE: 1 }, restored: [], found: [],
+      stats: { shifts: 0, time: 0, cleared: 0, earned: 0, shop: 0 }, done: false };
+    g.paint = paint;
+    g.grid = buildGrid(0, paint(0).mat);
+    return g;
+  }
+  function lv(g, id) { return g.lv[id] || 0; }
+  function stats(g) {
+    var s = {};
+    s.pressure = 15 * Math.pow(1.15, lv(g, "PUMP")) * Math.pow(1.4, lv(g, "INDUSTRIAL")) * Math.pow(1.8, lv(g, "HYDRO")) *
+      Math.pow(1.25, lv(g, "POWERTIP")) * Math.pow(2, lv(g, "PRO"));
+    s.radius = (3.2 + 0.3 * lv(g, "NOZZLE")) * (1 + 0.12 * lv(g, "FAN"));
+    s.tank = (6 + lv(g, "TANK")) * (1 + 0.2 * lv(g, "TOWER"));
+    s.pay = (1 + 0.2 * lv(g, "SOAP")) * (1 + 0.5 * lv(g, "WAX")) * (1 + lv(g, "MEGAWAX"));
+    s.splash = 0.03 * lv(g, "SPLASH");
+    s.splashPow = 0.35 * Math.pow(1.6, lv(g, "HARDSPLASH"));
+    s.burst = lv(g, "BURST") ? 3.2 - 0.4 * lv(g, "BURSTRATE") : 0;
+    s.burstR = 4 + 1.5 * lv(g, "BURSTSIZE");
+    s.drip = 0.002 * lv(g, "DRIP");
+    s.dripAmt = 0.5 + 0.3 * lv(g, "LUCKY");
+    s.tipChance = 0.001 * lv(g, "CHANGE");
+    s.tipAmt = 1 + lv(g, "TIPJAR");
+    s.drones = lv(g, "DRONE") ? 1 + lv(g, "DRONES") : 0;
+    s.dronePow = 0.25 * Math.pow(1.3, lv(g, "DRONEPOW"));
+    s.droneSpd = 22 * (1 + 0.3 * lv(g, "DRONESPD"));
+    s.night = 0.15 * lv(g, "NIGHT");
+    s.twin = lv(g, "TWIN") > 0;
+    s.rain = lv(g, "RAIN");
+    var m = [1, 1, 1, 1, 1, 1, 1, 1, 1];
+    m[DUST] = m[MUD] = Math.pow(2, lv(g, "SCRUB"));
+    m[MOSS] = lv(g, "WEED") ? 3 : 1;
+    m[GUM] = Math.pow(2, lv(g, "GUMSCRAPE"));
+    m[RUST] = Math.pow(2, lv(g, "RUSTOFF"));
+    m[BARN] = Math.pow(2, lv(g, "CHISEL"));
+    m[SOOT] = m[TAR] = Math.pow(2, lv(g, "DEGREASE"));
+    s.typeMul = m;
+    s.regrow = lv(g, "WEED") ? 0 : 1;
+    return s;
+  }
+
+  function visible(g, id) {
+    var n = NODE[id];
+    if (!n) return false;
+    if (n.site && g.reached < n.site) return false;
+    if (!n.from) return true;
+    return n.from.some(function (p) { return lv(g, p) > 0; });
+  }
+  function cost(g, id) {
+    var n = NODE[id], l = lv(g, id);
+    if (l >= n.max) return Infinity;
+    var c = n.base * Math.pow(n.grow, l);
+    return n.cur === "$" ? Math.ceil(c) : Math.round(c);
+  }
+  function wallet(g, cur) { return cur === "$" ? "money" : cur === "tip" ? "tips" : "pearls"; }
+  function canBuy(g, id) {
+    var n = NODE[id];
+    return visible(g, id) && lv(g, id) < n.max && g[wallet(g, n.cur)] >= cost(g, id);
+  }
+  function buy(g, id) {
+    if (!canBuy(g, id)) return false;
+    var n = NODE[id];
+    g[wallet(g, n.cur)] -= cost(g, id);
+    g.lv[id] = lv(g, id) + 1;
+    return true;
+  }
+
+  // --- a shift (one run) ---
+  function startRun(g) {
+    var s = stats(g), rand = rng(1234567 + g.stats.shifts * 101 + g.site * 7);
+    var run = { s: s, tank: s.tank, refill: 0, time: 0, earned: 0, cleared: 0, tips: 0, drops: 0, rand: rand,
+      burstT: 0, rainT: 0, regrowT: 0, ev: [], over: false, drones: [] };
+    for (var i = 0; i < s.drones; i++) run.drones.push({ x: W * (0.2 + 0.6 * rand()), y: H * (0.2 + 0.6 * rand()), tx: -1, ty: -1, retarget: 0 });
+    g.stats.shifts++;
+    return run;
+  }
+
+  function clearCell(g, run, i, queue) {
+    var G = g.grid, t = G.type[i];
+    G.type[i] = 0; G.hp[i] = 0; G.remaining--;
+    G.dirty.push(i);
+    var pay = GRIME[t].val * SITES[G.k].valMul * G.thick[i] * run.s.pay;
+    g.money += pay; run.earned += pay; run.cleared++;
+    g.stats.cleared++; g.stats.earned += pay;
+    var x = i % W, y = (i / W) | 0;
+    if (i === G.item && g.found.indexOf(G.k) < 0) { g.found.push(G.k); g.pearls++; run.ev.push({ e: "item", x: x, y: y, k: G.k }); }
+    var r = run.rand;
+    if (run.s.tipChance && r() < run.s.tipChance) { g.tips += run.s.tipAmt; run.tips += run.s.tipAmt; run.ev.push({ e: "tip", x: x, y: y }); }
+    if (run.s.drip && run.refill < run.s.tank * 0.5 && r() < run.s.drip) { run.tank += run.s.dripAmt; run.refill += run.s.dripAmt; run.drops++; run.ev.push({ e: "drop", x: x, y: y }); }
+    if (run.s.splash && (run.gen || 0) < 3 && r() < run.s.splash) queue.push(i * 4 + (run.gen || 0));
+  }
+  function hit(g, run, i, dmg, queue) {
+    var G = g.grid, t = G.type[i];
+    if (!t) return;
+    G.hp[i] -= dmg * run.s.typeMul[t];
+    G.dirty.push(i);
+    if (G.hp[i] <= 0) clearCell(g, run, i, queue);
+  }
+  function splashes(g, run, queue) {
+    var G = g.grid, n = 0, amt = run.s.pressure * run.s.splashPow;
+    while (queue.length && n < 4000) {
+      var q = queue.pop(), i = q >> 2, x = i % W, y = (i / W) | 0;
+      run.gen = (q & 3) + 1;
+      n++;
+      if (x > 0) hit(g, run, i - 1, amt, queue);
+      if (x < W - 1) hit(g, run, i + 1, amt, queue);
+      if (y > 0) hit(g, run, i - W, amt, queue);
+      if (y < H - 1) hit(g, run, i + W, amt, queue);
+    }
+    queue.length = 0;
+    run.gen = 0;
+  }
+  function spray(g, run, cx, cy, R, power, dt, queue) {
+    // power: damage per second at the centre of the jet
+    var x0 = Math.max(0, Math.floor(cx - R)), x1 = Math.min(W - 1, Math.floor(cx + R)), y0 = Math.max(0, Math.floor(cy - R)), y1 = Math.min(H - 1, Math.floor(cy + R));
+    var R2 = R * R, G = g.grid;
+    for (var y = y0; y <= y1; y++) for (var x = x0; x <= x1; x++) {
+      var dx = x + 0.5 - cx, dy = y + 0.5 - cy, d2 = dx * dx + dy * dy;
+      if (d2 > R2) continue;
+      var i = y * W + x;
+      if (!G.type[i]) continue;
+      hit(g, run, i, power * dt * (1 - 0.55 * d2 / R2), queue);
+    }
+  }
+  function findDirty(g, rand, nearX, nearY) {
+    // the grimiest cell among a few random samples, preferring near ones
+    var G = g.grid, best = -1, bestScore = -1;
+    for (var k = 0; k < 28; k++) {
+      var i = Math.floor(rand() * W * H);
+      if (!G.type[i]) continue;
+      var x = i % W, y = (i / W) | 0, d = nearX < 0 ? 0 : Math.abs(x - nearX) + Math.abs(y - nearY);
+      var sc = GRIME[G.type[i]].val / (1 + d / 12);
+      if (sc > bestScore) { bestScore = sc; best = i; }
+    }
+    if (best < 0 && G.remaining > 0) {
+      var start = Math.floor(rand() * W * H);
+      for (var j = 0; j < W * H; j++) { var c = (start + j) % (W * H); if (G.type[c]) { best = c; break; } }
+    }
+    return best;
+  }
+  function moveDrones(g, run, dt, power, queue) {
+    var s = run.s, G = g.grid;
+    run.drones.forEach(function (d) {
+      // a drone flies to a dirty spot and stays until it is clean (or for 3 s), then picks the next
+      var there = Math.abs(d.tx - d.x) + Math.abs(d.ty - d.y) < 1;
+      if (there) d.retarget -= dt;
+      if (d.tx < 0 || d.retarget <= 0 || !G.type[Math.floor(d.ty) * W + Math.floor(d.tx)]) {
+        var c = findDirty(g, run.rand, d.x, d.y);
+        if (c >= 0) { d.tx = c % W + 0.5; d.ty = ((c / W) | 0) + 0.5; }
+        d.retarget = 3;
+      }
+      var dx = d.tx - d.x, dy = d.ty - d.y, dist = Math.sqrt(dx * dx + dy * dy), stepLen = s.droneSpd * dt;
+      if (dist > 0.01) { var f = Math.min(1, stepLen / dist); d.x += dx * f; d.y += dy * f; }
+      spray(g, run, d.x, d.y, 2.2, power, dt, queue);
+    });
+  }
+  function regrow(g, run, dt) {
+    var site = SITES[g.grid.k];
+    if (!site.regrow || !run.s.regrow) return;
+    run.regrowT += site.regrow * dt;
+    var G = g.grid, r = run.rand;
+    while (run.regrowT >= 1) {
+      run.regrowT -= 1;
+      var i = Math.floor(r() * W * H);
+      if (G.type[i] || !G.max[i]) continue;
+      var x = i % W, y = (i / W) | 0;
+      var moss = (x > 0 && G.type[i - 1] === MOSS) || (x < W - 1 && G.type[i + 1] === MOSS) || (y > 0 && G.type[i - W] === MOSS) || (y < H - 1 && G.type[i + W] === MOSS);
+      if (!moss) continue;
+      G.type[i] = MOSS; G.max[i] = G.hp[i] = GRIME[MOSS].hp * site.hpMul * G.thick[i] * 0.5; G.remaining++;
+      G.dirty.push(i);
+    }
+  }
+
+  // one step of a shift. input: { x, y } in cells (the nozzle), or null when the pointer is away
+  function stepRun(g, run, input, dt) {
+    if (run.over) return run;
+    var s = run.s, queue = [];
+    run.time += dt;
+    g.stats.time += dt;
+    run.tank -= dt;
+    if (input) {
+      spray(g, run, input.x, input.y, s.radius, s.pressure, dt, queue);
+      if (s.twin) spray(g, run, W - input.x, input.y, s.radius, s.pressure, dt, queue);
+      if (s.burst) {
+        run.burstT += dt;
+        if (run.burstT >= s.burst) {
+          run.burstT = 0;
+          spray(g, run, input.x, input.y, s.burstR, s.pressure * 4, 1, queue);
+          run.ev.push({ e: "burst", x: input.x, y: input.y, r: s.burstR });
+        }
+      }
+    }
+    if (run.drones.length) moveDrones(g, run, dt, s.pressure * s.dronePow, queue);
+    if (s.rain) {
+      run.rainT += dt;
+      if (run.rainT >= 2) {
+        run.rainT = 0;
+        for (var k = 0; k < 2 + 2 * s.rain; k++) {
+          var c = findDirty(g, run.rand, -1, -1);
+          if (c < 0) break;
+          spray(g, run, c % W + 0.5, ((c / W) | 0) + 0.5, 3, s.pressure * 3, 1, queue);
+          run.ev.push({ e: "rain", x: c % W, y: (c / W) | 0 });
+        }
+      }
+    }
+    splashes(g, run, queue);
+    regrow(g, run, dt);
+    checkRestored(g, run);
+    if (run.tank <= 0 && !run.over) { run.over = true; run.ev.push({ e: "empty" }); }
+    return run;
+  }
+
+  // the last few specks wash off on their own, so nobody hunts single pixels
+  function checkRestored(g, run) {
+    var G = g.grid;
+    if (G.remaining > Math.max(2, Math.floor(G.total * 0.004)) || run.over) return;
+    var q = [];
+    for (var i = 0; i < W * H; i++) if (G.type[i]) clearCell(g, run, i, q);
+    var k = G.k;
+    if (g.restored.indexOf(k) < 0) { g.restored.push(k); g.pearls++; }
+    run.over = true;
+    run.ev.push({ e: "restored", k: k });
+    if (k + 1 < SITES.length) {
+      g.site = k + 1;
+      g.reached = Math.max(g.reached, k + 1);
+      g.grid = buildGrid(k + 1, g.paint(k + 1).mat);
+    } else {
+      g.done = true;
+    }
+  }
+
+  // drones working while the player shops (Night Shift)
+  function shopTick(g, dt) {
+    var s = stats(g);
+    g.stats.shop += dt;
+    if (!s.night || !s.drones || g.done) return null;
+    if (!g.night) g.night = startRunLike(g, s);
+    var run = g.night;
+    run.ev.length = 0;
+    moveDrones(g, run, dt, s.pressure * s.dronePow * s.night, []);
+    checkNight(g, run);
+    return run;
+  }
+  function startRunLike(g, s) {
+    var rand = rng(777 + g.stats.shifts);
+    var run = { s: s, tank: 1e9, refill: 1e9, time: 0, earned: 0, cleared: 0, tips: 0, drops: 0, rand: rand, ev: [], over: false, drones: [] };
+    for (var i = 0; i < s.drones; i++) run.drones.push({ x: W * (0.2 + 0.6 * rand()), y: H * (0.2 + 0.6 * rand()), tx: -1, ty: -1, retarget: 0 });
+    run.s = Object.assign({}, s, { splash: 0, drip: 0 });
+    return run;
+  }
+  function checkNight(g, run) {
+    var before = g.grid.k;
+    checkRestored(g, run);
+    if (run.over) { g.night = null; if (g.grid.k !== before) run.ev.push({ e: "restored", k: before }); }
+  }
+
+  // --- saving: the grid is rebuilt from the site, then the saved state is laid over it ---
+  function b64(u8) {
+    var s = "";
+    for (var i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    return typeof btoa !== "undefined" ? btoa(s) : Buffer.from(s, "binary").toString("base64");
+  }
+  function unb64(str) {
+    var s = typeof atob !== "undefined" ? atob(str) : Buffer.from(str, "base64").toString("binary"), u = new Uint8Array(s.length);
+    for (var i = 0; i < s.length; i++) u[i] = s.charCodeAt(i);
+    return u;
+  }
+  function save(g) {
+    var G = g.grid, t = new Uint8Array(W * H * 2);
+    for (var i = 0; i < W * H; i++) {
+      t[i] = G.type[i];
+      t[W * H + i] = G.type[i] ? Math.max(1, Math.min(255, Math.round(255 * G.hp[i] / G.max[i]))) : 0;
+    }
+    return JSON.stringify({ v: 1, site: g.site, reached: g.reached, money: g.money, tips: g.tips, pearls: g.pearls, lv: g.lv,
+      restored: g.restored, found: g.found, stats: g.stats, done: g.done, grid: b64(t) });
+  }
+  function load(str, paint) {
+    var d = JSON.parse(str);
+    if (!d || d.v !== 1) throw new Error("not a RINSEWICK save");
+    var g = newGame(paint);
+    ["site", "reached", "money", "tips", "pearls", "lv", "restored", "found", "stats", "done"].forEach(function (k) { if (d[k] !== undefined) g[k] = d[k]; });
+    if (g.site >= SITES.length) g.site = SITES.length - 1;
+    g.grid = buildGrid(g.site, paint(g.site).mat);
+    var t = unb64(d.grid), G = g.grid, rem = 0;
+    if (t.length === W * H * 2) {
+      for (var i = 0; i < W * H; i++) {
+        var ty = t[i];
+        if (ty && ty < GRIME.length) {
+          if (!G.max[i]) G.max[i] = GRIME[ty].hp * SITES[g.site].hpMul * G.thick[i] * 0.5;
+          G.type[i] = ty; G.hp[i] = G.max[i] * t[W * H + i] / 255; rem++;
+        } else { G.type[i] = 0; G.hp[i] = 0; }
+      }
+      G.remaining = rem;
+    }
+    return g;
+  }
+
+  function fmt(n) {
+    if (n < 1000) return n < 10 && n % 1 ? n.toFixed(1) : String(Math.floor(n));
+    var u = ["K", "M", "B", "T", "Qa", "Qi", "Sx", "Sp", "Oc", "No", "Dc"], i = -1;
+    while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }
+    return (n < 10 ? n.toFixed(2) : n < 100 ? n.toFixed(1) : Math.floor(n)) + u[i];
+  }
+
+  var api = { W: W, H: H, GRIME: GRIME, SITES: SITES, NODES: NODES, NODE: NODE, rng: rng, buildGrid: buildGrid, newGame: newGame,
+    stats: stats, lv: lv, visible: visible, cost: cost, canBuy: canBuy, buy: buy, startRun: startRun, stepRun: stepRun,
+    shopTick: shopTick, save: save, load: load, fmt: fmt, findDirty: findDirty };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.RW = api;
+})(this);
+
+</script>
+<script>
+// art.js — the ten pictures under the grime, painted by code at 192x112.
+// paint(k) -> { rgb: Uint8Array(W*H*3), mat: Uint8Array(W*H) }
+// materials: 0 air/sky, 1 wood, 2 metal, 3 stone, 4 glass, 5 plant, 6 paint, 7 water
+(function (root) {
+  "use strict";
+  var W = 192, H = 112;
+  var AIR = 0, WOOD = 1, METAL = 2, STONE = 3, GLASS = 4, PLANT = 5, PAINT = 6, WATER = 7;
+
+  function hash(x, y, s) {
+    var h = (x * 374761393 + y * 668265263 + s * 2246822519) >>> 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  }
+  function Pic() {
+    this.rgb = new Uint8Array(W * H * 3);
+    this.mat = new Uint8Array(W * H);
+    this.seed = 1;
+  }
+  Pic.prototype.px = function (x, y, c, m, tex) {
+    x = Math.round(x); y = Math.round(y);
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
+    var i = y * W + x, f = tex ? 1 + (hash(x, y, this.seed) - 0.5) * tex : 1;
+    this.rgb[i * 3] = clamp(c[0] * f); this.rgb[i * 3 + 1] = clamp(c[1] * f); this.rgb[i * 3 + 2] = clamp(c[2] * f);
+    if (m !== undefined && m !== null) this.mat[i] = m;
+  };
+  function clamp(v) { return v < 0 ? 0 : v > 255 ? 255 : Math.round(v); }
+  function mix(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
+  function shade(c, f) { return [c[0] * f, c[1] * f, c[2] * f]; }
+  Pic.prototype.rect = function (x, y, w, h, c, m, tex) {
+    for (var j = Math.max(0, Math.floor(y)); j < Math.min(H, Math.floor(y + h)); j++)
+      for (var i = Math.max(0, Math.floor(x)); i < Math.min(W, Math.floor(x + w)); i++) this.px(i, j, c, m, tex);
+  };
+  Pic.prototype.grad = function (x, y, w, h, c0, c1, m, tex) {
+    for (var j = Math.floor(y); j < Math.floor(y + h); j++) {
+      var c = mix(c0, c1, (j - y) / Math.max(1, h - 1));
+      for (var i = Math.floor(x); i < Math.floor(x + w); i++) this.px(i, j, c, m, tex);
+    }
+  };
+  Pic.prototype.circle = function (cx, cy, r, c, m, tex) {
+    for (var j = Math.floor(cy - r); j <= cy + r; j++) for (var i = Math.floor(cx - r); i <= cx + r; i++)
+      if ((i + 0.5 - cx) * (i + 0.5 - cx) + (j + 0.5 - cy) * (j + 0.5 - cy) <= r * r) this.px(i, j, c, m, tex);
+  };
+  Pic.prototype.ring = function (cx, cy, r0, r1, c, m) {
+    for (var j = Math.floor(cy - r1); j <= cy + r1; j++) for (var i = Math.floor(cx - r1); i <= cx + r1; i++) {
+      var d = (i + 0.5 - cx) * (i + 0.5 - cx) + (j + 0.5 - cy) * (j + 0.5 - cy);
+      if (d <= r1 * r1 && d >= r0 * r0) this.px(i, j, c, m);
+    }
+  };
+  Pic.prototype.ellipse = function (cx, cy, rx, ry, c, m, tex) {
+    for (var j = Math.floor(cy - ry); j <= cy + ry; j++) for (var i = Math.floor(cx - rx); i <= cx + rx; i++) {
+      var dx = (i + 0.5 - cx) / rx, dy = (j + 0.5 - cy) / ry;
+      if (dx * dx + dy * dy <= 1) this.px(i, j, c, m, tex);
+    }
+  };
+  Pic.prototype.line = function (x0, y0, x1, y1, c, m, wdt) {
+    var n = Math.ceil(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0))) + 1;
+    for (var k = 0; k <= n; k++) {
+      var x = x0 + (x1 - x0) * k / n, y = y0 + (y1 - y0) * k / n;
+      if (wdt && wdt > 1) this.circle(x, y, wdt / 2, c, m); else this.px(x, y, c, m);
+    }
+  };
+  Pic.prototype.poly = function (pts, c, m, tex) {
+    var ys = pts.map(function (p) { return p[1]; }), y0 = Math.floor(Math.min.apply(null, ys)), y1 = Math.ceil(Math.max.apply(null, ys));
+    for (var y = y0; y <= y1; y++) {
+      var xs = [], yy = y + 0.5;
+      for (var i = 0; i < pts.length; i++) {
+        var a = pts[i], b = pts[(i + 1) % pts.length];
+        if ((a[1] <= yy && b[1] > yy) || (b[1] <= yy && a[1] > yy)) xs.push(a[0] + (yy - a[1]) * (b[0] - a[0]) / (b[1] - a[1]));
+      }
+      xs.sort(function (p, q) { return p - q; });
+      for (var k = 0; k + 1 < xs.length; k += 2) for (var x = Math.round(xs[k]); x < Math.round(xs[k + 1]); x++) this.px(x, y, c, m, tex);
+    }
+  };
+  // 3x5 letters
+  var FONT = {
+    A: "010101111101101", B: "110101110101110", C: "011100100100011", D: "110101101101110", E: "111100110100111",
+    F: "111100110100100", G: "011100101101011", H: "101101111101101", I: "111010010010111", J: "001001001101010",
+    K: "101101110101101", L: "100100100100111", M: "101111111101101", N: "110101101101101", O: "010101101101010",
+    P: "110101110100100", Q: "010101101110011", R: "110101110101101", S: "011100010001110", T: "111010010010010",
+    U: "101101101101111", V: "101101101101010", W: "101101111111101", X: "101101010101101", Y: "101101010010010",
+    Z: "111001010100111", "'": "010010000000000", " ": "000000000000000", ".": "000000000000010", "!": "010010010000010",
+    "0": "111101101101111", "1": "010110010010111", "2": "110001010100111", "3": "110001010001110", "4": "101101111001001",
+    "5": "111100110001110", "6": "011100111101111", "7": "111001010010010", "8": "111101111101111", "9": "111101111001110"
+  };
+  Pic.prototype.text = function (s, x, y, c, m, sc) {
+    sc = sc || 1;
+    for (var k = 0; k < s.length; k++) {
+      var g = FONT[s[k]] || FONT[" "];
+      for (var j = 0; j < 5; j++) for (var i = 0; i < 3; i++) if (g[j * 3 + i] === "1") this.rect(x + (k * 4 + i) * sc, y + j * sc, sc, sc, c, m);
+    }
+  };
+  function textW(s, sc) { return (s.length * 4 - 1) * (sc || 1); }
+
+  // --- palette ---
+  var SKY0 = [120, 186, 232], SKY1 = [206, 234, 246], SEA = [52, 130, 178], SEA2 = [88, 168, 204], GRASS = [92, 166, 74], GRASS2 = [70, 138, 60];
+  var WHITE = [240, 238, 228], CREAM = [242, 226, 186], RED = [204, 64, 52], BRICK = [170, 84, 62], STONEC = [168, 162, 150], WOODC = [172, 120, 72];
+  var SAND = [232, 208, 150], YEL = [246, 200, 70], NAVY = [40, 66, 110], TEAL = [54, 150, 140], PINK = [238, 140, 160], GOLD = [222, 176, 64];
+
+  function sky(p, h) { p.grad(0, 0, W, h, SKY0, SKY1, AIR); }
+  function clouds(p, list) { list.forEach(function (c) { p.ellipse(c[0], c[1], c[2], c[2] * 0.45, [252, 252, 250], AIR); p.ellipse(c[0] + c[2] * 0.5, c[1] - 2, c[2] * 0.6, c[2] * 0.4, [252, 252, 250], AIR); }); }
+  function flower(p, x, y, c) { p.px(x, y, c, PLANT); p.px(x - 1, y, c, PLANT); p.px(x + 1, y, c, PLANT); p.px(x, y - 1, c, PLANT); p.px(x, y + 1, c, PLANT); p.px(x, y, YEL, PLANT); }
+
+  var PAINTERS = [
+    // 0 Garden Fence
+    function (p) {
+      sky(p, 60);
+      clouds(p, [[30, 14, 12], [120, 20, 16], [170, 10, 9]]);
+      p.circle(160, 18, 8, [255, 236, 150], AIR);
+      p.poly([[0, 52], [40, 40], [90, 50], [140, 38], [192, 48], [192, 70], [0, 70]], [132, 190, 110], PLANT, 0.08);
+      p.grad(0, 62, W, 50, GRASS, GRASS2, PLANT, 0.18);
+      // the fence
+      p.rect(0, 58, W, 4, WHITE, WOOD, 0.06); p.rect(0, 80, W, 4, WHITE, WOOD, 0.06);
+      p.rect(0, 62, W, 1, shade(WHITE, 0.8), WOOD); p.rect(0, 84, W, 1, shade(WHITE, 0.8), WOOD);
+      for (var x = 4; x < W; x += 14) {
+        p.rect(x, 44, 9, 52, WHITE, WOOD, 0.07);
+        p.poly([[x, 44], [x + 4.5, 38], [x + 9, 44]], WHITE, WOOD);
+        p.rect(x + 8, 44, 1, 52, shade(WHITE, 0.78), WOOD);
+        p.px(x + 4, 50, shade(WHITE, 0.6), WOOD); p.px(x + 4, 88, shade(WHITE, 0.6), WOOD);
+      }
+      for (var k = 0; k < 70; k++) {
+        var fx = Math.floor(hash(k, 1, 5) * W), fy = 92 + Math.floor(hash(k, 2, 5) * 18);
+        flower(p, fx, fy, [[238, 92, 110], [250, 200, 80], [170, 120, 230], [250, 250, 250]][k % 4]);
+      }
+      for (k = 0; k < 40; k++) { var tx = Math.floor(hash(k, 3, 5) * W); p.line(tx, 96, tx + 1, 92, shade(GRASS2, 0.8), PLANT); }
+      // a cat, asleep
+      p.ellipse(150, 101, 7, 3.5, [80, 80, 86], PLANT); p.circle(144, 99, 3, [80, 80, 86], PLANT); p.px(143, 96, [80, 80, 86]); p.px(145, 96, [80, 80, 86]);
+      p.line(157, 101, 160, 97, [80, 80, 86], PLANT);
+    },
+    // 1 Front Steps
+    function (p) {
+      p.seed = 2;
+      for (var y = 0; y < 78; y += 5) for (var x = -((y / 5) % 2) * 6; x < W; x += 12) {
+        p.rect(x, y, 11, 4, mix(BRICK, [190, 100, 76], hash(x, y, 7)), STONE, 0.12);
+        p.rect(x, y + 4, 12, 1, [214, 200, 182], STONE); p.rect(x + 11, y, 1, 4, [214, 200, 182], STONE);
+      }
+      // door
+      p.rect(76, 6, 40, 72, [236, 232, 220], PAINT);
+      p.rect(80, 10, 32, 68, [44, 92, 150], PAINT, 0.05);
+      p.rect(84, 14, 11, 24, shade([44, 92, 150], 0.82), PAINT); p.rect(97, 14, 11, 24, shade([44, 92, 150], 0.82), PAINT);
+      p.rect(84, 42, 11, 30, shade([44, 92, 150], 0.82), PAINT); p.rect(97, 42, 11, 30, shade([44, 92, 150], 0.82), PAINT);
+      p.circle(106, 46, 1.8, GOLD, METAL); p.rect(93, 30, 6, 2, GOLD, METAL);
+      p.grad(84, 0, 24, 6, [190, 220, 240], [150, 190, 220], GLASS);
+      p.text("12", 92, 1, GOLD, METAL);
+      // lamps
+      [62, 122].forEach(function (lx) { p.rect(lx, 24, 8, 12, [40, 40, 44], METAL); p.rect(lx + 1, 26, 6, 8, [252, 222, 130], GLASS); p.rect(lx + 3, 20, 2, 4, [40, 40, 44], METAL); });
+      // steps
+      var st = [[64, 78, 64, 8], [56, 86, 80, 10], [46, 96, 100, 16]];
+      st.forEach(function (s, i) { p.rect(s[0], s[1], s[2], s[3], shade(STONEC, 1 - i * 0.06), STONE, 0.1); p.rect(s[0], s[1], s[2], 1, shade(STONEC, 1.15), STONE); });
+      p.rect(0, 78, 64, 34, [132, 128, 122], STONE, 0.12); p.rect(128, 78, 64, 34, [132, 128, 122], STONE, 0.12);
+      for (var px2 = 0; px2 < W; px2 += 16) { p.rect(px2, 78, 1, 34, [112, 108, 102], STONE); }
+      p.rect(0, 95, 192, 1, [112, 108, 102], STONE);
+      st.forEach(function (s, i) { p.rect(s[0], s[1], s[2], s[3], shade(STONEC, 1 - i * 0.06), STONE, 0.1); p.rect(s[0], s[1], s[2], 1, shade(STONEC, 1.15), STONE); });
+      // mat
+      p.rect(74, 80, 44, 6, [178, 140, 86], AIR, 0.15); p.text("WELCOME", 82, 80, [110, 70, 40], AIR);
+      // pots
+      [[30, 80], [162, 80]].forEach(function (q) {
+        p.poly([[q[0] - 9, q[1]], [q[0] + 9, q[1]], [q[0] + 6, q[1] + 16], [q[0] - 6, q[1] + 16]], [200, 110, 70], STONE, 0.08);
+        p.circle(q[0], q[1] - 7, 9, GRASS2, PLANT, 0.2); p.circle(q[0] - 5, q[1] - 10, 5, GRASS, PLANT, 0.2);
+        flower(p, q[0] - 3, q[1] - 9, PINK); flower(p, q[0] + 4, q[1] - 6, PINK); flower(p, q[0], q[1] - 13, WHITE);
+      });
+    },
+    // 2 Mailbox Path
+    function (p) {
+      p.seed = 3;
+      p.grad(0, 0, W, H, GRASS, GRASS2, PLANT, 0.2);
+      // stepping stones winding up
+      for (var k = 0; k < 9; k++) {
+        var t = k / 8, cx = 96 + Math.sin(t * 5) * 30, cy = 106 - t * 100, r = 11 - t * 5;
+        p.ellipse(cx, cy, r * 1.4, r * 0.75, shade(STONEC, 0.95 + hash(k, 0, 3) * 0.1), STONE, 0.14);
+        p.ellipse(cx - 2, cy - 1, r * 1.1, r * 0.5, shade(STONEC, 1.1), STONE, 0.1);
+      }
+      // flower beds
+      for (k = 0; k < 120; k++) {
+        var fx = Math.floor(hash(k, 9, 3) * W), fy = Math.floor(hash(k, 8, 3) * H);
+        if (Math.abs(fx - (96 + Math.sin((106 - fy) / 100 * 5) * 30)) < 26) continue;
+        flower(p, fx, fy, [[238, 92, 110], [250, 200, 80], [170, 120, 230], [120, 170, 250]][k % 4]);
+      }
+      // mailbox
+      p.rect(150, 46, 4, 50, WOODC, WOOD, 0.1);
+      p.rect(136, 30, 32, 18, [200, 52, 48], METAL, 0.05); p.ellipse(152, 30, 16, 6, [200, 52, 48], METAL);
+      p.rect(136, 30, 2, 18, shade([200, 52, 48], 0.7), METAL);
+      p.rect(166, 22, 2, 14, [250, 210, 60], METAL); p.rect(168, 22, 6, 4, [250, 210, 60], METAL);
+      p.text("MAIL", 144, 35, WHITE, METAL);
+      p.text("NO 12", 142, 41, [250, 230, 200], METAL);
+      // hedge
+      p.rect(0, 0, W, 10, [52, 112, 50], PLANT, 0.3);
+      for (var x = 0; x < W; x += 8) p.circle(x + 4, 10, 5, [52, 112, 50], PLANT, 0.3);
+      // a garden gnome
+      p.poly([[30, 44], [36, 30], [42, 44]], RED, PAINT); p.circle(36, 47, 4, [246, 210, 180], PAINT); p.ellipse(36, 52, 5, 4, WHITE, PAINT); p.rect(32, 55, 8, 6, NAVY, PAINT);
+    },
+    // 3 Old Pickup
+    function (p) {
+      p.seed = 4;
+      // shop wall
+      p.rect(0, 0, W, 70, [226, 210, 178], STONE, 0.08);
+      p.rect(10, 8, 70, 40, [90, 140, 170], GLASS); p.rect(10, 8, 70, 3, [60, 60, 66], METAL); p.rect(44, 8, 2, 40, [60, 60, 66], METAL);
+      p.rect(96, 4, 86, 14, TEAL, PAINT); p.text("HARBOR HARDWARE", 100, 8, WHITE, PAINT);
+      p.rect(120, 22, 44, 48, [120, 80, 50], WOOD, 0.1); p.rect(140, 22, 2, 48, [90, 60, 40], WOOD);
+      p.rect(0, 70, W, 42, [96, 96, 104], STONE, 0.1); p.rect(0, 70, W, 3, [170, 170, 170], STONE);
+      for (var x = 0; x < W; x += 24) p.rect(x, 92, 12, 2, [230, 220, 120], PAINT);
+      // the truck
+      var R0 = [196, 48, 44];
+      p.poly([[20, 66], [24, 52], [74, 50], [86, 30], [126, 30], [136, 50], [172, 52], [176, 66], [176, 82], [20, 82]], R0, METAL, 0.05);
+      p.poly([[90, 34], [122, 34], [130, 50], [90, 50]], [150, 200, 226], GLASS); p.line(108, 34, 108, 50, R0, METAL);
+      p.rect(20, 66, 156, 2, shade(R0, 0.7), METAL); p.rect(86, 52, 1, 28, shade(R0, 0.7), METAL); p.rect(136, 52, 1, 28, shade(R0, 0.7), METAL);
+      p.rect(126, 56, 6, 2, [210, 210, 214], METAL);
+      p.rect(14, 76, 14, 6, [214, 216, 222], METAL); p.rect(170, 76, 12, 6, [214, 216, 222], METAL);
+      p.rect(172, 58, 6, 6, [252, 240, 180], GLASS);
+      [52, 148].forEach(function (wx) {
+        p.circle(wx, 84, 14, [36, 36, 40], METAL); p.circle(wx, 84, 9, [190, 192, 198], METAL); p.circle(wx, 84, 3, [120, 120, 126], METAL);
+        for (var a = 0; a < 6; a++) p.px(wx + Math.cos(a) * 6, 84 + Math.sin(a) * 6, [90, 90, 96], METAL);
+      });
+      p.text("RW", 100, 58, WHITE, METAL);
+    },
+    // 4 Town Fountain
+    function (p) {
+      p.seed = 5;
+      sky(p, 40); clouds(p, [[40, 12, 12], [150, 16, 14]]);
+      p.rect(0, 30, W, 12, [220, 196, 160], STONE, 0.1);
+      for (var x = 0; x < W; x += 16) { p.rect(x, 20, 12, 12, [236, 220, 190], STONE); p.poly([[x, 20], [x + 6, 14], [x + 12, 20]], [196, 90, 70], STONE); }
+      // tiled plaza
+      for (var y = 42; y < H; y += 6) for (x = 0; x < W; x += 8) {
+        var c = (x / 8 + y / 6) % 2 ? [214, 196, 160] : [190, 120, 90];
+        p.rect(x, y, 8, 6, c, STONE, 0.12); p.rect(x, y, 8, 1, shade(c, 0.85), STONE);
+      }
+      // basin
+      p.ellipse(96, 94, 74, 15, [180, 176, 166], STONE, 0.1);
+      p.ellipse(96, 90, 68, 12, [64, 150, 190], WATER, 0.1);
+      p.rect(22, 90, 148, 14, [180, 176, 166], STONE, 0.1);
+      p.ellipse(96, 104, 74, 6, [150, 146, 138], STONE);
+      // mosaic band
+      for (x = 26; x < 166; x += 6) { p.rect(x, 94, 4, 4, [[40, 120, 180], [246, 200, 70], [230, 230, 230]][(x / 6) % 3 | 0], STONE); }
+      // column and upper bowl
+      p.rect(90, 50, 12, 40, [190, 186, 176], STONE, 0.1);
+      p.ellipse(96, 52, 26, 6, [190, 186, 176], STONE, 0.1); p.ellipse(96, 50, 22, 4, [80, 162, 200], WATER);
+      // fish statue
+      p.ellipse(96, 38, 7, 9, [96, 140, 120], METAL, 0.1); p.poly([[92, 46], [100, 46], [104, 52], [88, 52]], [96, 140, 120], METAL);
+      p.circle(94, 34, 1, [240, 240, 240], METAL);
+      // water
+      for (var k = 0; k < 18; k++) { var a = k / 17 * Math.PI; p.px(96 + Math.cos(a) * 18, 46 - Math.sin(a) * 14 + 10, [200, 236, 250], WATER); }
+      p.line(96, 30, 96, 22, [200, 236, 250], WATER); p.line(97, 22, 104, 30, [200, 236, 250], WATER); p.line(95, 22, 88, 30, [200, 236, 250], WATER);
+      for (k = 0; k < 12; k++) p.px(60 + k * 6, 86 + (k % 2), [220, 244, 252], WATER);
+      // pigeons
+      [[30, 62], [160, 70], [150, 58]].forEach(function (q) { p.ellipse(q[0], q[1], 4, 3, [150, 150, 164], AIR); p.circle(q[0] - 3, q[1] - 2, 2, [130, 130, 146], AIR); p.px(q[0] - 5, q[1] - 2, [240, 160, 60]); });
+    },
+    // 5 Boardwalk
+    function (p) {
+      p.seed = 6;
+      sky(p, 34); clouds(p, [[60, 10, 14], [140, 14, 10]]);
+      p.grad(0, 34, W, 30, SEA2, SEA, WATER, 0.06);
+      for (var k = 0; k < 30; k++) p.rect(hash(k, 1, 6) * W, 36 + hash(k, 2, 6) * 18, 4, 1, [200, 230, 244], WATER);
+      p.poly([[150, 34], [160, 18], [164, 34]], WHITE, AIR); p.rect(150, 34, 16, 3, NAVY, AIR); p.line(160, 18, 160, 34, [90, 70, 50], AIR);
+      // railing
+      p.rect(0, 50, W, 3, WOODC, WOOD, 0.1); p.rect(0, 58, W, 2, WOODC, WOOD, 0.1);
+      for (var x = 2; x < W; x += 16) p.rect(x, 50, 3, 16, shade(WOODC, 0.85), WOOD, 0.1);
+      // planks
+      for (var y = 64; y < H; y += 6) {
+        p.rect(0, y, W, 5, mix(WOODC, [196, 146, 96], hash(0, y, 6)), WOOD, 0.14); p.rect(0, y + 5, W, 1, [100, 70, 44], WOOD);
+        for (x = (y * 7) % 40; x < W; x += 40) { p.rect(x, y, 1, 5, [100, 70, 44], WOOD); p.px(x + 3, y + 2, [90, 62, 40], METAL); }
+      }
+      // bench
+      p.rect(20, 60, 40, 4, [70, 110, 90], WOOD); p.rect(20, 52, 40, 3, [70, 110, 90], WOOD); p.rect(22, 64, 3, 8, [50, 50, 54], METAL); p.rect(55, 64, 3, 8, [50, 50, 54], METAL);
+      // ice cream stand sign
+      p.rect(118, 40, 50, 22, [250, 236, 210], PAINT); p.rect(118, 40, 50, 3, PINK, PAINT);
+      for (x = 118; x < 168; x += 6) p.rect(x, 43, 3, 3, PINK, PAINT);
+      p.text("ICE CREAM", 124, 50, [180, 70, 100], PAINT);
+      p.rect(140, 62, 2, 10, [50, 50, 54], METAL);
+      p.poly([[176, 66], [184, 66], [180, 78]], [214, 170, 110], AIR); p.circle(180, 64, 4, PINK, AIR);
+      // gull
+      p.ellipse(84, 70, 6, 3, WHITE, AIR); p.circle(79, 67, 2.5, WHITE, AIR); p.px(76, 67, [246, 180, 60]); p.rect(82, 71, 6, 1, [150, 150, 160], AIR);
+    },
+    // 6 Fishing Boat
+    function (p) {
+      p.seed = 7;
+      sky(p, 20);
+      p.grad(0, 92, W, 20, SEA2, SEA, WATER, 0.08);
+      var HULL = [44, 92, 160];
+      p.poly([[0, 14], [192, 14], [192, 98], [0, 98]], HULL, METAL, 0.04);
+      p.rect(0, 14, W, 4, WHITE, WOOD, 0.05);
+      p.rect(0, 40, W, 5, WHITE, PAINT);
+      p.rect(0, 78, W, 20, [186, 52, 46], PAINT, 0.05);
+      p.rect(0, 77, W, 1, [240, 240, 240], PAINT);
+      for (var x = 12; x < W; x += 34) { p.circle(x + 8, 28, 6, [190, 194, 200], METAL); p.circle(x + 8, 28, 4, [120, 170, 200], GLASS); p.px(x + 6, 26, [230, 244, 250], GLASS); }
+      for (x = 2; x < W; x += 12) for (var y = 20; y < 78; y += 12) p.px(x, y, shade(HULL, 0.75), METAL);
+      p.text("GULL'S LUCK", 52, 52, WHITE, PAINT, 2);
+      p.text("RINSEWICK", 76, 66, [230, 230, 236], PAINT);
+      // anchor
+      p.ring(176, 60, 3, 4.5, [60, 60, 66], METAL); p.rect(175, 62, 2, 12, [60, 60, 66], METAL); p.rect(170, 72, 12, 2, [60, 60, 66], METAL);
+      // life ring
+      p.ring(22, 62, 4, 9, [240, 100, 60], PAINT); for (var a = 0; a < 4; a++) p.circle(22 + Math.cos(a * 1.57 + 0.78) * 6.5, 62 + Math.sin(a * 1.57 + 0.78) * 6.5, 2, WHITE, PAINT);
+      for (x = 0; x < W; x += 9) p.rect(x, 96 + (x % 2), 6, 1, [200, 230, 244], WATER);
+    },
+    // 7 Lighthouse Door
+    function (p) {
+      p.seed = 8;
+      sky(p, H); clouds(p, [[20, 14, 10], [176, 24, 10]]);
+      // tower with stripes
+      for (var y = 0; y < 86; y++) {
+        var half = 54 + y * 0.12, c = Math.floor(y / 14) % 2 ? WHITE : [210, 52, 46];
+        p.rect(96 - half, y, half * 2, 1, shade(c, 1), PAINT, 0.04);
+        p.rect(96 - half, y, 4, 1, shade(c, 0.8), PAINT); p.rect(96 + half - 4, y, 4, 1, shade(c, 0.85), PAINT);
+      }
+      // stone base and rocks
+      p.rect(30, 82, 132, 30, [150, 146, 140], STONE, 0.14);
+      for (y = 82; y < H; y += 7) for (var x = 30 + (y % 2) * 6; x < 162; x += 14) p.rect(x, y, 1, 7, [110, 106, 100], STONE);
+      for (y = 82; y < H; y += 7) p.rect(30, y, 132, 1, [110, 106, 100], STONE);
+      p.ellipse(14, 106, 22, 10, [110, 108, 104], STONE, 0.2); p.ellipse(180, 104, 20, 11, [116, 112, 106], STONE, 0.2);
+      // iron door
+      p.rect(74, 30, 44, 70, [40, 96, 76], METAL, 0.05); p.ellipse(96, 30, 22, 10, [40, 96, 76], METAL);
+      p.rect(78, 34, 36, 62, shade([40, 96, 76], 0.85), METAL);
+      for (y = 36; y < 96; y += 8) { p.px(80, y, [180, 190, 180], METAL); p.px(111, y, [180, 190, 180], METAL); }
+      p.rect(74, 56, 44, 3, [30, 30, 34], METAL); p.rect(74, 80, 44, 3, [30, 30, 34], METAL);
+      p.circle(110, 66, 2.5, GOLD, METAL); p.rect(92, 22, 8, 6, [250, 230, 140], GLASS);
+      // sign
+      p.rect(126, 44, 40, 14, [250, 240, 220], PAINT); p.text("KEEPER", 134, 49, NAVY, PAINT);
+      // lantern on the wall
+      p.rect(50, 40, 10, 14, [40, 40, 44], METAL); p.rect(52, 43, 6, 8, [252, 222, 130], GLASS);
+    },
+    // 8 Clock Tower
+    function (p) {
+      p.seed = 9;
+      for (var y = 0; y < H; y += 5) for (var x = -((y / 5) % 2) * 5; x < W; x += 10) {
+        p.rect(x, y, 9, 4, mix([196, 170, 130], [180, 150, 112], hash(x, y, 9)), STONE, 0.1);
+        p.rect(x, y + 4, 10, 1, [140, 120, 90], STONE); p.rect(x + 9, y, 1, 4, [140, 120, 90], STONE);
+      }
+      // arched windows
+      [24, 168].forEach(function (wx) { p.rect(wx - 9, 40, 18, 40, [60, 80, 110], GLASS); p.ellipse(wx, 40, 9, 8, [60, 80, 110], GLASS); p.rect(wx - 1, 32, 2, 48, [230, 220, 200], STONE); p.rect(wx - 9, 58, 18, 2, [230, 220, 200], STONE); });
+      // clock face
+      p.circle(96, 56, 48, [60, 56, 52], METAL); p.circle(96, 56, 45, GOLD, METAL); p.circle(96, 56, 42, [246, 238, 214], PAINT, 0.04);
+      var NUM = ["XII", "I", "II", "III", "IIII", "V", "VI", "VII", "VIII", "IX", "X", "XI"];
+      for (var h = 0; h < 12; h++) {
+        var a = h / 12 * Math.PI * 2 - Math.PI / 2, tx = 96 + Math.cos(a) * 34, ty = 56 + Math.sin(a) * 34, s = NUM[h];
+        p.text(s, tx - textW(s) / 2, ty - 2, [40, 40, 50], PAINT);
+        for (var m = 0; m < 5; m++) { var b = a + m / 60 * Math.PI * 2 * 1; p.px(96 + Math.cos(b) * 41, 56 + Math.sin(b) * 41, [80, 80, 90], PAINT); }
+      }
+      p.text("RINSEWICK", 96 - textW("RINSEWICK") / 2, 32, [120, 90, 50], PAINT);
+      p.text("1888", 96 - textW("1888") / 2, 66, [120, 90, 50], PAINT);
+      p.line(96, 56, 96 + Math.cos(-Math.PI / 2 + 0.52) * 15, 56 + Math.sin(-Math.PI / 2 + 0.52) * 15, [40, 40, 50], METAL, 3);
+      p.line(96, 56, 96 + Math.cos(-Math.PI / 2 + 4.2) * 30, 56 + Math.sin(-Math.PI / 2 + 4.2) * 30, [40, 40, 50], METAL, 2);
+      p.circle(96, 56, 3, GOLD, METAL);
+    },
+    // 9 Town Mural
+    function (p) {
+      p.seed = 10;
+      p.grad(0, 0, W, 50, [92, 70, 150], [250, 150, 110], PAINT, 0.03);
+      p.circle(96, 50, 18, [255, 210, 120], PAINT); p.circle(96, 50, 14, [255, 230, 150], PAINT);
+      p.grad(0, 50, W, 30, [240, 130, 110], [70, 90, 150], PAINT, 0.05);
+      for (var k = 0; k < 14; k++) p.rect(96 - 16 + hash(k, 4, 10) * 26, 52 + k * 2, 8 + hash(k, 5, 10) * 8, 1, [255, 220, 150], PAINT);
+      // sailboats
+      [[40, 58], [150, 62], [120, 54]].forEach(function (q, i) {
+        p.poly([[q[0] - 8, q[1]], [q[0] + 8, q[1]], [q[0] + 5, q[1] + 4], [q[0] - 5, q[1] + 4]], [60, 40, 60], PAINT);
+        p.poly([[q[0], q[1] - 16 + i * 3], [q[0], q[1] - 1], [q[0] + 9, q[1] - 1]], WHITE, PAINT);
+      });
+      // houses on the hill
+      p.poly([[0, 80], [60, 70], [130, 76], [192, 68], [192, 112], [0, 112]], [80, 120, 70], PAINT, 0.08);
+      var cols = [[236, 96, 90], [246, 196, 90], [110, 170, 210], [240, 240, 230], [140, 200, 150], [230, 140, 190], [250, 170, 90]];
+      for (var x = 4, i = 0; x < W - 10; x += 26, i++) {
+        var hy = 74 + hash(i, 2, 10) * 8, hw = 20, hh = 16 + hash(i, 3, 10) * 8;
+        p.rect(x, hy, hw, hh, cols[i % cols.length], PAINT, 0.05);
+        p.poly([[x - 2, hy], [x + hw / 2, hy - 9], [x + hw + 2, hy]], [140, 60, 50], PAINT);
+        p.rect(x + 4, hy + 4, 4, 4, [250, 230, 150], PAINT); p.rect(x + 12, hy + 4, 4, 4, [250, 230, 150], PAINT); p.rect(x + 8, hy + hh - 7, 4, 7, [90, 60, 40], PAINT);
+      }
+      // the lighthouse on the point
+      p.poly([[170, 40], [178, 40], [181, 72], [167, 72]], WHITE, PAINT); p.rect(168, 50, 12, 4, RED, PAINT); p.rect(168, 60, 13, 4, RED, PAINT); p.rect(169, 34, 10, 6, YEL, PAINT);
+      // banner
+      p.rect(28, 96, 136, 14, [250, 240, 214], PAINT); p.rect(28, 96, 136, 1, [180, 120, 80], PAINT); p.rect(28, 109, 136, 1, [180, 120, 80], PAINT);
+      p.text("WELCOME TO RINSEWICK", 96 - textW("WELCOME TO RINSEWICK") / 2, 101, [170, 60, 60], PAINT);
+      // birds
+      [[60, 20], [70, 24], [130, 16]].forEach(function (q) { p.px(q[0] - 1, q[1] - 1, [60, 40, 70]); p.px(q[0], q[1], [60, 40, 70]); p.px(q[0] + 1, q[1] - 1, [60, 40, 70]); });
+    }
+  ];
+
+  var cache = {};
+  function paint(k) {
+    if (cache[k]) return cache[k];
+    var p = new Pic();
+    p.seed = k + 1;
+    PAINTERS[k](p);
+    cache[k] = { rgb: p.rgb, mat: p.mat };
+    return cache[k];
+  }
+  var api = { paint: paint, count: PAINTERS.length, FONT: FONT };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.RWART = api;
+})(this);
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var RW = window.RW, ART = window.RWART;
+  var ED = window.RINSE_EDITION || "full", DEMO = ED === "demo";
+  var STORE_URL = "https://kqmigqkqri.itch.io/rinsewick";
+  var W = 1200, H = 760, GW = RW.W, GH = RW.H, CELL = 5, PX = 120, PY = 84, STEP = 1 / 60;
+  var FONT = "'Segoe UI', system-ui, -apple-system, sans-serif";
+  var COL = { bg: "#0f1a24", panel: "#172634", panel2: "#1e3142", line: "#2e4a60", text: "#eaf4f8", dim: "#8aa4b4", water: "#5cc8f0",
+    water2: "#2f86c8", money: "#9be27a", tip: "#f3c74e", pearl: "#f2d9f0", warn: "#ff8a6a", gold: "#f3c74e" };
+  var cv = document.getElementById("c"), cx = cv.getContext("2d"), scale = 1, dpr = 1;
+
+  // ---------------- saving ----------------
+  var KEY = DEMO ? "rinsewick.demo.v1" : "rinsewick.v1", SKEY = KEY + ".settings";
+  var settings = { muted: false, seenTree: false };
+  try { var rs = localStorage.getItem(SKEY); if (rs) { var so = JSON.parse(rs); for (var k0 in so) settings[k0] = so[k0]; } } catch (e) {}
+  function saveSettings() { try { localStorage.setItem(SKEY, JSON.stringify(settings)); } catch (e) {} }
+  var game = null, hasSave = false;
+  try { var raw = localStorage.getItem(KEY); if (raw) { game = RW.load(raw, ART.paint); hasSave = true; } } catch (e) { game = null; }
+  if (!game) game = RW.newGame(ART.paint);
+  var saveT = 0;
+  function persist() { try { localStorage.setItem(KEY, RW.save(game)); hasSave = true; } catch (e) {} }
+
+  // ---------------- sound: everything is synthesised ----------------
+  var ac = null, hiss = null, hissGain = null, hissFilter = null;
+  function audio() {
+    if (settings.muted) return null;
+    try {
+      if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+      if (ac.state === "suspended") ac.resume();
+      return ac;
+    } catch (e) { return null; }
+  }
+  function tone(f, d, type, vol, delay, slide) {
+    var a = audio(); if (!a) return;
+    var t0 = a.currentTime + (delay || 0), o = a.createOscillator(), g = a.createGain();
+    o.type = type || "triangle"; o.frequency.setValueAtTime(f, t0);
+    if (slide) o.frequency.exponentialRampToValueAtTime(slide, t0 + d);
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol || 0.05, t0 + 0.006); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+    o.connect(g); g.connect(a.destination); o.start(t0); o.stop(t0 + d + 0.03);
+  }
+  function startHiss() {
+    var a = audio(); if (!a || hiss) return;
+    var len = a.sampleRate * 2, buf = a.createBuffer(1, len, a.sampleRate), d = buf.getChannelData(0), last = 0;
+    for (var i = 0; i < len; i++) { var w = Math.random() * 2 - 1; last = last * 0.6 + w * 0.4; d[i] = last; }
+    hiss = a.createBufferSource(); hiss.buffer = buf; hiss.loop = true;
+    hissFilter = a.createBiquadFilter(); hissFilter.type = "bandpass"; hissFilter.frequency.value = 1600; hissFilter.Q.value = 0.6;
+    hissGain = a.createGain(); hissGain.gain.value = 0;
+    hiss.connect(hissFilter); hissFilter.connect(hissGain); hissGain.connect(a.destination); hiss.start();
+  }
+  function setHiss(v, bright) {
+    if (!hissGain || !ac) return;
+    var t = ac.currentTime;
+    hissGain.gain.setTargetAtTime(settings.muted ? 0 : v, t, 0.06);
+    hissFilter.frequency.setTargetAtTime(1300 + bright * 1400, t, 0.1);
+  }
+  var popT = 0;
+  function sfx(k, n) {
+    if (k === "pop") { if (popT > 0) return; popT = 0.045; tone(700 + Math.random() * 900, 0.05, "sine", Math.min(0.05, 0.012 + n * 0.0015)); }
+    else if (k === "tip") { tone(1568, 0.08, "square", 0.03); tone(2093, 0.14, "square", 0.03, 0.06); }
+    else if (k === "drop") tone(900, 0.12, "sine", 0.05, 0, 1500);
+    else if (k === "burst") { tone(140, 0.18, "sine", 0.09, 0, 60); tone(500, 0.08, "triangle", 0.03); }
+    else if (k === "buy") { tone(660, 0.07, "triangle", 0.05); tone(990, 0.1, "triangle", 0.045, 0.05); }
+    else if (k === "deny") tone(150, 0.08, "square", 0.03);
+    else if (k === "empty") [523, 392, 262].forEach(function (f, i) { tone(f, 0.18, "triangle", 0.05, i * 0.09); });
+    else if (k === "item") [784, 988, 1175, 1568].forEach(function (f, i) { tone(f, 0.22, "triangle", 0.06, i * 0.07); });
+    else if (k === "restored") [523, 659, 784, 1047, 1319, 1568].forEach(function (f, i) { tone(f, 0.4, "triangle", 0.06, i * 0.09); });
+    else if (k === "click") tone(1200, 0.03, "square", 0.02);
+  }
+
+  // ---------------- the site picture under the grime ----------------
+  var off = document.createElement("canvas"); off.width = GW; off.height = GH;
+  var octx = off.getContext("2d"), img = octx.createImageData(GW, GH), pic = null, shownK = -1;
+  var vary = new Float32Array(GW * GH), flash = new Float32Array(GW * GH), wasClean = new Uint8Array(GW * GH), flashing = [], imgDirty = true;
+  for (var vi = 0; vi < GW * GH; vi++) { var hh = Math.imul(vi ^ 0x9e3779b9, 0x85ebca6b) >>> 0; hh = Math.imul(hh ^ (hh >>> 13), 0xc2b2ae35) >>> 0; vary[vi] = 0.88 + 0.24 * (((hh ^ (hh >>> 16)) >>> 0) / 4294967296); }
+  function paintCell(i) {
+    var G = game.grid, t = G.type[i], o = i * 4, r = pic[i * 3], g = pic[i * 3 + 1], b = pic[i * 3 + 2];
+    if (t) {
+      var c = RW.GRIME[t].col, v = vary[i] * (1.12 - (G.thick[i] - 0.75) * 0.45), a = 0.3 + 0.55 * Math.min(1, G.hp[i] / G.max[i]);
+      r = r * (1 - a) + c[0] * v * a; g = g * (1 - a) + c[1] * v * a; b = b * (1 - a) + c[2] * v * a;
+    } else if (flash[i] > 0) {
+      var f = flash[i] * 0.7;
+      r += (255 - r) * f; g += (255 - g) * f; b += (255 - b) * f;
+    }
+    img.data[o] = r; img.data[o + 1] = g; img.data[o + 2] = b; img.data[o + 3] = 255;
+  }
+  function rebuildImage() {
+    var G = game.grid;
+    pic = ART.paint(G.k).rgb; shownK = G.k;
+    flashing = []; flash.fill(0);
+    for (var i = 0; i < GW * GH; i++) { wasClean[i] = G.type[i] ? 0 : 1; paintCell(i); }
+    G.dirty.length = 0;
+    octx.putImageData(img, 0, 0); imgDirty = false;
+  }
+  // returns how many cells came clean since the last call
+  function syncImage(dt) {
+    var G = game.grid, n = 0;
+    if (shownK !== G.k) { rebuildImage(); return 0; }
+    var d = G.dirty;
+    for (var j = 0; j < d.length; j++) {
+      var i = d[j];
+      if (!G.type[i] && !wasClean[i]) { wasClean[i] = 1; flash[i] = 1; flashing.push(i); n++; }
+      else if (G.type[i]) wasClean[i] = 0;
+      paintCell(i);
+    }
+    if (d.length) imgDirty = true;
+    d.length = 0;
+    if (flashing.length) {
+      var keep = [];
+      for (j = 0; j < flashing.length; j++) { var c = flashing[j]; flash[c] -= dt * 2.6; if (flash[c] > 0) keep.push(c); else flash[c] = 0; paintCell(c); }
+      flashing = keep; imgDirty = true;
+    }
+    if (imgDirty) { octx.putImageData(img, 0, 0); imgDirty = false; }
+    return n;
+  }
+  // clean copies of finished pictures, for the town and the celebrations
+  var cleanCache = {};
+  function cleanCanvas(k) {
+    if (cleanCache[k]) return cleanCache[k];
+    var c = document.createElement("canvas"); c.width = GW; c.height = GH;
+    var x = c.getContext("2d"), d = x.createImageData(GW, GH), p = ART.paint(k).rgb;
+    for (var i = 0; i < GW * GH; i++) { d.data[i * 4] = p[i * 3]; d.data[i * 4 + 1] = p[i * 3 + 1]; d.data[i * 4 + 2] = p[i * 3 + 2]; d.data[i * 4 + 3] = 255; }
+    x.putImageData(d, 0, 0);
+    return (cleanCache[k] = c);
+  }
+
+  // ---------------- drawing helpers ----------------
+  function rr(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
+  function text(s, x, y, size, col, align, weight) { cx.font = (weight || 600) + " " + size + "px " + FONT; cx.fillStyle = col || COL.text; cx.textAlign = align || "left"; cx.textBaseline = "middle"; cx.fillText(s, x, y); }
+  function tw(s, size, weight) { cx.font = (weight || 600) + " " + size + "px " + FONT; return cx.measureText(s).width; }
+  function wrap(s, x, y, maxW, size, col, lh, weight) {
+    String(s).split("\n").forEach(function (para) {
+      var words = para.split(" "), line = "";
+      for (var i = 0; i < words.length; i++) { var t = line ? line + " " + words[i] : words[i]; if (tw(t, size, weight) > maxW && line) { text(line, x, y, size, col, "left", weight); line = words[i]; y += lh; } else line = t; }
+      text(line, x, y, size, col, "left", weight); y += lh;
+    });
+    return y;
+  }
+  function pixelText(s, x, y, sc, col, align, shadow) {
+    var w = (s.length * 4 - 1) * sc;
+    if (align === "center") x -= w / 2;
+    if (shadow) pixelText(s, x + sc * 0.6, y + sc * 0.6, sc, shadow);
+    cx.fillStyle = col;
+    for (var k = 0; k < s.length; k++) {
+      var g = ART.FONT[s[k]] || ART.FONT[" "];
+      for (var j = 0; j < 5; j++) for (var i = 0; i < 3; i++) if (g[j * 3 + i] === "1") cx.fillRect(Math.round(x + (k * 4 + i) * sc), Math.round(y + j * sc), Math.ceil(sc), Math.ceil(sc));
+    }
+  }
+  var buttons = [], mouse = { x: -1, y: -1, down: false };
+  function hot(x, y, w, h) { return mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h; }
+  function button(x, y, w, h, label, fn, o) {
+    o = o || {};
+    var on = hot(x, y, w, h) && !o.disabled;
+    rr(x, y, w, h, 9);
+    cx.fillStyle = o.disabled ? "#15212c" : o.primary ? (on ? "#7fd8f7" : COL.water) : on ? "#26405a" : (o.fill || "#1d3346"); cx.fill();
+    cx.strokeStyle = o.primary ? "#bdeeff" : "#33536c"; cx.lineWidth = 1.5; cx.stroke();
+    text(label, x + w / 2, y + h / 2 + 1, o.size || 15, o.disabled ? "#4c6474" : o.primary ? "#08243a" : COL.text, "center", 800);
+    if (!o.disabled && fn) buttons.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+  function bar(x, y, w, h, f, c1, c2) {
+    rr(x, y, w, h, h / 2); cx.fillStyle = "#0b1520"; cx.fill();
+    if (f > 0) {
+      rr(x, y, Math.max(h, w * Math.min(1, f)), h, h / 2);
+      var gr = cx.createLinearGradient(0, y, 0, y + h); gr.addColorStop(0, c1); gr.addColorStop(1, c2); cx.fillStyle = gr; cx.fill();
+    }
+    rr(x, y, w, h, h / 2); cx.strokeStyle = "#35546a"; cx.lineWidth = 1; cx.stroke();
+  }
+  function coin(x, y, r) { cx.beginPath(); cx.arc(x, y, r, 0, 7); cx.fillStyle = COL.tip; cx.fill(); cx.beginPath(); cx.arc(x, y, r * 0.6, 0, 7); cx.strokeStyle = "#b58a1e"; cx.lineWidth = 1.2; cx.stroke(); }
+  function pearl(x, y, r) { var g = cx.createRadialGradient(x - r * 0.35, y - r * 0.35, r * 0.1, x, y, r); g.addColorStop(0, "#ffffff"); g.addColorStop(1, "#d6b6dc"); cx.beginPath(); cx.arc(x, y, r, 0, 7); cx.fillStyle = g; cx.fill(); }
+  function drop(x, y, r, col) { cx.beginPath(); cx.moveTo(x, y - r * 1.5); cx.quadraticCurveTo(x + r * 1.1, y - r * 0.1, x, y + r); cx.quadraticCurveTo(x - r * 1.1, y - r * 0.1, x, y - r * 1.5); cx.fillStyle = col || COL.water; cx.fill(); }
+  function money(n) { return "$" + RW.fmt(n); }
+  function siteName(k) { return (k + 1) + ". " + RW.SITES[k].name; }
+  function pct() { var G = game.grid; return G.total ? 1 - G.remaining / G.total : 1; }
+
+  // ---------------- particles and toasts ----------------
+  var parts = [], toasts = [], rings = [];
+  function toast(s, col) { toasts.push({ s: s, t: 0, col: col || COL.text }); if (toasts.length > 4) toasts.shift(); }
+  function flying(k) { var n = 0; for (var i = 0; i < parts.length; i++) if (parts[i].k === k) n++; return n; }
+  function cellToScreen(x, y) { return { x: PX + (x + 0.5) * CELL, y: PY + (y + 0.5) * CELL }; }
+
+  // ---------------- state ----------------
+  var screen = "title", run = null, aim = { x: GW / 2, y: GH / 2 }, aimOverride = null, paused = false, acc = 0;
+  var summary = null, celebrate = null, overT = 0, firstHint = 0, confirmNew = false, tipNode = null, holdBuy = null;
+  var lastPct = 0, shiftStartPct = 0;
+
+  function startShift() {
+    if (game.done) { screen = DEMO ? "demoend" : "end"; return; }
+    startHiss();
+    if (shownK !== game.grid.k) rebuildImage();
+    run = RW.startRun(game); paused = false; summary = null; celebrate = null; overT = 0;
+    shiftStartPct = pct(); screen = "shift"; parts = []; rings = [];
+    if (game.stats.shifts === 1) firstHint = 6;
+  }
+  function endShiftView() {
+    setHiss(0, 0);
+    persist();
+    screen = "tree";
+  }
+
+  // events from the core
+  function handle(ev) {
+    for (var i = 0; i < ev.length; i++) {
+      var e = ev[i], p = e.x !== undefined ? cellToScreen(e.x, e.y) : null;
+      if (e.e === "tip") { if (flying("coin") < 6) { parts.push({ k: "coin", x: p.x, y: p.y, tx: 1050, ty: 22, t: 0 }); sfx("tip"); } }
+      else if (e.e === "drop") { if (flying("drop") < 4) { parts.push({ k: "drop", x: p.x, y: p.y, tx: 650, ty: 40, t: 0 }); sfx("drop"); } }
+      else if (e.e === "burst") { rings.push({ x: p.x, y: p.y, r: e.r * CELL, t: 0, col: "rgba(200,240,255," }); sfx("burst"); }
+      else if (e.e === "rain") { for (var k = 0; k < 6; k++) parts.push({ k: "rain", x: p.x + (Math.random() - 0.5) * 30, y: p.y - 40 - Math.random() * 30, ty: p.y, t: 0 }); }
+      else if (e.e === "item") { toast("FOUND: " + RW.SITES[e.k].item + "!  +1 pearl", COL.pearl); parts.push({ k: "pearl", x: p.x, y: p.y, tx: 1150, ty: 22, t: 0 }); rings.push({ x: p.x, y: p.y, r: 60, t: 0, col: "rgba(255,220,250," }); sfx("item"); }
+      else if (e.e === "restored") {
+        celebrate = { k: e.k, t: 0, next: game.done ? -1 : game.grid.k };
+        sfx("restored"); persist();
+      }
+    }
+    ev.length = 0;
+  }
+
+  function updateShift(dt) {
+    if (!run) return;
+    var a = aimOverride || aim;
+    if (!paused && !run.over) {
+      acc += dt;
+      var n = 0;
+      while (acc >= STEP && n < 6) { RW.stepRun(game, run, a, STEP); handle(run.ev); acc -= STEP; n++; if (run.over) break; }
+      if (n >= 6) acc = 0;
+      if (run.over) {
+        overT = 0;
+        if (!celebrate) { summary = { earned: run.earned, cleared: run.cleared, tips: run.tips, drops: run.drops, from: shiftStartPct, to: pct() }; sfx("empty"); }
+        persist();
+      }
+    }
+    if (run.over) overT += dt;
+    var cleared = syncImage(dt);
+    if (cleared) {
+      sfx("pop", cleared);
+      for (var s = 0; s < Math.min(3, cleared); s++) {
+        var ang = Math.random() * 6.28, rad = Math.random() * run.s.radius * CELL;
+        var q = cellToScreen(a.x + Math.cos(ang) * rad / CELL - 0.5, a.y + Math.sin(ang) * rad / CELL - 0.5);
+        parts.push({ k: "spark", x: q.x, y: q.y, t: 0 });
+      }
+    }
+    // the hiss is brighter while it is hitting grime
+    var G = game.grid, under = 0, all = 0, R = run.s.radius * 0.8;
+    for (var y = Math.floor(a.y - R); y <= a.y + R; y += 2) for (var x = Math.floor(a.x - R); x <= a.x + R; x += 2) {
+      if (x < 0 || y < 0 || x >= GW || y >= GH) continue; all++; if (G.type[y * GW + x]) under++;
+    }
+    setHiss(paused || run.over ? 0 : 0.05, all ? under / all : 0);
+    if (firstHint > 0 && run.cleared > 150) firstHint = Math.min(firstHint, 1);
+    if (firstHint > 0) firstHint -= dt * (run.cleared > 150 ? 1 : 0.15);
+  }
+
+  // ---------------- shift screen ----------------
+  function drawHud() {
+    var s = run ? run.s : RW.stats(game), G = game.grid;
+    cx.fillStyle = COL.panel; cx.fillRect(0, 0, W, 74);
+    cx.fillStyle = COL.line; cx.fillRect(0, 74, W, 1);
+    var hk = celebrate ? celebrate.k : G.k, hp = celebrate ? 1 : pct();
+    text(siteName(hk), PX, 22, 19, COL.text, "left", 800);
+    bar(PX, 40, 320, 16, hp, "#9be27a", "#4fae4a");
+    text(Math.floor(hp * 1000) / 10 + "% clean", PX + 330, 48, 14, COL.dim, "left", 700);
+    // the tank
+    var tank = run ? Math.max(0, run.tank) : s.tank;
+    drop(525, 44, 9, COL.water);
+    bar(545, 32, 250, 24, tank / s.tank, "#7fd8f7", "#2f86c8");
+    text(tank.toFixed(1) + " s", 670, 45, 14, "#06263c", "center", 800);
+    text("WATER", 545, 18, 11, COL.dim, "left", 800);
+    // wallet
+    text(money(game.money), 1010, 46, 26, COL.money, "right", 800);
+    coin(1050, 22, 8); text(RW.fmt(game.tips), 1064, 23, 15, COL.tip, "left", 800);
+    pearl(1050, 50, 8); text(String(game.pearls), 1064, 51, 15, COL.pearl, "left", 800);
+  }
+  function drawPlayArea(a, showNozzle) {
+    cx.fillStyle = "#091119"; cx.fillRect(PX - 6, PY - 6, GW * CELL + 12, GH * CELL + 12);
+    cx.imageSmoothingEnabled = false;
+    cx.drawImage(off, PX, PY, GW * CELL, GH * CELL);
+    cx.imageSmoothingEnabled = true;
+    if (!run) return;
+    // drones
+    run.drones.forEach(function (d, i) {
+      var p = cellToScreen(d.x - 0.5, d.y - 0.5);
+      cx.beginPath(); cx.arc(p.x, p.y, 2.2 * CELL, 0, 7); cx.fillStyle = "rgba(190,235,255,0.22)"; cx.fill();
+      var bob = Math.sin(performance.now() / 120 + i) * 2, y = p.y - 26 + bob, spin = performance.now() / 40 + i;
+      cx.strokeStyle = "rgba(190,240,255,0.7)"; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(p.x - 3, y + 6); cx.lineTo(p.x, p.y); cx.lineTo(p.x + 3, y + 6); cx.stroke();
+      cx.lineWidth = 3; cx.strokeStyle = "#1b2a36";
+      [[-13, -6], [13, -6], [-13, 6], [13, 6]].forEach(function (r) { cx.beginPath(); cx.moveTo(p.x, y); cx.lineTo(p.x + r[0], y + r[1] - 4); cx.stroke(); });
+      [[-13, -6], [13, -6], [-13, 6], [13, 6]].forEach(function (r, j) { cx.beginPath(); cx.ellipse(p.x + r[0], y + r[1] - 5, 8, 2.2 + Math.abs(Math.sin(spin + j)) * 1.5, 0, 0, 7); cx.fillStyle = "rgba(235,245,250,0.9)"; cx.fill(); cx.strokeStyle = "#1b2a36"; cx.lineWidth = 1; cx.stroke(); });
+      rr(p.x - 10, y - 5, 20, 11, 5); cx.fillStyle = "#f3c74e"; cx.fill(); cx.strokeStyle = "#1b2a36"; cx.lineWidth = 1.5; cx.stroke();
+      cx.fillStyle = "#1b2a36"; cx.fillRect(p.x - 4, y - 1, 8, 3);
+    });
+    if (!showNozzle) return;
+    var m = cellToScreen(a.x - 0.5, a.y - 0.5), R = run.s.radius * CELL;
+    // spray on the surface
+    var gr = cx.createRadialGradient(m.x, m.y, 2, m.x, m.y, R);
+    gr.addColorStop(0, "rgba(235,250,255,0.55)"); gr.addColorStop(0.7, "rgba(190,235,255,0.18)"); gr.addColorStop(1, "rgba(190,235,255,0)");
+    cx.beginPath(); cx.arc(m.x, m.y, R, 0, 7); cx.fillStyle = gr; cx.fill();
+    for (var k = 0; k < 14; k++) { var an = Math.random() * 6.28, rd = Math.random() * R; cx.fillStyle = "rgba(240,252,255,0.8)"; cx.fillRect(m.x + Math.cos(an) * rd, m.y + Math.sin(an) * rd, 2, 2); }
+    if (run.s.twin) { var m2 = cellToScreen(GW - a.x - 0.5, a.y - 0.5); cx.beginPath(); cx.arc(m2.x, m2.y, R, 0, 7); cx.fillStyle = "rgba(200,240,255,0.25)"; cx.fill(); }
+    // the lance comes in from the bottom right
+    var tx = m.x + 44, ty = m.y + 64;
+    if (!run.over && !paused) {
+      cx.strokeStyle = "rgba(220,246,255,0.75)"; cx.lineWidth = 3;
+      cx.beginPath(); cx.moveTo(tx, ty); cx.lineTo(m.x + (Math.random() - 0.5) * 4, m.y + (Math.random() - 0.5) * 4); cx.stroke();
+      cx.strokeStyle = "rgba(255,255,255,0.9)"; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(tx, ty); cx.lineTo(m.x, m.y); cx.stroke();
+    }
+    cx.lineCap = "round";
+    cx.strokeStyle = "#2a2f36"; cx.lineWidth = 7; cx.beginPath(); cx.moveTo(tx, ty); cx.lineTo(tx + 70, ty + 102); cx.stroke();
+    cx.strokeStyle = "#f3c74e"; cx.lineWidth = 15; cx.beginPath(); cx.moveTo(tx + 70, ty + 102); cx.lineTo(tx + 110, ty + 160); cx.stroke();
+    cx.strokeStyle = "#1a1d22"; cx.lineWidth = 11; cx.beginPath(); cx.moveTo(tx + 100, ty + 146); cx.lineTo(tx + 140, ty + 205); cx.stroke();
+    cx.fillStyle = "#9aa3ad"; cx.beginPath(); cx.arc(tx, ty, 4, 0, 7); cx.fill();
+    cx.lineCap = "butt";
+  }
+  function drawSideInfo() {
+    var G = game.grid, s = run.s, site = RW.SITES[G.k];
+    // left: the grime on this site and how long it takes at the centre of the jet
+    cx.fillStyle = COL.panel; cx.fillRect(0, 654, W, 106);
+    var present = {};
+    for (var i = 0; i < GW * GH; i += 7) if (G.type[i]) present[G.type[i]] = (present[G.type[i]] || 0) + 1;
+    var x = PX;
+    if (celebrate) present = {};
+    text(celebrate ? "SPOTLESS" : "GRIME HERE", x, 672, 11, COL.dim, "left", 800);
+    Object.keys(present).map(Number).sort().forEach(function (t) {
+      var gm = RW.GRIME[t], secs = gm.hp * site.hpMul / (s.pressure * s.typeMul[t]);
+      cx.fillStyle = "rgb(" + gm.col.join(",") + ")"; rr(x, 684, 16, 16, 4); cx.fill(); cx.strokeStyle = "#456"; cx.lineWidth = 1; cx.stroke();
+      text(gm.name, x + 22, 692, 14, COL.text, "left", 700);
+      var hard = secs > 3, label = secs < 0.05 ? "instant" : secs < 10 ? secs.toFixed(1) + " s" : secs < 600 ? Math.round(secs) + " s" : "too tough";
+      text(label, x + 22, 711, 12, hard ? COL.warn : COL.dim, "left", 700);
+      x += Math.max(96, tw(gm.name, 14, 700) + 40);
+    });
+    if (!celebrate) text("seconds to wash one cell at full pressure", PX, 735, 11, "#5f7d90", "left", 600);
+    // right: this shift
+    var rx = 1080;
+    text("THIS SHIFT", rx, 672, 11, COL.dim, "right", 800);
+    text(money(run.earned), rx, 696, 20, COL.money, "right", 800);
+    text(RW.fmt(run.cleared) + " cells" + (run.tips ? "  ·  " + run.tips + " tips" : "") + (run.drops ? "  ·  " + run.drops + " drops" : ""), rx, 721, 13, COL.dim, "right", 700);
+    text("Esc pause  ·  M sound", rx, 742, 11, "#5f7d90", "right", 700);
+    // margins: lost item and the kit
+    cx.save();
+    var found = game.found.indexOf(celebrate ? celebrate.k : G.k) >= 0;
+    text("LOST", 60, 110, 11, COL.dim, "center", 800); text("ITEM", 60, 124, 11, COL.dim, "center", 800);
+    if (found) { pearl(60, 152, 11); text("found", 60, 176, 12, COL.pearl, "center", 700); }
+    else { cx.beginPath(); cx.arc(60, 152, 13, 0, 7); cx.strokeStyle = "#456"; cx.lineWidth = 2; cx.stroke(); text("?", 60, 153, 16, COL.dim, "center", 800); text("hidden", 60, 176, 12, COL.dim, "center", 600); text("here", 60, 190, 12, COL.dim, "center", 600); }
+    var kit = [["PRESSURE", RW.fmt(s.pressure)], ["SPRAY", s.radius.toFixed(1)], ["PAY", "x" + RW.fmt(s.pay)]];
+    if (s.drones) kit.push(["DRONES", String(s.drones)]);
+    if (s.burst) kit.push(["BURST", s.burst.toFixed(1) + " s"]);
+    kit.forEach(function (k, i) { text(k[0], 1140, 110 + i * 46, 11, COL.dim, "center", 800); text(k[1], 1140, 128 + i * 46, 15, COL.text, "center", 800); });
+    cx.restore();
+  }
+  function drawParticles(dt) {
+    var keep = [];
+    parts.forEach(function (p) {
+      p.t += dt;
+      if (p.k === "spark") {
+        if (p.t > 0.45) return;
+        var a = 1 - p.t / 0.45, s = 2 + 5 * Math.sin(p.t / 0.45 * Math.PI);
+        cx.fillStyle = "rgba(255,255,255," + a + ")"; cx.fillRect(p.x - s / 2, p.y - 0.75, s, 1.5); cx.fillRect(p.x - 0.75, p.y - s / 2, 1.5, s);
+      } else if (p.k === "rain") {
+        if (p.t > 0.35) return;
+        var yy = p.y + (p.ty - p.y) * (p.t / 0.35);
+        cx.strokeStyle = "rgba(200,236,255,0.8)"; cx.lineWidth = 1.5; cx.beginPath(); cx.moveTo(p.x, yy - 10); cx.lineTo(p.x, yy); cx.stroke();
+      } else {
+        var dur = 0.7; if (p.t > dur) return;
+        var f = p.t / dur, e = f * f * (3 - 2 * f), x = p.x + (p.tx - p.x) * e, y = p.y + (p.ty - p.y) * e - Math.sin(f * Math.PI) * 60;
+        if (p.k === "coin") coin(x, y, 7); else if (p.k === "drop") drop(x, y, 6); else pearl(x, y, 9);
+      }
+      keep.push(p);
+    });
+    parts = keep;
+    var kr = [];
+    rings.forEach(function (r) {
+      r.t += dt; if (r.t > 0.45) return;
+      var f = r.t / 0.45;
+      cx.beginPath(); cx.arc(r.x, r.y, r.r * (0.3 + 0.7 * f), 0, 7); cx.strokeStyle = r.col + (1 - f) + ")"; cx.lineWidth = 4 * (1 - f) + 1; cx.stroke();
+      kr.push(r);
+    });
+    rings = kr;
+  }
+  function drawToasts(dt) {
+    var y = PY + 30;
+    toasts = toasts.filter(function (t) { t.t += dt; return t.t < 3.2; });
+    toasts.forEach(function (t) {
+      var a = Math.min(1, t.t * 4, (3.2 - t.t) * 2), w = tw(t.s, 17, 800) + 40;
+      cx.globalAlpha = a; rr(W / 2 - w / 2, y - 18, w, 36, 18); cx.fillStyle = "rgba(10,24,36,0.88)"; cx.fill();
+      text(t.s, W / 2, y, 17, t.col, "center", 800); cx.globalAlpha = 1; y += 44;
+    });
+  }
+  function drawShift(dt) {
+    updateShift(dt);
+    var a = aimOverride || aim;
+    drawHud();
+    drawPlayArea(a, !celebrate);
+    drawSideInfo();
+    drawParticles(dt);
+    drawToasts(dt);
+    if (firstHint > 0) {
+      cx.globalAlpha = Math.min(1, firstHint);
+      rr(W / 2 - 300, PY + 470, 600, 54, 14); cx.fillStyle = "rgba(10,24,36,0.85)"; cx.fill();
+      text("Move the mouse over the grime. The hose sprays by itself.", W / 2, PY + 497, 18, COL.text, "center", 700);
+      cx.globalAlpha = 1;
+    }
+    if (paused && !run.over) {
+      cx.fillStyle = "rgba(6,14,22,0.7)"; cx.fillRect(PX, PY, GW * CELL, GH * CELL);
+      pixelText("PAUSED", W / 2, PY + 200, 10, COL.text, "center");
+      button(W / 2 - 110, PY + 300, 220, 48, "RESUME", function () { paused = false; }, { primary: true });
+      button(W / 2 - 110, PY + 360, 220, 40, "END SHIFT NOW", function () { run.tank = 0; paused = false; });
+    }
+    if (summary && !celebrate) drawSummary();
+    if (celebrate) drawCelebrate(dt);
+  }
+  function drawSummary() {
+    var a = Math.min(1, overT * 3), bx = W / 2 - 230, by = PY + 120;
+    cx.globalAlpha = a;
+    rr(bx, by, 460, 300, 18); cx.fillStyle = "rgba(14,30,44,0.95)"; cx.fill(); cx.strokeStyle = "#3a6a8a"; cx.lineWidth = 2; cx.stroke();
+    pixelText("SHIFT OVER", W / 2, by + 26, 5, COL.water, "center");
+    text("Earned", bx + 40, by + 92, 16, COL.dim, "left", 700); text(money(summary.earned), bx + 420, by + 92, 22, COL.money, "right", 800);
+    text("Cells washed", bx + 40, by + 126, 16, COL.dim, "left", 700); text(RW.fmt(summary.cleared), bx + 420, by + 126, 18, COL.text, "right", 800);
+    if (summary.tips) { text("Tips found", bx + 40, by + 156, 16, COL.dim, "left", 700); text("+" + summary.tips, bx + 420, by + 156, 18, COL.tip, "right", 800); }
+    text(RW.SITES[game.grid.k].name, bx + 40, by + 190, 16, COL.dim, "left", 700);
+    text((summary.from * 100).toFixed(1) + "%  →  " + (summary.to * 100).toFixed(1) + "%", bx + 420, by + 190, 18, "#9be27a", "right", 800);
+    cx.globalAlpha = 1;
+    if (overT > 0.5) button(W / 2 - 120, by + 228, 240, 50, "UPGRADES  (Space)", endShiftView, { primary: true, size: 17 });
+  }
+  function drawCelebrate(dt) {
+    celebrate.t += dt;
+    var t = celebrate.t, k = celebrate.k;
+    // the clean picture, with a gleam sweeping across it
+    cx.imageSmoothingEnabled = false;
+    cx.drawImage(cleanCanvas(k), PX, PY, GW * CELL, GH * CELL);
+    cx.imageSmoothingEnabled = true;
+    var sx = PX + ((t * 700) % 1600) - 300;
+    var g = cx.createLinearGradient(sx - 80, 0, sx + 80, 0);
+    g.addColorStop(0, "rgba(255,255,255,0)"); g.addColorStop(0.5, "rgba(255,255,255,0.35)"); g.addColorStop(1, "rgba(255,255,255,0)");
+    cx.save(); cx.beginPath(); cx.rect(PX, PY, GW * CELL, GH * CELL); cx.clip(); cx.fillStyle = g;
+    cx.beginPath(); cx.moveTo(sx - 80, PY); cx.lineTo(sx + 80, PY); cx.lineTo(sx - 40, PY + GH * CELL); cx.lineTo(sx - 200, PY + GH * CELL); cx.closePath(); cx.fill(); cx.restore();
+    for (var i = 0; i < 4; i++) parts.push({ k: "spark", x: PX + Math.random() * GW * CELL, y: PY + Math.random() * GH * CELL, t: 0 });
+    var a = Math.min(1, t * 2);
+    cx.globalAlpha = a;
+    rr(W / 2 - 260, PY + 380, 520, 160, 18); cx.fillStyle = "rgba(10,24,36,0.9)"; cx.fill();
+    pixelText("RESTORED!", W / 2, PY + 398, 7, "#9be27a", "center", "#1e4a26");
+    text(RW.SITES[k].name + " is spotless.  +1 pearl", W / 2, PY + 456, 18, COL.pearl, "center", 700);
+    var nxt = celebrate.next >= 0 ? "Next job: " + RW.SITES[celebrate.next].name : (DEMO ? "That's the end of the demo." : "That was the last job in town.");
+    text(nxt, W / 2, PY + 484, 15, COL.dim, "center", 700);
+    cx.globalAlpha = 1;
+    if (t > 1.2) button(W / 2 - 110, PY + 500 - 6, 220, 40, "CONTINUE  (Space)", finishCelebrate, { primary: true });
+  }
+  function finishCelebrate() {
+    celebrate = null; summary = null; setHiss(0, 0); persist();
+    if (game.done) { screen = DEMO ? "demoend" : "end"; return; }
+    rebuildImage(); screen = "tree";
+  }
+
+  // ---------------- the upgrade tree ----------------
+  var TU = 78, TCX = 600, TCY = 414, NR = 25;
+  function nodePos(n) { return { x: TCX + n.x * TU, y: TCY + n.y * TU }; }
+  var ICON = {
+    HOSE: "hose", PUMP: "gauge", INDUSTRIAL: "gauge2", HYDRO: "gauge3", PRO: "star", POWERTIP: "gauge", NOZZLE: "cone", FAN: "fan", TANK: "drop", TOWER: "tower",
+    SOAP: "bubbles", WAX: "shine", MEGAWAX: "shine", SPLASH: "splash", HARDSPLASH: "splash", BURST: "burst", BURSTRATE: "clock", BURSTSIZE: "burst",
+    DRIP: "drop2", LUCKY: "drop2", DRONE: "drone", DRONES: "drone", DRONEPOW: "drone", DRONESPD: "drone", NIGHT: "moon", CHANGE: "coin", TIPJAR: "coin",
+    SCRUB: "brush", WEED: "leaf", GUMSCRAPE: "blade", RUSTOFF: "flask", CHISEL: "blade", DEGREASE: "flask", TWIN: "twin", RAIN: "cloud"
+  };
+  function icon(kind, x, y, col) {
+    cx.save(); cx.translate(x, y); cx.strokeStyle = col; cx.fillStyle = col; cx.lineWidth = 2; cx.lineCap = "round";
+    var b = function () { cx.beginPath(); };
+    if (kind === "gauge" || kind === "gauge2" || kind === "gauge3") {
+      b(); cx.arc(0, 3, 10, Math.PI, 0); cx.stroke(); b(); cx.moveTo(0, 3); cx.lineTo(6, -5); cx.stroke();
+      if (kind !== "gauge") { b(); cx.arc(0, 3, 14, Math.PI * 1.1, Math.PI * 1.9); cx.stroke(); }
+      if (kind === "gauge3") { cx.fillRect(-2, 8, 4, 4); }
+    } else if (kind === "cone") { b(); cx.moveTo(-10, -5); cx.lineTo(4, -2); cx.lineTo(4, 2); cx.lineTo(-10, 5); cx.closePath(); cx.stroke(); b(); cx.moveTo(7, -6); cx.lineTo(12, -9); cx.moveTo(8, 0); cx.lineTo(13, 0); cx.moveTo(7, 6); cx.lineTo(12, 9); cx.stroke(); }
+    else if (kind === "fan") { for (var a = -2; a <= 2; a++) { b(); cx.moveTo(-8, 0); cx.lineTo(10 * Math.cos(a * 0.35), 10 * Math.sin(a * 0.35) * 1.4); cx.stroke(); } }
+    else if (kind === "drop") { drop(0, 2, 8, col); }
+    else if (kind === "drop2") { drop(-4, 2, 6, col); drop(6, -2, 4, col); }
+    else if (kind === "tower") { cx.strokeRect(-8, -9, 16, 10); b(); cx.moveTo(-6, 1); cx.lineTo(-8, 11); cx.moveTo(6, 1); cx.lineTo(8, 11); cx.stroke(); }
+    else if (kind === "bubbles") { [[-4, 2, 6], [6, -3, 4], [4, 7, 3]].forEach(function (c) { b(); cx.arc(c[0], c[1], c[2], 0, 7); cx.stroke(); }); }
+    else if (kind === "shine") { [[0, 0, 10], [8, -8, 4]].forEach(function (c) { b(); cx.moveTo(c[0] - c[2], c[1]); cx.lineTo(c[0] + c[2], c[1]); cx.moveTo(c[0], c[1] - c[2]); cx.lineTo(c[0], c[1] + c[2]); cx.stroke(); }); }
+    else if (kind === "splash") { for (var i = 0; i < 6; i++) { var an = i / 6 * 6.28; b(); cx.moveTo(Math.cos(an) * 4, Math.sin(an) * 4); cx.lineTo(Math.cos(an) * 11, Math.sin(an) * 11); cx.stroke(); } }
+    else if (kind === "burst") { b(); for (i = 0; i < 16; i++) { var r = i % 2 ? 5 : 12, a2 = i / 16 * 6.28; cx.lineTo(Math.cos(a2) * r, Math.sin(a2) * r); } cx.closePath(); cx.stroke(); }
+    else if (kind === "clock") { b(); cx.arc(0, 0, 10, 0, 7); cx.stroke(); b(); cx.moveTo(0, 0); cx.lineTo(0, -7); cx.moveTo(0, 0); cx.lineTo(5, 2); cx.stroke(); }
+    else if (kind === "drone") { cx.fillRect(-5, -2, 10, 5); [[-9, -4], [9, -4]].forEach(function (p) { b(); cx.moveTo(p[0] - 5, p[1]); cx.lineTo(p[0] + 5, p[1]); cx.stroke(); }); b(); cx.moveTo(0, 4); cx.lineTo(0, 10); cx.stroke(); }
+    else if (kind === "moon") { b(); cx.arc(0, 0, 10, 0.6, 5.7); cx.arc(5, -2, 8, 5.2, 1.1, true); cx.fill(); }
+    else if (kind === "coin") { b(); cx.arc(0, 0, 9, 0, 7); cx.stroke(); b(); cx.arc(0, 0, 4, 0, 7); cx.stroke(); }
+    else if (kind === "brush") { cx.strokeRect(-10, -3, 20, 6); for (i = -8; i <= 8; i += 4) { b(); cx.moveTo(i, 3); cx.lineTo(i, 10); cx.stroke(); } }
+    else if (kind === "leaf") { b(); cx.moveTo(-9, 9); cx.quadraticCurveTo(-9, -9, 9, -9); cx.quadraticCurveTo(9, 9, -9, 9); cx.stroke(); b(); cx.moveTo(-9, 9); cx.lineTo(3, -3); cx.stroke(); }
+    else if (kind === "blade") { b(); cx.moveTo(-10, 8); cx.lineTo(6, -8); cx.lineTo(10, -4); cx.lineTo(-6, 10); cx.closePath(); cx.stroke(); }
+    else if (kind === "flask") { b(); cx.moveTo(-3, -10); cx.lineTo(-3, -2); cx.lineTo(-9, 9); cx.lineTo(9, 9); cx.lineTo(3, -2); cx.lineTo(3, -10); cx.stroke(); }
+    else if (kind === "twin") { cx.fillRect(-11, -2, 8, 4); cx.fillRect(3, -2, 8, 4); b(); cx.moveTo(-7, 2); cx.lineTo(-7, 9); cx.moveTo(7, 2); cx.lineTo(7, 9); cx.stroke(); }
+    else if (kind === "cloud") { b(); cx.arc(-4, -2, 6, 0, 7); cx.arc(5, -1, 5, 0, 7); cx.fill(); for (i = -6; i <= 6; i += 6) { b(); cx.moveTo(i, 6); cx.lineTo(i - 2, 11); cx.stroke(); } }
+    else if (kind === "star") { b(); for (i = 0; i < 10; i++) { var r2 = i % 2 ? 5 : 12, a3 = i / 10 * 6.28 - Math.PI / 2; cx.lineTo(Math.cos(a3) * r2, Math.sin(a3) * r2); } cx.closePath(); cx.fill(); }
+    else { b(); cx.arc(0, 0, 8, 0, 7); cx.stroke(); b(); cx.arc(0, 0, 3, 0, 7); cx.fill(); }
+    cx.restore();
+  }
+  function curColor(c) { return c === "$" ? COL.money : c === "tip" ? COL.tip : COL.pearl; }
+  function costText(n) { var c = RW.cost(game, n.id); return n.cur === "$" ? money(c) : c + (n.cur === "tip" ? " tips" : c === 1 ? " pearl" : " pearls"); }
+  function effectLine(n) {
+    var before = RW.stats(game), l = RW.lv(game, n.id);
+    if (l >= n.max) return null;
+    game.lv[n.id] = l + 1; var after = RW.stats(game); game.lv[n.id] = l || undefined; if (!l) delete game.lv[n.id];
+    var keys = [["pressure", "Pressure", RW.fmt], ["radius", "Spray radius", function (v) { return v.toFixed(2); }], ["tank", "Water", function (v) { return v.toFixed(1) + " s"; }],
+      ["pay", "Pay", function (v) { return "x" + RW.fmt(v); }], ["splash", "Splash chance", function (v) { return Math.round(v * 100) + "%"; }], ["splashPow", "Splash power", function (v) { return Math.round(v * 100) + "%"; }],
+      ["burst", "Burst every", function (v) { return v ? v.toFixed(1) + " s" : "never"; }], ["burstR", "Burst radius", function (v) { return v.toFixed(1); }], ["drip", "Water drops", function (v) { return (v * 100).toFixed(2) + "%"; }],
+      ["dripAmt", "Each drop", function (v) { return "+" + v.toFixed(1) + " s"; }], ["tipChance", "Tips", function (v) { return (v * 100).toFixed(1) + "%"; }], ["tipAmt", "Per tip", String],
+      ["drones", "Drones", String], ["dronePow", "Drone power", function (v) { return Math.round(v * 100) + "%"; }], ["droneSpd", "Drone speed", function (v) { return Math.round(v); }],
+      ["night", "Night shift", function (v) { return Math.round(v * 100) + "%"; }], ["rain", "Showers", String]];
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i], a = before[k[0]], b = after[k[0]];
+      if (a !== b) return k[1] + ":  " + k[2](a) + "  →  " + k[2](b);
+    }
+    for (var t = 1; t < before.typeMul.length; t++) if (before.typeMul[t] !== after.typeMul[t]) return RW.GRIME[t].name + " washes off  x" + before.typeMul[t] + "  →  x" + after.typeMul[t];
+    if (n.id === "TWIN") return "A second jet at the mirror spot.";
+    if (n.id === "WEED") return "Moss washes off x3 and stops growing back.";
+    return null;
+  }
+  function tryBuy(n) {
+    if (RW.buy(game, n.id)) { sfx("buy"); saveT = 1.5; for (var i = 0; i < 8; i++) { var p = nodePos(n), a = i / 8 * 6.28; parts.push({ k: "spark", x: p.x + Math.cos(a) * 30, y: p.y + Math.sin(a) * 30, t: 0 }); } return true; }
+    sfx("deny"); return false;
+  }
+  var treeAcc = 0;
+  function drawTree(dt) {
+    // night shift: drones keep at it while you shop
+    treeAcc += dt;
+    while (treeAcc >= 0.1) {
+      treeAcc -= 0.1;
+      var nr = RW.shopTick(game, 0.1);
+      if (nr && nr.ev.length) {
+        nr.ev.forEach(function (e) { if (e.e === "restored") { toast(RW.SITES[e.k].name + " restored by the night shift!", "#9be27a"); sfx("restored"); persist(); if (game.done) screen = DEMO ? "demoend" : "end"; } if (e.e === "item") { toast("FOUND: " + RW.SITES[e.k].item + "!  +1 pearl", COL.pearl); sfx("item"); } });
+        nr.ev.length = 0;
+      }
+    }
+    syncImage(dt);
+    saveT -= dt; if (saveT < 0 && saveT > -dt * 2) persist();
+    if (holdBuy) { holdBuy.t -= dt; if (holdBuy.t <= 0) { if (mouse.down && tipNode === holdBuy.n && tryBuy(holdBuy.n)) holdBuy.t = 0.09; else holdBuy = null; } }
+
+    var bg = cx.createRadialGradient(TCX, TCY, 50, TCX, TCY, 700); bg.addColorStop(0, "#14304a"); bg.addColorStop(1, "#0a1520");
+    cx.fillStyle = bg; cx.fillRect(0, 0, W, H);
+    cx.strokeStyle = "rgba(90,160,210,0.07)"; cx.lineWidth = 1;
+    for (var gx = TCX % 39; gx < W; gx += 39) { cx.beginPath(); cx.moveTo(gx, 0); cx.lineTo(gx, H); cx.stroke(); }
+    for (var gy = TCY % 39; gy < H; gy += 39) { cx.beginPath(); cx.moveTo(0, gy); cx.lineTo(W, gy); cx.stroke(); }
+    // links
+    RW.NODES.forEach(function (n) {
+      if (!RW.visible(game, n.id) || !n.from) return;
+      n.from.forEach(function (pid) {
+        var pn = RW.NODE[pid]; if (!RW.visible(game, pid)) return;
+        var a = nodePos(pn), b = nodePos(n), owned = RW.lv(game, pid) > 0 && RW.lv(game, n.id) > 0;
+        cx.strokeStyle = owned ? "rgba(120,210,250,0.75)" : RW.lv(game, pid) > 0 ? "rgba(120,190,230,0.35)" : "rgba(80,110,140,0.2)";
+        cx.lineWidth = owned ? 3 : 2; cx.beginPath(); cx.moveTo(a.x, a.y); cx.lineTo(b.x, b.y); cx.stroke();
+      });
+    });
+    // teasers: a node not yet revealed but next to a revealed one
+    RW.NODES.forEach(function (n) {
+      if (RW.visible(game, n.id) || !n.from) return;
+      if (n.site && game.reached < n.site) return;
+      if (!n.from.some(function (p) { return RW.visible(game, p); })) return;
+      var p = nodePos(n); cx.beginPath(); cx.arc(p.x, p.y, 6, 0, 7); cx.fillStyle = "rgba(120,160,190,0.25)"; cx.fill();
+    });
+    tipNode = null;
+    var now = performance.now() / 1000;
+    RW.NODES.forEach(function (n) {
+      if (!RW.visible(game, n.id)) return;
+      var p = nodePos(n), l = RW.lv(game, n.id), maxed = l >= n.max, can = RW.canBuy(game, n.id), cc = curColor(n.cur);
+      var over = Math.hypot(mouse.x - p.x, mouse.y - p.y) <= NR + 2;
+      if (over) tipNode = n;
+      if (can) { cx.beginPath(); cx.arc(p.x, p.y, NR + 5 + Math.sin(now * 5) * 1.5, 0, 7); cx.strokeStyle = cc; cx.globalAlpha = 0.55; cx.lineWidth = 2; cx.stroke(); cx.globalAlpha = 1; }
+      cx.beginPath(); cx.arc(p.x, p.y, NR, 0, 7);
+      cx.fillStyle = l > 0 ? (maxed ? "#2c4a2c" : "#1d4a66") : "#132433"; cx.fill();
+      cx.strokeStyle = maxed ? COL.gold : l > 0 ? "#7fd8f7" : can ? cc : "#3a5468"; cx.lineWidth = over ? 3.5 : 2; cx.stroke();
+      icon(ICON[n.id] || "dot", p.x, p.y - 2, l > 0 ? "#eaf8ff" : can ? "#cfe8f4" : "#5f7d90");
+      if (n.max > 1 && l > 0) { var lt = maxed ? "MAX" : l + "/" + n.max; text(lt, p.x, p.y + NR + 9, 11, maxed ? COL.gold : COL.dim, "center", 800); }
+      if (n.cur !== "$") { if (n.cur === "tip") coin(p.x + NR - 4, p.y - NR + 4, 6); else pearl(p.x + NR - 4, p.y - NR + 4, 6); }
+    });
+    // left: the kit
+    var s = RW.stats(game);
+    rr(16, 84, 262, 300, 14); cx.fillStyle = "rgba(15,32,46,0.9)"; cx.fill();
+    text("YOUR KIT", 34, 108, 13, COL.dim, "left", 800);
+    var rows = [["Pressure", RW.fmt(s.pressure)], ["Spray radius", s.radius.toFixed(2)], ["Water", s.tank.toFixed(1) + " s"], ["Pay", "x" + RW.fmt(s.pay)]];
+    if (s.splash) rows.push(["Splash", Math.round(s.splash * 100) + "%"]);
+    if (s.burst) rows.push(["Burst", "every " + s.burst.toFixed(1) + " s"]);
+    if (s.drones) rows.push(["Drones", s.drones + (s.night ? "  (night " + Math.round(s.night * 100) + "%)" : "")]);
+    if (s.drip) rows.push(["Water drops", (s.drip * 100).toFixed(1) + "%"]);
+    if (s.tipChance) rows.push(["Tips", (s.tipChance * 100).toFixed(1) + "%"]);
+    if (s.twin) rows.push(["Twin hose", "on"]);
+    if (s.rain) rows.push(["Showers", "level " + s.rain]);
+    rows.slice(0, 11).forEach(function (r, i) { text(r[0], 34, 138 + i * 22, 14, COL.dim, "left", 600); text(r[1], 262, 138 + i * 22, 14, COL.text, "right", 800); });
+    // top: wallet
+    pixelText("UPGRADES", 34, 26, 5, "#cfe8f4");
+    text(money(game.money), W / 2 + 40, 40, 30, COL.money, "right", 800);
+    coin(W / 2 + 70, 40, 9); text(RW.fmt(game.tips), W / 2 + 85, 41, 18, COL.tip, "left", 800);
+    pearl(W / 2 + 160, 40, 9); text(String(game.pearls), W / 2 + 175, 41, 18, COL.pearl, "left", 800);
+    // right: the job
+    var G = game.grid, jx = 908, jy = 84;
+    rr(jx, jy, 276, 330, 14); cx.fillStyle = "rgba(15,32,46,0.9)"; cx.fill();
+    text("NEXT JOB", jx + 18, jy + 24, 13, COL.dim, "left", 800);
+    text(siteName(G.k), jx + 18, jy + 50, 18, COL.text, "left", 800);
+    cx.imageSmoothingEnabled = false; cx.drawImage(off, jx + 18, jy + 68, 240, 140); cx.imageSmoothingEnabled = true;
+    cx.strokeStyle = "#35546a"; cx.lineWidth = 1; cx.strokeRect(jx + 18, jy + 68, 240, 140);
+    if (game.night && game.night.drones) game.night.drones.forEach(function (d) { cx.fillStyle = "#f3c74e"; cx.fillRect(jx + 18 + d.x * 1.25 - 2, jy + 68 + d.y * 1.25 - 2, 4, 4); });
+    bar(jx + 18, jy + 220, 240, 12, pct(), "#9be27a", "#4fae4a");
+    text((pct() * 100).toFixed(1) + "% clean", jx + 18, jy + 248, 14, COL.dim, "left", 700);
+    var found = game.found.indexOf(G.k) >= 0;
+    text(found ? "Lost item found" : "A lost item is hidden here", jx + 258, jy + 248, 12, found ? COL.pearl : COL.dim, "right", 700);
+    button(jx + 18, jy + 266, 240, 50, "START SHIFT  (Space)", startShift, { primary: true, size: 17 });
+    button(jx, 428, 132, 38, "TOWN", function () { townFrom = "tree"; screen = "town"; });
+    button(jx + 144, 428, 132, 38, "HELP", function () { helpFrom = "tree"; screen = "help"; });
+    button(jx, 476, 132, 34, settings.muted ? "SOUND: OFF" : "SOUND: ON", toggleMute, { size: 13 });
+    button(jx + 144, 476, 132, 34, "TITLE", function () { setHiss(0, 0); screen = "title"; }, { size: 13 });
+    if (!settings.seenTree) {
+      rr(16, 600, 262, 120, 14); cx.fillStyle = "rgba(30,60,80,0.9)"; cx.fill();
+      wrap("Click a glowing upgrade to buy it. Hold to buy several. Bought upgrades reveal new ones. Then START SHIFT.", 32, 624, 232, 14, COL.text, 20, 600);
+    }
+    drawParticles(dt);
+    // tooltip
+    if (tipNode) {
+      var n = tipNode, p = nodePos(n), l = RW.lv(game, n.id), maxed = l >= n.max, eff = effectLine(n);
+      var bw = 300, lines = [], bx = p.x + 40, by = p.y - 30;
+      if (bx + bw > W - 10) bx = p.x - 40 - bw;
+      cx.font = "600 14px " + FONT;
+      var descY = 0;
+      var hgt = 92 + (eff ? 22 : 0) + Math.ceil(tw(n.desc, 14) / (bw - 30)) * 19;
+      if (by + hgt > H - 10) by = H - 10 - hgt;
+      if (by < 70) by = 70;
+      rr(bx, by, bw, hgt, 12); cx.fillStyle = "rgba(8,20,30,0.96)"; cx.fill(); cx.strokeStyle = curColor(n.cur); cx.lineWidth = 1.5; cx.stroke();
+      text(n.name, bx + 15, by + 22, 17, COL.text, "left", 800);
+      text(n.max > 1 ? "Level " + l + " / " + n.max : (l ? "Owned" : ""), bx + bw - 15, by + 22, 12, COL.dim, "right", 700);
+      var yy = wrap(n.desc, bx + 15, by + 48, bw - 30, 14, "#cfe0ea", 19, 600);
+      if (eff) { text(eff, bx + 15, yy + 2, 13, "#9bd6f2", "left", 700); yy += 22; }
+      if (maxed) text("Fully upgraded", bx + 15, yy + 8, 15, COL.gold, "left", 800);
+      else text("Cost  " + costText(n), bx + 15, yy + 8, 16, RW.canBuy(game, n.id) ? curColor(n.cur) : COL.warn, "left", 800);
+    }
+    drawToasts(dt);
+  }
+
+  // ---------------- title, help, town, endings ----------------
+  var attract = null;
+  function makeAttract() {
+    var k = DEMO ? 0 : 9;
+    var g = RW.newGame(ART.paint); g.site = k; g.grid = RW.buildGrid(k, ART.paint(k).mat);
+    var r = RW.startRun(g); r.s.pressure = RW.SITES[k].hpMul * 2500; r.s.radius = 7; r.tank = 1e9; r.s.drip = 0; r.s.tipChance = 0; r.s.splash = 0.3; r.s.splashPow = 1;
+    var c = document.createElement("canvas"); c.width = GW; c.height = GH;
+    attract = { g: g, run: r, t: 0, c: c, x: c.getContext("2d"), d: null, pic: ART.paint(k).rgb, wait: 0 };
+    attract.d = attract.x.createImageData(GW, GH);
+  }
+  function drawAttract(dt, x0, y0, sc) {
+    if (!attract) makeAttract();
+    var A = attract, G = A.g.grid;
+    A.t += dt;
+    if (G.remaining < G.total * 0.02 || A.g.done || A.g.grid.k !== G.k) { A.wait += dt; if (A.wait > 2.5) makeAttract(); }
+    else for (var i = 0; i < 2; i++) {
+      var t = A.t + i / 120, pos = { x: GW / 2 + Math.sin(t * 0.9) * GW * 0.44 * Math.cos(t * 0.13), y: GH / 2 + Math.sin(t * 2.3) * GH * 0.42 };
+      A.pos = pos; RW.stepRun(A.g, A.run, pos, 1 / 120); A.run.ev.length = 0; A.run.over = false;
+    }
+    var d = A.d.data, p = A.pic;
+    for (var c = 0; c < GW * GH; c++) {
+      var ty = G.type[c], o = c * 4, r = p[c * 3], g = p[c * 3 + 1], b = p[c * 3 + 2];
+      if (ty) { var col = RW.GRIME[ty].col, v = vary[c] * (1.12 - (G.thick[c] - 0.75) * 0.45), a = 0.3 + 0.55 * Math.min(1, G.hp[c] / G.max[c]); r = r * (1 - a) + col[0] * v * a; g = g * (1 - a) + col[1] * v * a; b = b * (1 - a) + col[2] * v * a; }
+      d[o] = r; d[o + 1] = g; d[o + 2] = b; d[o + 3] = 255;
+    }
+    G.dirty.length = 0;
+    A.x.putImageData(A.d, 0, 0);
+    cx.imageSmoothingEnabled = false; cx.drawImage(A.c, x0, y0, GW * sc, GH * sc); cx.imageSmoothingEnabled = true;
+    if (A.pos && A.wait === 0) {
+      var mx = x0 + A.pos.x * sc, my = y0 + A.pos.y * sc;
+      cx.beginPath(); cx.arc(mx, my, 7 * sc, 0, 7); cx.fillStyle = "rgba(220,248,255,0.35)"; cx.fill();
+      cx.strokeStyle = "rgba(230,250,255,0.8)"; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(mx + 40, my + 60); cx.lineTo(mx, my); cx.stroke();
+      cx.lineCap = "round"; cx.strokeStyle = "#2a2f36"; cx.lineWidth = 7; cx.beginPath(); cx.moveTo(mx + 40, my + 60); cx.lineTo(mx + 100, my + 148); cx.stroke();
+      cx.strokeStyle = "#f3c74e"; cx.lineWidth = 14; cx.beginPath(); cx.moveTo(mx + 100, my + 148); cx.lineTo(mx + 130, my + 192); cx.stroke(); cx.lineCap = "butt";
+    }
+  }
+  function drawTitle(dt) {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    drawAttract(dt, 0, 0, W / GW);
+    var g = cx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "rgba(8,18,28,0.82)"); g.addColorStop(0.42, "rgba(8,18,28,0.25)"); g.addColorStop(0.7, "rgba(8,18,28,0.15)"); g.addColorStop(1, "rgba(8,18,28,0.85)");
+    cx.fillStyle = g; cx.fillRect(0, 0, W, H);
+    pixelText("RINSEWICK", W / 2, 70, 15, "#eaf8ff", "center", "#1b5a86");
+    text("Pressure-wash a whole seaside town clean.", W / 2, 186, 22, "#d6eef8", "center", 700);
+    text("FREE DEMO  ·  the first 3 jobs", W / 2, 218, 15, COL.tip, "center", 800);
+    var by = 560;
+    if (hasSave && !confirmNew) {
+      button(W / 2 - 130, by, 260, 56, game.done ? "VIEW TOWN" : "CONTINUE", function () { startHiss(); if (game.done) { townFrom = "title"; screen = "town"; } else { rebuildImage(); screen = "tree"; } }, { primary: true, size: 20 });
+      button(W / 2 - 290, by + 8, 140, 42, "NEW GAME", function () { confirmNew = true; });
+    } else if (confirmNew) {
+      text("Start over? Your current town will be wiped.", W / 2, by - 18, 16, COL.warn, "center", 700);
+      button(W / 2 - 130, by, 120, 50, "YES", function () { game = RW.newGame(ART.paint); persist(); confirmNew = false; rebuildImage(); startShift(); }, { primary: true });
+      button(W / 2 + 10, by, 120, 50, "NO", function () { confirmNew = false; });
+    } else {
+      button(W / 2 - 130, by, 260, 56, "START WASHING", function () { rebuildImage(); startShift(); }, { primary: true, size: 20 });
+    }
+    if (!confirmNew) button(W / 2 + 150, by + 8, 140, 42, "HOW TO PLAY", function () { helpFrom = "title"; screen = "help"; });
+    button(W / 2 - 130, by + 74, 260, 42, "GET THE FULL GAME", openStore, { size: 15 });
+    text("Mouse to aim  ·  Space to continue  ·  Esc to pause  ·  M for sound", W / 2, H - 22, 13, "#9ab6c6", "center", 600);
+  }
+  function openStore() { try { window.open(STORE_URL, "_blank", "noopener"); } catch (e) {} }
+  var helpFrom = "title", townFrom = "tree";
+  function drawHelp() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    pixelText("HOW TO PLAY", W / 2, 40, 7, "#cfe8f4", "center");
+    var lines = [
+      ["A shift", "Your tank holds a few seconds of water. The hose sprays wherever the mouse points, all by itself. When the tank is empty, the shift is over."],
+      ["Grime", "Each speck of grime pays when it comes off completely. Dust is soft; gum, rust, barnacles, soot and tar are tough and pay more. The panel under the picture tells you how long each one takes at full pressure."],
+      ["It stays clean", "What you wash stays washed. Grime you only weakened stays weak for next time. Moss grows back into clean spots until you buy Weed Killer."],
+      ["Upgrades", "Between shifts, spend money on the upgrade tree: pressure, a wider spray, a bigger tank, soap for more pay, splashes, bursts, helper drones. Tips (coins hidden in the grime) and pearls buy the special ones."],
+      ["Restore the town", "When a picture is spotless, the job is done: you get a pearl and the next job in Rinsewick. Each job also hides one lost item worth a pearl."],
+      ["Keys", "Space: continue / start the shift.  Esc: pause.  M: sound on or off. Progress saves by itself in this browser."]
+    ];
+    var y = 120;
+    lines.forEach(function (l) { text(l[0], 150, y, 18, COL.water, "left", 800); y = wrap(l[1], 330, y, 720, 16, COL.text, 23, 600) + 18; });
+    button(W / 2 - 100, H - 90, 200, 48, "BACK", function () { screen = helpFrom; }, { primary: true });
+  }
+  function drawTown() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    pixelText("RINSEWICK", W / 2, 26, 6, "#cfe8f4", "center");
+    text(game.restored.length + " of " + (DEMO ? 10 : RW.SITES.length) + " jobs restored  ·  " + game.found.length + " lost items found", W / 2, 76, 16, COL.dim, "center", 700);
+    for (var k = 0; k < 10; k++) {
+      var col = k % 5, row = (k / 5) | 0, x = 60 + col * 220, y = 110 + row * 300, w = 200, h = 117;
+      var full = k < RW.SITES.length, done = game.restored.indexOf(k) >= 0, curr = full && game.grid.k === k && !done;
+      rr(x - 6, y - 6, w + 12, h + 120, 12); cx.fillStyle = COL.panel; cx.fill();
+      cx.imageSmoothingEnabled = false;
+      if (done) cx.drawImage(cleanCanvas(k), x, y, w, h);
+      else if (curr) cx.drawImage(off, x, y, w, h);
+      else { cx.fillStyle = "#0b1520"; cx.fillRect(x, y, w, h); text(full ? "?" : "FULL GAME", x + w / 2, y + h / 2, full ? 40 : 16, "#35546a", "center", 800); }
+      cx.imageSmoothingEnabled = true;
+      var nm = full ? RW.SITES[k].name : ["", "", "", "Old Pickup", "Town Fountain", "Boardwalk", "Fishing Boat", "Lighthouse Door", "Clock Tower", "Town Mural"][k];
+      text((k + 1) + ". " + (done || curr || !full ? nm : "???"), x, y + h + 20, 15, done ? "#9be27a" : COL.text, "left", 800);
+      text(done ? "Restored" : curr ? (pct() * 100).toFixed(1) + "% clean" : full ? "Not yet" : "In the full game", x, y + h + 42, 13, COL.dim, "left", 700);
+      if (full) {
+        var f = game.found.indexOf(k) >= 0;
+        if (f) pearl(x + 8, y + h + 68, 7);
+        text(f ? "Found " + RW.SITES[k].item : "Lost item: ?", x + (f ? 20 : 0), y + h + 68, 13, f ? COL.pearl : "#5f7d90", "left", 600);
+      }
+    }
+    button(W / 2 - 100, H - 70, 200, 46, "BACK", function () { screen = townFrom; }, { primary: true });
+  }
+  function drawEnd(dt) {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    cx.imageSmoothingEnabled = false; cx.drawImage(cleanCanvas(RW.SITES.length - 1), 216, 14, 768, 448); cx.imageSmoothingEnabled = true;
+    for (var i = 0; i < 2; i++) parts.push({ k: "spark", x: 216 + Math.random() * 768, y: 14 + Math.random() * 448, t: 0 });
+    drawParticles(dt);
+    rr(216, 476, 768, 270, 18); cx.fillStyle = COL.panel; cx.fill();
+    pixelText("RINSEWICK SPARKLES", W / 2, 494, 6, "#9be27a", "center", "#1e4a26");
+    var st = game.stats, mins = Math.round((st.time + st.shop) / 60);
+    text("Every job in town is done. Thank you for washing.", W / 2, 552, 18, COL.text, "center", 700);
+    text(st.shifts + " shifts  ·  " + RW.fmt(st.cleared) + " cells washed  ·  " + money(st.earned) + " earned  ·  about " + mins + " min", W / 2, 584, 15, COL.dim, "center", 700);
+    text(game.found.length + " of 10 lost items found", W / 2, 610, 15, COL.pearl, "center", 700);
+    button(W / 2 - 230, 650, 200, 46, "TOWN", function () { townFrom = "end"; screen = "town"; }, { primary: true });
+    button(W / 2 + 30, 650, 200, 46, "TITLE", function () { screen = "title"; });
+  }
+  
+  function drawDemoEnd(dt) {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    pixelText("THE DEMO ENDS HERE", W / 2, 40, 7, "#cfe8f4", "center");
+    for (var k = 0; k < 3; k++) { cx.imageSmoothingEnabled = false; cx.drawImage(cleanCanvas(k), 90 + k * 350, 120, 320, 187); cx.imageSmoothingEnabled = true; text(RW.SITES[k].name + " - restored", 90 + k * 350, 324, 15, "#9be27a", "left", 800); }
+    var y = 380;
+    y = wrap("You restored the first three jobs. The full game has seven more: an old pickup truck, the town fountain, the boardwalk, a fishing boat's hull, the lighthouse door, the clock tower and the town mural - with rust, barnacles, soot and tar to blast off.", 150, y, 900, 17, COL.text, 26, 600);
+    y = wrap("More upgrades too: Hydro Cannon, Rust Solvent, Barnacle Chisel, Degreaser, Showroom Shine, and every level of the ones you know.", 150, y + 10, 900, 17, COL.dim, 26, 600);
+    button(W / 2 - 160, 600, 320, 56, "GET THE FULL GAME", openStore, { primary: true, size: 19 });
+    button(W / 2 - 100, 672, 200, 40, "TITLE", function () { screen = "title"; });
+  }
+  
+
+  function toggleMute() { settings.muted = !settings.muted; saveSettings(); if (settings.muted) setHiss(0, 0); }
+
+  // ---------------- main loop ----------------
+  var lastT = performance.now();
+  function frame(now) {
+    var dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+    popT -= dt;
+    buttons = [];
+    cx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    if (screen === "title") drawTitle(dt);
+    else if (screen === "shift") drawShift(dt);
+    else if (screen === "tree") drawTree(dt);
+    else if (screen === "help") drawHelp();
+    else if (screen === "town") drawTown();
+    else if (screen === "end") drawEnd(dt);
+    else if (screen === "demoend") drawDemoEnd(dt);
+    if (screen !== "shift") setHiss(0, 0);
+    requestAnimationFrame(frame);
+  }
+  function resize() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H); dpr = window.devicePixelRatio || 1;
+    cv.style.width = Math.floor(W * scale) + "px"; cv.style.height = Math.floor(H * scale) + "px";
+    cv.width = Math.floor(W * scale * dpr); cv.height = Math.floor(H * scale * dpr);
+  }
+  window.addEventListener("resize", resize); resize();
+  function local(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+  function setAim(m) {
+    aim = { x: Math.max(0, Math.min(GW, (m.x - PX) / CELL)), y: Math.max(0, Math.min(GH, (m.y - PY) / CELL)) };
+  }
+  cv.addEventListener("pointermove", function (e) { mouse.x = local(e).x; mouse.y = local(e).y; if (screen === "shift") setAim(mouse); });
+  cv.addEventListener("pointerleave", function () { mouse.x = -1; mouse.y = -1; mouse.down = false; });
+  cv.addEventListener("pointerup", function () { mouse.down = false; });
+  cv.addEventListener("pointerdown", function (e) {
+    var m = local(e);
+    mouse.x = m.x; mouse.y = m.y; mouse.down = true;
+    cv.focus();
+    startHiss();
+    for (var i = buttons.length - 1; i >= 0; i--) { var b = buttons[i]; if (m.x >= b.x && m.x <= b.x + b.w && m.y >= b.y && m.y <= b.y + b.h) { sfx("click"); b.fn(); return; } }
+    if (screen === "shift") { setAim(m); if (paused) paused = false; return; }
+    if (screen === "tree") {
+      var hitN = null;
+      RW.NODES.forEach(function (n) { if (RW.visible(game, n.id)) { var p = nodePos(n); if (Math.hypot(m.x - p.x, m.y - p.y) <= NR + 2) hitN = n; } });
+      if (hitN) { tipNode = hitN; settings.seenTree = true; saveSettings(); if (tryBuy(hitN)) holdBuy = { n: hitN, t: 0.4 }; }
+    }
+  });
+  window.addEventListener("keydown", function (e) {
+    var k = e.key;
+    if (k === "m" || k === "M") { toggleMute(); return; }
+    if (screen === "shift") {
+      if (k === "Escape" || k === "p" || k === "P") { if (!run.over) paused = !paused; e.preventDefault(); return; }
+      if (k === " " || k === "Enter") { if (celebrate && celebrate.t > 1.2) finishCelebrate(); else if (summary && overT > 0.5) endShiftView(); e.preventDefault(); return; }
+      return;
+    }
+    if (screen === "tree" && (k === " " || k === "Enter")) { startShift(); e.preventDefault(); return; }
+    if ((screen === "help" || screen === "town") && (k === "Escape" || k === "Enter" || k === " ")) { screen = screen === "help" ? helpFrom : townFrom; e.preventDefault(); return; }
+    if (screen === "title" && (k === " " || k === "Enter")) { startHiss(); if (hasSave) { if (game.done) { townFrom = "title"; screen = "town"; } else { rebuildImage(); screen = "tree"; } } else { rebuildImage(); startShift(); } e.preventDefault(); }
+  });
+  window.addEventListener("blur", function () { if (screen === "shift" && run && !run.over) paused = true; setHiss(0, 0); });
+
+  // hooks for the screenshot tool and tests
+  window.RINSE_APP = {
+    edition: ED,
+    game: function () { return game; },
+    screen: function (s) { if (s) { if (s === "tree" || s === "shift") rebuildImage(); screen = s; } return screen; },
+    load: function (str) { game = RW.load(str, ART.paint); hasSave = true; rebuildImage(); },
+    start: function () { startShift(); },
+    aim: function (x, y) { aimOverride = x === null ? null : { x: x, y: y }; },
+    run: function () { return run; },
+    fast: function (seconds, path) {
+      // advance the current shift quickly, sweeping along a path function(t) -> {x, y}
+      for (var t = 0; t < seconds && run && !run.over; t += STEP) { var p = path ? path(run.time) : aimOverride || aim; RW.stepRun(game, run, p, STEP); handle(run.ev); if (path) aimOverride = p; }
+      if (run && run.over && !celebrate) { summary = { earned: run.earned, cleared: run.cleared, tips: run.tips, drops: run.drops, from: shiftStartPct, to: pct() }; overT = 1; }
+      return run ? run.over : true;
+    },
+    buy: function (id) { return RW.buy(game, id); },
+    hover: function (x, y) { mouse.x = x; mouse.y = y; },
+    finish: function () { if (celebrate) finishCelebrate(); else endShiftView(); }
+  };
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

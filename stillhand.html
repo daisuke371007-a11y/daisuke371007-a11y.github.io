@@ -1,0 +1,1196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>STILLHAND</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #101217; overflow: hidden; touch-action: none; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; outline: none; -webkit-tap-highlight-color: transparent; }
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0"></canvas>
+<script>window.STILL_EDITION = "demo";</script>
+<script>
+// STILLHAND rules. Pure functions over plain objects so the solver, the tests and the game share one truth.
+// The board is W x H. Tiles: "." floor, "#" pillar (blocks walking and arrows), "o" pit (falls; arrows fly over).
+// You never strike. You step, and stepping into an enemy shoves it one tile.
+// Every enemy telegraphs a strike that is fixed to its own body: shove it and the strike moves with it.
+(function (root) {
+  "use strict";
+  var DX = [0, 1, 0, -1], DY = [-1, 0, 1, 0];           // 0 up, 1 right, 2 down, 3 left
+  var KINDS = {
+    B: { name: "Brute",  hp: 2, speed: 2, dmg: 2, shove: true,  blurb: "Punches the tile in front for 2." },
+    A: { name: "Archer", hp: 1, speed: 2, dmg: 1, shove: true,  blurb: "Shoots straight ahead. The first thing in the way takes 1." },
+    R: { name: "Ram",    hp: 2, speed: 1, dmg: 2, shove: true,  blurb: "Charges ahead until it hits something: 2. A pit on the way takes the Ram." },
+    M: { name: "Mortar", hp: 1, speed: 1, dmg: 1, shove: true,  blurb: "Lobs over everything: a cross of five tiles 2 or 3 ahead, 1 each." },
+    W: { name: "Warden", hp: 2, speed: 0, dmg: 1, shove: true,  blurb: "Never moves. Strikes all four tiles around it for 1." },
+    K: { name: "Anchor", hp: 2, speed: 1, dmg: 2, shove: false, blurb: "Cannot be shoved. Punches the tile in front for 2." }
+  };
+
+  // ---------- floors ----------
+  // rows: array of strings; letters B A R M W K are enemies (in reading order = strike order), "@" is you.
+  function parse(rows, extra) {
+    var h = rows.length, w = rows[0].length, tiles = [], hero = null, en = [];
+    for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
+      var c = rows[y].charAt(x);
+      if (c === "@") { hero = { x: x, y: y }; c = "."; }
+      else if (KINDS[c]) { en.push({ t: c, x: x, y: y }); c = "."; }
+      if (c !== "." && c !== "#" && c !== "o") throw new Error("bad tile " + c);
+      tiles.push(c);
+    }
+    if (!hero) throw new Error("no hero");
+    var L = { w: w, h: h, tiles: tiles, hero: hero, en: en };
+    if (extra) for (var k in extra) L[k] = extra[k];
+    return L;
+  }
+  function tile(L, x, y) { return (x < 0 || y < 0 || x >= L.w || y >= L.h) ? "#" : L.tiles[y * L.w + x]; }
+
+  // ---------- state ----------
+  // S = { hx, hy, hp, maxhp, ap, round, en:[{id,t,x,y,hp,d,r}], cd:{trick:rounds}, bump, ward, ... }
+  function start(L, opts) {
+    opts = opts || {};
+    var S = { hx: L.hero.x, hy: L.hero.y, hp: opts.hp || 3, maxhp: opts.maxhp || 3, apMax: opts.ap || 2, ap: opts.ap || 2,
+      round: 1, bump: opts.bump || 1, ward: opts.ward || 0, en: [], nextId: 0 };
+    for (var i = 0; i < L.en.length; i++) {
+      var e = L.en[i];
+      S.en.push({ id: S.nextId++, t: e.t, x: e.x, y: e.y, hp: KINDS[e.t].hp, d: 0, r: 2 });
+    }
+    for (var j = 0; j < S.en.length; j++) aim(L, S, S.en[j]);
+    return S;
+  }
+  function clone(S) {
+    var C = {}, k;
+    for (k in S) C[k] = S[k];
+    C.en = S.en.map(function (e) { return { id: e.id, t: e.t, x: e.x, y: e.y, hp: e.hp, d: e.d, r: e.r }; });
+    if (S.cd) { C.cd = {}; for (k in S.cd) C.cd[k] = S.cd[k]; }
+    return C;
+  }
+  function unitAt(S, x, y) {
+    if (S.hx === x && S.hy === y) return "hero";
+    for (var i = 0; i < S.en.length; i++) if (S.en[i].x === x && S.en[i].y === y && S.en[i].hp > 0) return S.en[i];
+    return null;
+  }
+  function won(S) { for (var i = 0; i < S.en.length; i++) if (S.en[i].hp > 0) return false; return true; }
+  function key(S) {
+    var s = S.hx + "," + S.hy;
+    for (var i = 0; i < S.en.length; i++) { var e = S.en[i]; s += "|" + e.t + e.x + "," + e.y + "," + e.hp + "," + e.d + "," + e.r; }
+    return s;
+  }
+
+  // ---------- damage ----------
+  // hero always loses exactly 1 heart per strike; a ward (one-per-floor shield) eats the first one
+  function hurt(S, u, dmg, ev, cause) {
+    if (u === "hero") {
+      if (S.ward > 0) { S.ward--; ev.push({ k: "ward", x: S.hx, y: S.hy }); return; }
+      S.hp -= 1; ev.push({ k: "hurt", x: S.hx, y: S.hy, cause: cause });
+      return;
+    }
+    u.hp -= dmg; ev.push({ k: "dmg", id: u.id, x: u.x, y: u.y, n: dmg, cause: cause });
+    if (u.hp <= 0) ev.push({ k: "die", id: u.id, x: u.x, y: u.y, cause: cause });
+  }
+  function sweepDead(S) { S.en = S.en.filter(function (e) { return e.hp > 0; }); }
+
+  // ---------- your actions ----------
+  // step in direction d: walk, or shove the enemy standing there. Returns events, or null if not allowed.
+  function step(L, S, d) {
+    if (S.ap <= 0) return null;
+    var x = S.hx + DX[d], y = S.hy + DY[d], u = unitAt(S, x, y), ev = [];
+    if (u && u !== "hero") {
+      if (!KINDS[u.t].shove) return null;
+      push(L, S, u, d, 1, ev, "shove");
+    } else {
+      if (tile(L, x, y) !== ".") return null;
+      ev.push({ k: "walk", from: [S.hx, S.hy], to: [x, y] });
+      S.hx = x; S.hy = y;
+    }
+    S.ap--;
+    sweepDead(S);
+    return ev;
+  }
+  // move enemy u up to n tiles in direction d; a blocked shove bumps (S.bump damage), another enemy bumps both, a pit swallows
+  function push(L, S, u, d, n, ev, cause) {
+    for (var i = 0; i < n; i++) {
+      var x = u.x + DX[d], y = u.y + DY[d], t = tile(L, x, y), v = unitAt(S, x, y);
+      if (v) {
+        ev.push({ k: "bump", id: u.id, at: [x, y] });
+        hurt(S, u, S.bump, ev, "bump");
+        if (v !== "hero") hurt(S, v, S.bump, ev, "bump");
+        else hurt(S, v, 1, ev, "bump");
+        return;
+      }
+      if (t === "#") { ev.push({ k: "bump", id: u.id, at: [x, y] }); hurt(S, u, S.bump, ev, "bump"); return; }
+      ev.push({ k: "slide", id: u.id, from: [u.x, u.y], to: [x, y] });
+      u.x = x; u.y = y;
+      if (t === "o") { u.hp = 0; ev.push({ k: "fall", id: u.id, x: x, y: y }); ev.push({ k: "die", id: u.id, x: x, y: y, cause: "fall" }); return; }
+    }
+  }
+
+  // ---------- tricks (run upgrades; the solver never uses them) ----------
+  var TRICKS = {
+    hook:  { name: "Hook",  cd: 2, blurb: "Pull the first enemy in a line (up to 4) to your side. Pits on the way take it." },
+    swap:  { name: "Swap",  cd: 3, blurb: "Trade places with the first enemy in a line (up to 3)." },
+    turn:  { name: "Turn",  cd: 2, blurb: "Spin an adjacent enemy a quarter turn clockwise. Its strike turns with it." },
+    dash:  { name: "Dash",  cd: 2, blurb: "Run up to 3 tiles in a line." },
+    palm:  { name: "Palm",  cd: 3, blurb: "Shove an adjacent enemy 3 tiles." },
+    sweep: { name: "Sweep", cd: 4, blurb: "Shove every adjacent enemy away from you." }
+  };
+  function firstInLine(L, S, d, max) {
+    var x = S.hx, y = S.hy;
+    for (var i = 1; i <= max; i++) {
+      x += DX[d]; y += DY[d];
+      if (tile(L, x, y) === "#") return null;
+      var u = unitAt(S, x, y);
+      if (u) return { u: u, dist: i };
+    }
+    return null;
+  }
+  function trick(L, S, name, d) {
+    if (S.ap <= 0 || (S.cd && S.cd[name] > 0)) return null;
+    var ev = [], f, u;
+    if (name === "hook") {
+      f = firstInLine(L, S, d, 4); if (!f || f.dist < 2) return null;
+      u = f.u; var back = (d + 2) % 4;
+      push(L, S, u, back, f.dist - 1, ev, "hook");
+    } else if (name === "swap") {
+      f = firstInLine(L, S, d, 3); if (!f) return null;
+      u = f.u; var ox = S.hx, oy = S.hy;
+      ev.push({ k: "swap", id: u.id, a: [ox, oy], b: [u.x, u.y] });
+      S.hx = u.x; S.hy = u.y; u.x = ox; u.y = oy;
+    } else if (name === "turn") {
+      u = unitAt(S, S.hx + DX[d], S.hy + DY[d]); if (!u || u === "hero" || u.t === "W") return null;
+      u.d = (u.d + 1) % 4; ev.push({ k: "turn", id: u.id, d: u.d });
+    } else if (name === "dash") {
+      var n = 0;
+      while (n < 3 && tile(L, S.hx + DX[d], S.hy + DY[d]) === "." && !unitAt(S, S.hx + DX[d], S.hy + DY[d])) {
+        ev.push({ k: "walk", from: [S.hx, S.hy], to: [S.hx + DX[d], S.hy + DY[d]] });
+        S.hx += DX[d]; S.hy += DY[d]; n++;
+      }
+      if (!n) return null;
+    } else if (name === "palm") {
+      u = unitAt(S, S.hx + DX[d], S.hy + DY[d]); if (!u || u === "hero" || !KINDS[u.t].shove) return null;
+      push(L, S, u, d, 3, ev, "palm");
+    } else if (name === "sweep") {
+      var any = false;
+      for (var k = 0; k < 4; k++) {
+        u = unitAt(S, S.hx + DX[k], S.hy + DY[k]);
+        if (u && u !== "hero" && u.hp > 0 && KINDS[u.t].shove) { push(L, S, u, k, 1, ev, "sweep"); any = true; }
+      }
+      if (!any) return null;
+    } else return null;
+    S.ap--;
+    S.cd = S.cd || {};
+    S.cd[name] = TRICKS[name].cd;
+    sweepDead(S);
+    return ev;
+  }
+
+  // ---------- enemy strikes ----------
+  // the tiles a strike will touch, as things stand (used for the red warning tiles)
+  function strikeTiles(L, S, e) {
+    var out = [], x, y, i;
+    if (e.t === "B" || e.t === "K") out.push([e.x + DX[e.d], e.y + DY[e.d]]);
+    else if (e.t === "W") for (i = 0; i < 4; i++) out.push([e.x + DX[i], e.y + DY[i]]);
+    else if (e.t === "M") {
+      var cx = e.x + DX[e.d] * e.r, cy = e.y + DY[e.d] * e.r;
+      out.push([cx, cy]); for (i = 0; i < 4; i++) out.push([cx + DX[i], cy + DY[i]]);
+    } else if (e.t === "A" || e.t === "R") {
+      x = e.x; y = e.y;
+      for (;;) {
+        x += DX[e.d]; y += DY[e.d];
+        var t = tile(L, x, y);
+        if (t === "#") break;
+        out.push([x, y]);
+        if (unitAt(S, x, y)) break;
+        if (e.t === "R" && t === "o") break;
+      }
+    }
+    // nothing can stand on a pillar or in a pit, so a punch, blast or shell landing there is shown as harmless
+    var area = e.t === "B" || e.t === "K" || e.t === "W" || e.t === "M";
+    return out.filter(function (p) { return p[0] >= 0 && p[1] >= 0 && p[0] < L.w && p[1] < L.h && (!area || tile(L, p[0], p[1]) === "."); });
+  }
+  function strike(L, S, e, ev) {
+    var K = KINDS[e.t], tiles = strikeTiles(L, S, e);
+    ev.push({ k: "strike", id: e.id, t: e.t, tiles: tiles });
+    if (e.t === "R") {
+      for (;;) {
+        var x = e.x + DX[e.d], y = e.y + DY[e.d], t = tile(L, x, y), u = unitAt(S, x, y);
+        if (t === "#") break;
+        if (u) { hurt(S, u, K.dmg, ev, "ram"); break; }
+        ev.push({ k: "slide", id: e.id, from: [e.x, e.y], to: [x, y] });
+        e.x = x; e.y = y;
+        if (t === "o") { e.hp = 0; ev.push({ k: "fall", id: e.id, x: x, y: y }); ev.push({ k: "die", id: e.id, x: x, y: y, cause: "fall" }); break; }
+      }
+      return;
+    }
+    if (e.t === "A") {
+      var last = tiles[tiles.length - 1], v = last && unitAt(S, last[0], last[1]);
+      if (v) hurt(S, v, K.dmg, ev, "arrow");
+      return;
+    }
+    var hitHero = false;
+    for (var i = 0; i < tiles.length; i++) {
+      var w = unitAt(S, tiles[i][0], tiles[i][1]);
+      if (!w) continue;
+      if (w === "hero") { if (hitHero) continue; hitHero = true; }
+      hurt(S, w, K.dmg, ev, e.t === "M" ? "shell" : "blow");
+    }
+  }
+
+  // ---------- enemy movement and aiming ----------
+  function free(L, S, x, y, self) {
+    if (tile(L, x, y) !== ".") return false;
+    var u = unitAt(S, x, y);
+    return !u || u === self;
+  }
+  // every (x, y, d, r) from which enemy e's strike would reach you where you stand now
+  function spots(L, S, e) {
+    var out = [], d, k, x, y;
+    for (d = 0; d < 4; d++) {
+      var back = (d + 2) % 4;                       // the enemy would face back toward you
+      if (e.t === "B" || e.t === "K") {
+        x = S.hx + DX[d]; y = S.hy + DY[d];
+        if (free(L, S, x, y, e)) out.push([x, y, back, 2]);
+      } else if (e.t === "A" || e.t === "R") {
+        for (k = 1; ; k++) {
+          x = S.hx + DX[d] * k; y = S.hy + DY[d] * k;
+          var t = tile(L, x, y);
+          if (t === "#") break;
+          var u = unitAt(S, x, y);
+          if (u && u !== e) break;
+          if (t === "o") { if (e.t === "R") break; continue; }
+          if (k >= 2) out.push([x, y, back, 2]);
+        }
+      } else if (e.t === "M") {
+        for (k = 2; k <= 3; k++) {
+          x = S.hx + DX[d] * k; y = S.hy + DY[d] * k;
+          if (free(L, S, x, y, e)) out.push([x, y, back, k]);
+        }
+      }
+    }
+    return out;
+  }
+  function aim(L, S, e) {
+    if (e.t === "W") return;
+    var sp = spots(L, S, e);
+    for (var i = 0; i < sp.length; i++) if (sp[i][0] === e.x && sp[i][1] === e.y) { e.d = sp[i][2]; e.r = sp[i][3]; return; }
+    var dx = S.hx - e.x, dy = S.hy - e.y;
+    if (Math.abs(dy) >= Math.abs(dx)) e.d = dy < 0 ? 0 : 2; else e.d = dx > 0 ? 1 : 3;
+    e.r = Math.max(2, Math.min(3, Math.abs(dx) + Math.abs(dy)));
+  }
+  // breadth-first walk over free floor; returns {dist, prev} arrays
+  function flood(L, S, e) {
+    var n = L.w * L.h, dist = new Int16Array(n).fill(-1), prev = new Int16Array(n).fill(-1), q = [e.y * L.w + e.x];
+    dist[q[0]] = 0;
+    for (var qi = 0; qi < q.length; qi++) {
+      var c = q[qi], cx = c % L.w, cy = (c - cx) / L.w;
+      for (var d = 0; d < 4; d++) {
+        var x = cx + DX[d], y = cy + DY[d];
+        if (!free(L, S, x, y, e)) continue;
+        var id = y * L.w + x;
+        if (dist[id] >= 0) continue;
+        dist[id] = dist[c] + 1; prev[id] = c; q.push(id);
+      }
+    }
+    return { dist: dist, prev: prev };
+  }
+  function advance(L, S, e, ev) {
+    var sp0 = KINDS[e.t].speed;
+    if (sp0 > 0) {
+      var sp = spots(L, S, e), F = flood(L, S, e), best = -1, bd = 1e9;
+      for (var i = 0; i < sp.length; i++) {
+        var id = sp[i][1] * L.w + sp[i][0], dd = F.dist[id];
+        if (dd >= 0 && dd < bd) { bd = dd; best = id; }
+      }
+      if (best >= 0 && bd > 0) {
+        var path = [], c = best;
+        while (c !== e.y * L.w + e.x) { path.push(c); c = F.prev[c]; }
+        path.reverse();
+        var go = path[Math.min(sp0, path.length) - 1], gx = go % L.w, gy = (go - gx) / L.w;
+        ev.push({ k: "march", id: e.id, from: [e.x, e.y], to: [gx, gy] });
+        e.x = gx; e.y = gy;
+      }
+    }
+    aim(L, S, e);
+    ev.push({ k: "aim", id: e.id, d: e.d, r: e.r });
+  }
+
+  // the whole enemy turn: strikes in order, then everyone left moves and takes aim
+  function enemyTurn(L, S) {
+    var ev = [], order = S.en.slice();
+    for (var i = 0; i < order.length; i++) {
+      var e = order[i];
+      if (e.hp <= 0) continue;
+      strike(L, S, e, ev);
+      if (S.hp <= 0) break;
+    }
+    sweepDead(S);
+    if (S.hp > 0 && !won(S)) {
+      for (var j = 0; j < S.en.length; j++) advance(L, S, S.en[j], ev);
+      S.round++;
+      S.ap = S.apMax;
+      if (S.cd) for (var k in S.cd) if (S.cd[k] > 0) S.cd[k]--;
+    }
+    return ev;
+  }
+  // what the coming strikes will do if you end the round now (for the warnings on screen)
+  function forecast(L, S) {
+    var C = clone(S), ev = [], order = C.en.slice();
+    for (var i = 0; i < order.length; i++) { if (order[i].hp > 0) strike(L, C, order[i], ev); }
+    var hurts = 0, deaths = [];
+    ev.forEach(function (x) { if (x.k === "hurt") hurts++; if (x.k === "die") deaths.push(x.id); });
+    return { hurts: hurts, deaths: deaths, events: ev };
+  }
+
+  var API = { DX: DX, DY: DY, KINDS: KINDS, TRICKS: TRICKS, parse: parse, tile: tile, start: start, clone: clone, unitAt: unitAt,
+    won: won, key: key, step: step, trick: trick, strikeTiles: strikeTiles, enemyTurn: enemyTurn, forecast: forecast,
+    spots: spots, aim: aim };
+  if (typeof module !== "undefined" && module.exports) module.exports = API;
+  else root.STILL = API;
+})(this);
+
+</script>
+<script>
+// Generated by select.js. Each par is the proven fewest rounds to clear the floor unhurt with bare hands.
+var FLOORS = {};
+FLOORS[1] = [{"id":"A1-01","tier":1,"par":3,"rows":[".......","..o..##",".......","@.....o","#......","......B","...BB.."]},{"id":"A1-02","tier":1,"par":3,"rows":[".......",".@..o..","..o....",".......","o..A...",".B.B...","#....o."]},{"id":"A1-03","tier":1,"par":4,"rows":["#...o..","..Bo...","....#..","BA#....","..#..@.","...#...","......."]},{"id":"A1-04","tier":1,"par":4,"rows":["..#....",".#...#.",".......","...o...",".A.B...","....##.",".A..o@."]},{"id":"A1-05","tier":1,"par":3,"rows":[".....Bo",".......",".......","...B...","#.o...@",".o....o",".....B."]},{"id":"A1-06","tier":1,"par":4,"rows":["o......","...B.#.",".#.....","...BB.A","#...o.#","@..#...","..o..o."]},{"id":"A1-07","tier":1,"par":5,"rows":[".....@.","....o..",".....o.",".....o.","....o..","B....B#","......."]},{"id":"A1-08","tier":1,"par":4,"rows":["..#...B",".......","....o..","B......","B....#.","#.....@",".#....."]},{"id":"A1-09","tier":2,"par":4,"rows":[".....o.","@#.A..#","..o..o.","#....B.","o..A.A.",".......","....#.."]},{"id":"A1-10","tier":2,"par":4,"rows":[".#..#BA","..B....",".......","...o...","......#","...#...","@...#.."]},{"id":"A1-11","tier":2,"par":4,"rows":["@....#.","...oB.o",".B.....","....B..",".......",".......",".....o."]},{"id":"A1-12","tier":2,"par":4,"rows":["...#.B.","#o...AB",".....#.",".....o.",".#...@.","..B..o.",".o....."]},{"id":"A1-13","tier":2,"par":4,"rows":[".......",".......","#...B..","A.....A",".o.#...",".o....B","@......"]},{"id":"A1-14","tier":2,"par":4,"rows":["...#oo.","...Bo..",".......",".@....B",".#.B...",".....#.","....B.."]},{"id":"A1-15","tier":2,"par":4,"rows":[".....#.",".....A.",".#.#..o","..#.#.B","...A...",".o.....",".....@."]},{"id":"A1-16","tier":2,"par":4,"rows":["..#...B","B......","A...oo.",".......","..o.@#.","......#","......."]},{"id":"A1-17","tier":3,"par":5,"rows":[".......",".@..#..",".......","o..o...","..oo.BB","....A..","..#...."]},{"id":"A1-18","tier":3,"par":4,"rows":[".o.....","...#..B",".....o.","@...#..","....B..",".......",".A...oA"]},{"id":"A1-19","tier":3,"par":4,"rows":[".......",".o.....","......#",".......","....o..","@..AB.B",".....A."]},{"id":"A1-20","tier":3,"par":5,"rows":["....#o.","o.....@",".......","..#....","..#.oBo","...B..#","..B..#."]},{"id":"A1-21","tier":3,"par":5,"rows":["..o#o#o","....A..","@......",".......",".....#.",".......",".#B.A.."]},{"id":"A1-22","tier":3,"par":4,"rows":["#..o.B.",".oB.B..","....o..","......o",".......","#@.....","...A..."]},{"id":"A1-23","tier":3,"par":4,"rows":[".o#....",".......","...#@..","oBB....","...o.B.","..A.#..","......."]},{"id":"A1-24","tier":3,"par":6,"rows":["...A...","...#...","..#....",".o.#.B#",".....o#","B..o..@","..o...."]},{"id":"A1-25","tier":4,"par":5,"rows":["...B..@",".B.....","....Bo.","..#....","....B..","o......","......."]},{"id":"A1-26","tier":4,"par":5,"rows":["...#...",".@o....","......B","...o.##","..B.oB.","....o..","....B.."]},{"id":"A1-27","tier":4,"par":5,"rows":["#o.#.@.",".......","o.....o",".B....o",".......",".A.....","......B"]},{"id":"A1-28","tier":4,"par":4,"rows":[".......",".....@.",".......",".#A....","....#B#","B...o..","A.o...."]},{"id":"A1-29","tier":4,"par":5,"rows":[".B....A","...B.#o",".......","..o..#B","#......",".......","##..@.."]},{"id":"A1-30","tier":4,"par":5,"rows":[".o.....","..B....",".......","#oo....","...@o.#","......A","#BB...."]},{"id":"A1-31","tier":4,"par":8,"rows":["B......","B......","....#..",".....#o",".oB.Bo.","..#....","@.o...."]},{"id":"A1-32","tier":4,"par":5,"rows":["..B....","..##..#",".@.....",".o..A..",".......",".#.o.AB","......o"]},{"id":"A1-33","tier":5,"par":5,"rows":["..B.o.B",".A.o...",".......","....B..","......o",".@o....",".....#."]},{"id":"A1-34","tier":5,"par":5,"rows":["...oA.#","BB.....","......o","......@",".A.o...",".......","......."]},{"id":"A1-35","tier":5,"par":6,"rows":["o.@.o..",".......","..o.B#.","B......",".B.....",".......","..o..B."]},{"id":"A1-36","tier":5,"par":6,"rows":[".......","...##..",".#....@",".#..o..",".....o.","B....o.","A.BB..."]},{"id":"A1-37","tier":5,"par":6,"rows":[".o.....","....@..","..B....",".......","B...AB.",".......","....#.."]},{"id":"A1-38","tier":5,"par":6,"rows":["...B...","..#o#..",".....#.","A..o...","......B","#......",".o@.#.A"]},{"id":"A1-39","tier":5,"par":6,"rows":["...#.@.","...o...",".......","....#..","..o.o..",".......","#A.BA.B"]},{"id":"A1-40","tier":5,"par":6,"rows":["@.....B","..B.o..",".B.....",".......",".......","....#oA","..#...."]}];
+
+if (typeof module !== "undefined" && module.exports) module.exports = FLOORS;
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var C = window.STILL, FL = window.FLOORS || FLOORS, ED = window.STILL_EDITION || "full";
+  var DEMO = ED === "demo";
+  var STORE_URL = "https://kqmigqkqri.itch.io/stillhand";
+  var W = 640, H = 800, T = 76, BX = 54, BY = 132, LET = "URDL";
+  var cv = document.getElementById("c"), cx = cv.getContext("2d"), dpr = 1, scale = 1;
+  var FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+  var COL = { bg: "#101217", panel: "#1b1f28", floorA: "#2a303b", floorB: "#262b35", pillar: "#4b5363", pillarTop: "#606a7c",
+    pit: "#050608", text: "#e9e4d8", dim: "#8d93a1", gold: "#e8c35a", red: "#ff4f4f", hero: "#f1e8d6", good: "#7ed19a" };
+  var KCOL = { B: "#d65a4f", A: "#e0a63c", R: "#b9733e", M: "#9a76dc", W: "#4fa8a8", K: "#7d8798" };
+
+  // ---------------- persistence ----------------
+  var SAVE_KEY = DEMO ? "still.demo.v1" : "still.v1";
+  var save = { best: 0, wins: 0, runs: 0, vow: 0, daily: {}, run: null };
+  try { var raw = localStorage.getItem(SAVE_KEY); if (raw) { var o = JSON.parse(raw); for (var k in o) save[k] = o[k]; } } catch (e) {}
+  function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) {} }
+
+  // ---------------- random ----------------
+  function Rng(s) { this.s = s >>> 0; }
+  Rng.prototype.next = function () { var t = this.s = (this.s + 0x6D2B79F5) >>> 0; t = Math.imul(t ^ t >>> 15, 1 | t); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+  Rng.prototype.int = function (n) { return Math.floor(this.next() * n); };
+
+  // ---------------- run upgrades ----------------
+  var PASSIVES = {
+    ironskin: { name: "Iron Skin", blurb: "+1 heart, and heal 1.", stack: true },
+    secondwind: { name: "Second Wind", blurb: "The first hit you take on each floor does nothing." },
+    quick: { name: "Quick Start", blurb: "Three actions in the first round of every floor." },
+    bramble: { name: "Bramble", blurb: "Every shove-bump deals 2 instead of 1." },
+    calm: { name: "Calm", blurb: "Tricks recharge one round sooner." },
+    mend: { name: "Mend", blurb: "Heal 2 hearts now.", stack: true },
+    meditate: { name: "Meditate", blurb: "+150 score. Offered when there is little else left to give.", stack: true }
+  };
+  var VOWS = [
+    { name: "No Vow", blurb: "The run as it comes." },
+    { name: "Vow of Want", blurb: "Two offers after each floor instead of three." },
+    { name: "Vow of Thirst", blurb: "No healing between acts." },
+    { name: "Vow of Thinness", blurb: "Start with 2 hearts." },
+    { name: "Vow of Patience", blurb: "Tricks start every floor recharging." },
+    { name: "Vow of Stillness", blurb: "No undo." }
+  ];
+  var ACTS = DEMO ? 1 : 3, FLOORS_PER_ACT = 5, ROMAN = ["", "I", "II", "III"];
+  var SLACK = [0, 3, 3, 3];                       // incense: rounds you may spend beyond par before it burns out
+
+  // ---------------- game state ----------------
+  var screen = "title", run = null, L = null, S = null, floorInfo = null, undo = [], fc = null;
+  var trickSel = null, infoEnemy = null, msg = "", msgT = 0, titleVow = Math.min(save.vow, 5);
+  var anim = null, disp = null, pops = [], shake = 0, offers = null, banner = null, result = null, helpPage = 0;
+
+  function today() { var d = new Date(); return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate(); }
+
+  function newRun(seed, vow, daily) {
+    var R = new Rng(seed), picks = [];
+    for (var a = 1; a <= ACTS; a++) for (var t = 1; t <= FLOORS_PER_ACT; t++) {
+      var pool = FL[a].filter(function (f) { return f.tier === t; });
+      picks.push(pool[R.int(pool.length)].id);
+    }
+    var hp = vow >= 3 ? 2 : 3;
+    run = { seed: seed, vow: vow, daily: !!daily, picks: picks, n: 0, hp: hp, maxhp: hp, tricks: [], pas: {}, score: 0,
+      rs: (seed ^ 0x9E3779B9) >>> 0, flawless: 0, atPar: 0, misdirect: 0, rounds: 0 };
+    save.runs++; persist();
+    result = null; offers = null;
+    startFloor();
+  }
+  function floorById(id) { for (var a = 1; a <= 3; a++) if (FL[a]) for (var i = 0; i < FL[a].length; i++) if (FL[a][i].id === id) return FL[a][i]; return null; }
+  function actOf(n) { return Math.floor(n / FLOORS_PER_ACT) + 1; }
+  function startFloor() {
+    floorInfo = floorById(run.picks[run.n]);
+    L = C.parse(floorInfo.rows);
+    S = C.start(L, { hp: run.hp, maxhp: run.maxhp, bump: run.pas.bramble ? 2 : 1, ward: run.pas.secondwind ? 1 : 0 });
+    S.cd = {};
+    var calm = run.pas.calm ? 1 : 0;
+    run.tricks.forEach(function (t) { S.cd[t] = run.vow >= 4 ? Math.max(1, C.TRICKS[t].cd - calm) : 0; });
+    if (run.pas.quick) S.ap = 3;
+    run.floorHurt = false;
+    floorInfo.limit = floorInfo.par + SLACK[actOf(run.n)];
+    undo = []; trickSel = null; infoEnemy = null; queue = [];
+    syncDisp(); refresh();
+    screen = "play";
+    banner = { text: "ACT " + ROMAN[actOf(run.n)] + "  ·  FLOOR " + (run.n % FLOORS_PER_ACT + 1), sub: "PAR " + floorInfo.par + " ROUNDS", t: 1.4 };
+    save.run = JSON.parse(JSON.stringify(run)); persist();
+    sfx("start");
+  }
+  function refresh() { fc = S ? C.forecast(L, S) : null; }
+
+  // ---------------- display model (what is drawn while things animate) ----------------
+  function syncDisp() {
+    disp = { hx: S.hx, hy: S.hy, hp: S.hp, en: {} };
+    S.en.forEach(function (e) { disp.en[e.id] = { t: e.t, x: e.x, y: e.y, hp: e.hp, d: e.d, r: e.r, alpha: 1, sc: 1, ox: 0, oy: 0 }; });
+  }
+
+  // ---------------- actions ----------------
+  // keys pressed while something is still moving wait their turn instead of being lost
+  var queue = [];
+  function later(fn, arg) { if (queue.length < 32) queue.push([fn, arg]); }
+  function act(d) {
+    if (screen !== "play") return;
+    if (anim) return later(act, d);
+    if (S.ap <= 0) { say("No actions left. END the round (Space)."); sfx("deny"); return; }
+    var before = C.clone(S), ev = trickSel ? C.trick(L, S, trickSel, d) : C.step(L, S, d);
+    if (!ev) { sfx("deny"); say(trickSel ? C.TRICKS[trickSel].name + " can't go that way." : "Can't go there."); return; }
+    undo.push(before);
+    if (trickSel) { if (run.pas.calm) S.cd[trickSel] = Math.max(1, S.cd[trickSel] - 1); trickSel = null; }
+    infoEnemy = null;
+    play(ev, function () { refresh(); afterAction(); });
+  }
+  function doUndo() {
+    if (screen !== "play") return;
+    if (anim) return later(doUndo);
+    if (run.vow >= 5) { say("Vow of Stillness: no undo."); sfx("deny"); return; }
+    if (!undo.length) { say("Nothing to undo this round."); sfx("deny"); return; }
+    S = undo.pop(); trickSel = null; syncDisp(); refresh(); sfx("undo");
+  }
+  function endRound() {
+    if (screen !== "play") return;
+    if (anim) return later(endRound);
+    trickSel = null; infoEnemy = null;
+    var hp = S.hp, ev = C.enemyTurn(L, S);
+    undo = [];
+    run.rounds++;
+    // the incense: once the round you just played was the last one it covers, every further round costs a heart
+    if (S.hp > 0 && !C.won(S) && S.round - 1 > floorInfo.limit) { S.hp--; ev.push({ k: "incense", x: S.hx, y: S.hy }); }
+    if (S.hp < hp) run.floorHurt = true;
+    play(ev, function () { refresh(); afterAction(); if (screen === "play") saveMid(); }, true);
+  }
+  function afterAction() {
+    syncDisp();
+    if (S.hp <= 0) return lose();
+    if (C.won(S)) return clearFloor();
+  }
+  function trickButton(i) {
+    if (screen !== "play" || anim) return;
+    var t = run.tricks[i];
+    if (!t) return;
+    if (trickSel === t) { trickSel = null; return; }
+    if (S.cd[t] > 0) { say(C.TRICKS[t].name + " recharges in " + S.cd[t] + " round" + (S.cd[t] > 1 ? "s" : "") + "."); sfx("deny"); return; }
+    if (S.ap <= 0) { say("No actions left this round."); sfx("deny"); return; }
+    trickSel = t; sfx("tick");
+  }
+  function say(s) { msg = s; msgT = 2.4; }
+
+  // ---------------- floor results ----------------
+  function clearFloor() {
+    var rounds = S.round, par = floorInfo.par, flaw = !run.floorHurt, gain = 100 * actOf(run.n);
+    var lines = [["Floor cleared", 100 * actOf(run.n)]];
+    if (flaw) { gain += 50; lines.push(["Unhurt", 50]); run.flawless++; }
+    if (rounds <= par) { gain += 50; lines.push(["At par (" + rounds + "/" + par + ")", 50]); run.atPar++; }
+    if (run.floorMis) { gain += 20 * run.floorMis; lines.push(["Misdirected kills x" + run.floorMis, 20 * run.floorMis]); }
+    run.floorMis = 0;
+    var mult = 1 + 0.2 * run.vow;
+    gain = Math.round(gain * mult);
+    run.score += gain; run.hp = S.hp;
+    sfx("clear");
+    var lastOfAct = run.n % FLOORS_PER_ACT === FLOORS_PER_ACT - 1, last = run.n === ACTS * FLOORS_PER_ACT - 1;
+    result = { lines: lines, gain: gain, mult: mult, rounds: rounds, par: par };
+    run.n++;
+    if (last) { finish(true); return; }
+    if (DEMO && lastOfAct) { finish(true); return; }
+    if (lastOfAct && run.vow < 2) run.hp = run.maxhp;
+    makeOffers();
+    screen = "reward";
+    save.run = JSON.parse(JSON.stringify(run)); save.run.offers = offers; save.run.result = result; persist();
+  }
+  function makeOffers() {
+    var R = new Rng(run.rs), pool = [];
+    Object.keys(C.TRICKS).forEach(function (t) { if (run.tricks.indexOf(t) < 0 && run.tricks.length < 3) pool.push({ kind: "trick", id: t }); });
+    Object.keys(PASSIVES).forEach(function (p) {
+      if (p === "meditate") return;
+      if (p === "mend" && run.hp >= run.maxhp) return;
+      if (p === "ironskin" && run.maxhp >= 6) return;
+      if (!PASSIVES[p].stack && run.pas[p]) return;
+      pool.push({ kind: "passive", id: p });
+    });
+    var n = run.vow >= 1 ? 2 : 3;
+    offers = [];
+    while (offers.length < n && pool.length) offers.push(pool.splice(R.int(pool.length), 1)[0]);
+    while (offers.length < n) offers.push({ kind: "passive", id: "meditate" });
+    run.rs = R.s;
+  }
+  function takeOffer(i) {
+    var o = offers[i];
+    if (!o) return;
+    if (o.kind === "trick") run.tricks.push(o.id);
+    else if (o.id === "ironskin") { run.maxhp++; run.hp = Math.min(run.maxhp, run.hp + 1); }
+    else if (o.id === "mend") run.hp = Math.min(run.maxhp, run.hp + 2);
+    else if (o.id === "meditate") run.score += 150;
+    else run.pas[o.id] = 1;
+    sfx("pick");
+    startFloor();
+  }
+  function lose() { sfx("lose"); finish(false); }
+  function finish(win) {
+    var newBest = run.score > save.best;
+    if (newBest) save.best = run.score;
+    var unlocked = false;
+    if (win && !DEMO) {
+      save.wins++;
+      if (!run.daily && run.vow >= save.vow && save.vow < 5) { save.vow = run.vow + 1; unlocked = true; titleVow = save.vow; }
+    }
+    if (run.daily) { var k = String(run.seed); save.daily[k] = Math.max(save.daily[k] || 0, run.score); }
+    save.run = null; persist();
+    result = result || {};
+    result.final = { win: win, score: run.score, newBest: newBest, unlocked: unlocked, floors: run.n, flawless: run.flawless, atPar: run.atPar, vow: run.vow, daily: run.daily };
+    screen = DEMO && win ? "demoend" : "over";
+  }
+  function continueRun() {
+    if (!save.run) return;
+    run = JSON.parse(JSON.stringify(save.run));
+    if (run.offers) {
+      offers = run.offers; result = run.result; delete run.offers; delete run.result;
+      if (!offers.length) makeOffers();
+      screen = "reward"; return;
+    }
+    var mid = run.mid; delete run.mid;
+    startFloor();
+    // pick up at the start of the round you left, not at the start of the floor
+    if (mid && mid.id === floorInfo.id) {
+      S = mid.S; run.floorHurt = mid.hurt; run.floorMis = mid.mis; banner = null;
+      syncDisp(); refresh(); saveMid();
+    }
+  }
+  function saveMid() {
+    if (!save.run || !S) return;
+    save.run.mid = { id: floorInfo.id, S: C.clone(S), hurt: run.floorHurt, mis: run.floorMis || 0 };
+    persist();
+  }
+
+  // ---------------- animation ----------------
+  function play(ev, done, enemyPhase) {
+    var beats = [];
+    function tween(get, fx, fy, tx, ty, dur) {
+      beats.push({ dur: dur, upd: function (p) { var o = get(); if (!o) return; var q = p < 1 ? (1 - Math.pow(1 - p, 2)) : 1; o.x = fx + (tx - fx) * q; o.y = fy + (ty - fy) * q; } });
+    }
+    ev.forEach(function (x) {
+      var id = x.id;
+      function E() { return disp.en[id]; }
+      switch (x.k) {
+        case "walk": tween(function () { return { set x(v) { disp.hx = v; }, set y(v) { disp.hy = v; } }; }, x.from[0], x.from[1], x.to[0], x.to[1], 90);
+          beats[beats.length - 1].go = function () { sfx("step"); }; break;
+        case "slide": tween(E, x.from[0], x.from[1], x.to[0], x.to[1], 75); beats[beats.length - 1].go = function () { sfx("shove"); }; break;
+        case "march": tween(E, x.from[0], x.from[1], x.to[0], x.to[1], 150); break;
+        case "bump": beats.push({ dur: 110, go: function () { sfx("bump"); shake = Math.max(shake, 4); },
+          upd: function (p) { var e = E(); if (!e) return; var s = Math.sin(p * Math.PI) * 0.22; e.ox = (x.at[0] - e.x) * s; e.oy = (x.at[1] - e.y) * s; if (p >= 1) { e.ox = e.oy = 0; } } }); break;
+        case "strike": beats.push({ dur: enemyPhase ? 260 : 200, go: function () { sfx("strike" + x.t); flashTiles(x.tiles, x.t); } }); break;
+        case "dmg": beats.push({ dur: 0, go: function () { var e = E(); if (e) e.hp -= x.n; pop(x.x, x.y, "-" + x.n, COL.gold); } }); break;
+        case "hurt": beats.push({ dur: 160, go: function () { disp.hp--; pop(x.x, x.y, "-1", COL.red); shake = 10; sfx("hurt"); } }); break;
+        case "incense": beats.push({ dur: 260, go: function () { disp.hp--; pop(x.x, x.y, "INCENSE -1", "#d9a066"); shake = 6; sfx("hurt"); } }); break;
+        case "ward": beats.push({ dur: 160, go: function () { pop(x.x, x.y, "BLOCKED", COL.good); sfx("ward"); } }); break;
+        case "fall": beats.push({ dur: 220, go: function () { sfx("fall"); }, upd: function (p) { var e = E(); if (e) { e.sc = 1 - p * 0.8; e.alpha = 1 - p; } } }); break;
+        case "die": beats.push({ dur: 160, go: function () {
+            if (x.cause !== "bump" && x.cause !== "fall" && x.cause !== "hook" && x.cause !== "palm" && x.cause !== "sweep" && x.cause !== "shove") { run.floorMis = (run.floorMis || 0) + 1; run.misdirect++; pop(x.x, x.y - 0.35, "MISDIRECT", COL.good); }
+            else if (x.cause === "fall") pop(x.x, x.y - 0.35, "FELL", COL.dim);
+            sfx("die"); },
+          upd: function (p) { var e = E(); if (e) e.alpha = Math.min(e.alpha, 1 - p); } }); break;
+        case "aim": beats.push({ dur: 0, go: function () { var e = E(); if (e) { e.d = x.d; e.r = x.r; } } }); break;
+        case "turn": beats.push({ dur: 120, go: function () { var e = E(); if (e) e.d = x.d; sfx("tick"); } }); break;
+        case "swap": beats.push({ dur: 140, go: function () { sfx("swap"); }, upd: function (p) { var e = E(); var q = p; disp.hx = x.a[0] + (x.b[0] - x.a[0]) * q; disp.hy = x.a[1] + (x.b[1] - x.a[1]) * q; if (e) { e.x = x.b[0] + (x.a[0] - x.b[0]) * q; e.y = x.b[1] + (x.a[1] - x.b[1]) * q; } } }); break;
+      }
+    });
+    if (enemyPhase) beats.push({ dur: 120 });
+    anim = { beats: beats, i: 0, t: 0, done: done, started: false, enemy: !!enemyPhase };
+  }
+  var flashes = [];
+  function flashTiles(tiles, t) { tiles.forEach(function (p) { flashes.push({ x: p[0], y: p[1], life: 0.35, max: 0.35, t: t }); }); }
+  function pop(x, y, text, col) { pops.push({ x: x, y: y, text: text, col: col, life: 0.9 }); }
+  function stepAnim(dt) {
+    if (!anim) return;
+    var ms = dt * 1000;
+    while (anim && ms > 0) {
+      var b = anim.beats[anim.i];
+      if (!b) {
+        var d = anim.done; anim = null; if (d) d();
+        if (!anim && queue.length && screen === "play") { var q = queue.shift(); q[0](q[1]); }
+        if (screen !== "play") queue = [];
+        return;
+      }
+      if (!b.started) { b.started = true; if (b.go) b.go(); b.t = 0; }
+      var left = b.dur - b.t, use = Math.min(left, ms);
+      b.t += use; ms -= use;
+      if (b.upd) b.upd(b.dur ? b.t / b.dur : 1);
+      if (b.t >= b.dur) anim.i++;
+      if (b.dur === 0) continue;
+    }
+  }
+
+  // ---------------- sound ----------------
+  var ac = null, muted = false;
+  try { muted = localStorage.getItem("still.mute") === "1"; } catch (e) {}
+  function audio() { if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ac = null; } } if (ac && ac.state === "suspended") ac.resume(); return ac; }
+  function tone(f, dur, type, vol, f2, delay) {
+    var a = audio(); if (!a || muted) return;
+    var t0 = a.currentTime + (delay || 0), o = a.createOscillator(), g = a.createGain();
+    o.type = type || "sine"; o.frequency.setValueAtTime(f, t0);
+    if (f2) o.frequency.exponentialRampToValueAtTime(f2, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol || 0.12, t0 + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(a.destination); o.start(t0); o.stop(t0 + dur + 0.02);
+  }
+  function noise(dur, vol, hp, delay) {
+    var a = audio(); if (!a || muted) return;
+    var n = Math.floor(a.sampleRate * dur), b = a.createBuffer(1, n, a.sampleRate), d = b.getChannelData(0);
+    for (var i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 2);
+    var s = a.createBufferSource(), g = a.createGain(), fl = a.createBiquadFilter();
+    fl.type = "highpass"; fl.frequency.value = hp || 400; s.buffer = b; g.gain.value = vol || 0.15;
+    s.connect(fl); fl.connect(g); g.connect(a.destination); s.start(a.currentTime + (delay || 0));
+  }
+  function sfx(k) {
+    switch (k) {
+      case "step": tone(520, 0.05, "triangle", 0.05); break;
+      case "shove": noise(0.08, 0.12, 300); tone(140, 0.09, "sine", 0.12, 90); break;
+      case "bump": noise(0.12, 0.2, 200); tone(90, 0.14, "square", 0.06, 60); break;
+      case "strikeB": case "strikeK": noise(0.1, 0.18, 150); tone(110, 0.12, "sawtooth", 0.06, 70); break;
+      case "strikeA": tone(1400, 0.12, "triangle", 0.06, 500); noise(0.05, 0.06, 2000); break;
+      case "strikeR": noise(0.25, 0.16, 120); tone(70, 0.25, "sawtooth", 0.07, 50); break;
+      case "strikeM": tone(300, 0.2, "sine", 0.08, 900); noise(0.3, 0.18, 100, 0.12); break;
+      case "strikeW": tone(220, 0.18, "square", 0.05, 110); break;
+      case "hurt": tone(180, 0.3, "sawtooth", 0.12, 60); noise(0.2, 0.15, 500); break;
+      case "ward": tone(880, 0.25, "sine", 0.1, 1320); break;
+      case "fall": tone(500, 0.4, "sine", 0.09, 60); break;
+      case "die": tone(330, 0.12, "triangle", 0.07, 160); break;
+      case "clear": [523, 659, 784, 1047].forEach(function (f, i) { tone(f, 0.25, "triangle", 0.08, 0, i * 0.08); }); break;
+      case "lose": [392, 330, 262, 196].forEach(function (f, i) { tone(f, 0.35, "triangle", 0.08, 0, i * 0.14); }); break;
+      case "pick": tone(660, 0.12, "triangle", 0.08); tone(990, 0.16, "triangle", 0.07, 0, 0.07); break;
+      case "start": tone(392, 0.2, "sine", 0.06); tone(587, 0.3, "sine", 0.06, 0, 0.1); break;
+      case "deny": tone(150, 0.08, "square", 0.04); break;
+      case "undo": tone(700, 0.06, "triangle", 0.05, 400); break;
+      case "tick": tone(900, 0.04, "triangle", 0.05); break;
+      case "swap": tone(400, 0.15, "sine", 0.08, 800); break;
+    }
+  }
+
+  // ---------------- drawing helpers ----------------
+  var buttons = [];
+  function rr(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
+  function text(s, x, y, size, col, align, weight) { cx.font = (weight || 600) + " " + size + "px " + FONT; cx.fillStyle = col || COL.text; cx.textAlign = align || "left"; cx.textBaseline = "middle"; cx.fillText(s, x, y); }
+  function wrap(s, x, y, maxW, size, col, lh, align) {
+    cx.font = "500 " + size + "px " + FONT; var words = s.split(" "), line = "", yy = y;
+    for (var i = 0; i < words.length; i++) {
+      var test = line ? line + " " + words[i] : words[i];
+      if (cx.measureText(test).width > maxW && line) { text(line, x, yy, size, col, align, 500); line = words[i]; yy += lh; } else line = test;
+    }
+    if (line) text(line, x, yy, size, col, align, 500);
+    return yy + lh;
+  }
+  function button(x, y, w, h, label, fn, o) {
+    o = o || {};
+    var hot = hover && hover.x >= x && hover.x <= x + w && hover.y >= y && hover.y <= y + h;
+    rr(x, y, w, h, 10);
+    cx.fillStyle = o.disabled ? "#20242c" : o.on ? "#3c3424" : hot ? "#323847" : (o.fill || "#272c37"); cx.fill();
+    cx.lineWidth = o.on ? 2.5 : 1.5; cx.strokeStyle = o.on ? COL.gold : o.disabled ? "#2c313b" : (o.stroke || "#3d4453"); cx.stroke();
+    text(label, x + w / 2, y + h / 2 + (o.sub ? -9 : 0), o.size || 18, o.disabled ? "#5b606c" : (o.col || COL.text), "center", 700);
+    if (o.sub) text(o.sub, x + w / 2, y + h / 2 + 13, 12, o.disabled ? "#4b505b" : COL.dim, "center", 500);
+    if (!o.disabled || o.always) buttons.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+  function heart(x, y, s, full) {
+    cx.save(); cx.translate(x, y); cx.scale(s / 20, s / 20);
+    cx.beginPath(); cx.moveTo(0, 6); cx.bezierCurveTo(-10, -2, -8, -11, 0, -5); cx.bezierCurveTo(8, -11, 10, -2, 0, 6); cx.closePath();
+    cx.fillStyle = full ? COL.red : "#3a2a2e"; cx.fill(); cx.restore();
+  }
+  function tx(x) { return BX + x * T; } function ty(y) { return BY + y * T; }
+
+  // ---------------- board drawing ----------------
+  function drawBoard() {
+    var x, y, t;
+    rr(BX - 8, BY - 8, L.w * T + 16, L.h * T + 16, 14); cx.fillStyle = "#161920"; cx.fill();
+    for (y = 0; y < L.h; y++) for (x = 0; x < L.w; x++) {
+      t = C.tile(L, x, y);
+      var px = tx(x), py = ty(y);
+      if (t === "o") {
+        cx.fillStyle = COL.pit; cx.fillRect(px, py, T, T);
+        var g = cx.createRadialGradient(px + T / 2, py + T / 2, 4, px + T / 2, py + T / 2, T * 0.62);
+        g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(70,80,100,0.35)");
+        cx.fillStyle = g; cx.fillRect(px, py, T, T);
+        cx.strokeStyle = "rgba(120,130,150,0.45)"; cx.lineWidth = 2; rr(px + 5, py + 5, T - 10, T - 10, 14); cx.stroke();
+        continue;
+      }
+      cx.fillStyle = (x + y) % 2 ? COL.floorA : COL.floorB; cx.fillRect(px, py, T, T);
+      // worn stone: a few fixed flecks per tile
+      var hsh = Math.imul(x + 11, 73856093) ^ Math.imul(y + 7, 19349663);
+      cx.fillStyle = "rgba(0,0,0,0.16)";
+      for (var f = 0; f < 4; f++) { hsh = Math.imul(hsh ^ (hsh >>> 13), 1274126177); cx.fillRect(px + 6 + ((hsh >>> 3) & 63), py + 6 + ((hsh >>> 11) & 63), 2 + (hsh & 3), 2); }
+      cx.strokeStyle = "rgba(0,0,0,0.25)"; cx.lineWidth = 1; cx.strokeRect(px + 0.5, py + 0.5, T - 1, T - 1);
+      if (t === "#") {
+        rr(px + 6, py + 10, T - 12, T - 14, 8); cx.fillStyle = "#1f232b"; cx.fill();
+        rr(px + 6, py + 4, T - 12, T - 16, 8); cx.fillStyle = COL.pillar; cx.fill();
+        rr(px + 12, py + 9, T - 24, T - 30, 6); cx.fillStyle = COL.pillarTop; cx.fill();
+      }
+    }
+  }
+  function drawIntents() {
+    if (anim && anim.enemy) return;
+    var heat = {};
+    S.en.forEach(function (e, i) {
+      var tiles = C.strikeTiles(L, S, e);
+      tiles.forEach(function (p) {
+        var k = p[0] + "," + p[1];
+        heat[k] = heat[k] || []; heat[k].push(i + 1);
+      });
+      // a thin line from the enemy toward its strike
+      if (e.t === "A" || e.t === "R") {
+        var last = tiles[tiles.length - 1];
+        if (last) {
+          cx.strokeStyle = e.t === "A" ? "rgba(255,190,90,0.75)" : "rgba(255,120,70,0.75)"; cx.lineWidth = 3; cx.setLineDash([7, 6]);
+          cx.beginPath(); cx.moveTo(tx(e.x) + T / 2, ty(e.y) + T / 2); cx.lineTo(tx(last[0]) + T / 2, ty(last[1]) + T / 2); cx.stroke(); cx.setLineDash([]);
+        }
+      }
+    });
+    for (var k in heat) {
+      var xy = k.split(","), px = tx(+xy[0]), py = ty(+xy[1]), pitTile = C.tile(L, +xy[0], +xy[1]) === "o";
+      if (!pitTile) { cx.fillStyle = "rgba(255,60,60,0.20)"; cx.fillRect(px + 2, py + 2, T - 4, T - 4); }
+      cx.strokeStyle = "rgba(255,80,80,0.85)"; cx.lineWidth = 2; cx.strokeRect(px + 3, py + 3, T - 6, T - 6);
+      text(heat[k].join(" "), px + 7, py + 13, 13, "#ffb3b3", "left", 800);
+    }
+  }
+  function drawHero() {
+    var px = tx(disp.hx) + T / 2, py = ty(disp.hy) + T / 2;
+    cx.fillStyle = "rgba(0,0,0,0.35)"; cx.beginPath(); cx.ellipse(px, py + 22, 22, 7, 0, 0, 7); cx.fill();
+    cx.fillStyle = COL.hero; cx.beginPath(); cx.arc(px, py + 4, 22, 0, 7); cx.fill();
+    cx.fillStyle = "#c9b994"; cx.fillRect(px - 21, py + 5, 42, 5);
+    cx.fillStyle = "#f6efe2"; cx.beginPath(); cx.arc(px, py - 14, 11, 0, 7); cx.fill();
+    cx.strokeStyle = "#5c5446"; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(px - 6, py - 14); cx.lineTo(px - 2, py - 14); cx.moveTo(px + 2, py - 14); cx.lineTo(px + 6, py - 14); cx.stroke();
+    // open palms
+    cx.fillStyle = "#f6efe2"; cx.beginPath(); cx.arc(px - 22, py + 2, 6, 0, 7); cx.arc(px + 22, py + 2, 6, 0, 7); cx.fill();
+    if (S.ward > 0 && !anim) {          // Second Wind: a pale blue double ring (green rings mean an enemy is about to die)
+      cx.strokeStyle = "rgba(140,196,228,0.75)"; cx.lineWidth = 2; cx.beginPath(); cx.arc(px, py, 34, 0, 7); cx.stroke();
+      cx.beginPath(); cx.arc(px, py, 29, 0, 7); cx.stroke();
+    }
+    if (fc && fc.hurts > 0 && !anim) {
+      var a = 0.55 + 0.45 * Math.sin(now * 8);
+      cx.strokeStyle = "rgba(255,70,70," + a + ")"; cx.lineWidth = 4; cx.strokeRect(tx(S.hx) + 4, ty(S.hy) + 4, T - 8, T - 8);
+      text("-" + Math.min(fc.hurts, S.hp), tx(S.hx) + T - 14, ty(S.hy) + 14, 16, COL.red, "center", 900);
+    }
+  }
+  function drawEnemy(id, e) {
+    if (e.alpha <= 0) return;
+    var px = tx(e.x + e.ox) + T / 2, py = ty(e.y + e.oy) + T / 2, col = KCOL[e.t], s = e.sc;
+    cx.save(); cx.globalAlpha = Math.max(0, e.alpha); cx.translate(px, py); cx.scale(s, s);
+    cx.fillStyle = "rgba(0,0,0,0.35)"; cx.beginPath(); cx.ellipse(0, 24, 24, 7, 0, 0, 7); cx.fill();
+    // facing wedge
+    if (e.t !== "W") {
+      cx.save(); cx.rotate(e.d * Math.PI / 2);
+      cx.fillStyle = "#ffe3d8"; cx.beginPath(); cx.moveTo(0, -36); cx.lineTo(-10, -24); cx.lineTo(10, -24); cx.closePath(); cx.fill();
+      cx.restore();
+    }
+    cx.fillStyle = col;
+    if (e.t === "B") { rr(-22, -20, 44, 44, 10); cx.fill(); }
+    else if (e.t === "A") { cx.beginPath(); cx.moveTo(0, -24); cx.lineTo(22, 20); cx.lineTo(-22, 20); cx.closePath(); cx.fill(); }
+    else if (e.t === "R") { cx.beginPath(); cx.ellipse(0, 2, 26, 21, 0, 0, 7); cx.fill(); }
+    else if (e.t === "M") { cx.beginPath(); for (var i = 0; i < 6; i++) { var a = i * Math.PI / 3 + Math.PI / 6; cx.lineTo(Math.cos(a) * 24, Math.sin(a) * 24 + 2); } cx.closePath(); cx.fill(); }
+    else if (e.t === "W") { cx.beginPath(); cx.moveTo(0, -24); cx.lineTo(24, 2); cx.lineTo(0, 26); cx.lineTo(-24, 2); cx.closePath(); cx.fill(); }
+    else if (e.t === "K") { rr(-24, -22, 48, 48, 4); cx.fill(); cx.fillStyle = "#566070"; cx.fillRect(-24, 14, 48, 12); }
+    // face glyph
+    cx.fillStyle = "rgba(20,16,14,0.85)";
+    cx.save(); if (e.t !== "W") cx.rotate(e.d * Math.PI / 2);
+    cx.fillRect(-9, -8, 6, 4); cx.fillRect(3, -8, 6, 4);
+    cx.restore();
+    cx.restore();
+    // hp pips
+    for (var h = 0; h < C.KINDS[e.t].hp; h++) {
+      cx.fillStyle = h < e.hp ? "#f4ecdc" : "rgba(255,255,255,0.15)";
+      cx.fillRect(px - 15 + h * 11, py + 30, 8, 5);
+    }
+  }
+  function drawUnits() {
+    var order = {};
+    S.en.forEach(function (e, i) { order[e.id] = i + 1; });
+    for (var id in disp.en) {
+      var e = disp.en[id];
+      drawEnemy(id, e);
+      if (order[id] && !anim && e.alpha > 0) {
+        var px = tx(e.x) + T - 15, py = ty(e.y) + 15;
+        cx.fillStyle = "#14161c"; cx.beginPath(); cx.arc(px, py, 10, 0, 7); cx.fill();
+        cx.strokeStyle = "#ff8a8a"; cx.lineWidth = 1.5; cx.stroke();
+        text(String(order[id]), px, py + 1, 12, "#ffd0d0", "center", 800);
+        if (fc && fc.deaths.indexOf(+id) >= 0) {
+          cx.strokeStyle = COL.good; cx.lineWidth = 3; cx.setLineDash([5, 4]);
+          cx.beginPath(); cx.arc(tx(e.x) + T / 2, ty(e.y) + T / 2, 33, 0, 7); cx.stroke(); cx.setLineDash([]);
+        }
+      }
+    }
+    drawHero();
+  }
+  function drawTrickTargets() {
+    if (!trickSel || anim) return;
+    for (var d = 0; d < 4; d++) {
+      var T2 = C.clone(S);
+      if (!C.trick(L, T2, trickSel, d)) continue;
+      var x = S.hx + C.DX[d], y = S.hy + C.DY[d];
+      if (x < 0 || y < 0 || x >= L.w || y >= L.h) continue;
+      cx.fillStyle = "rgba(232,195,90,0.25)"; cx.fillRect(tx(x) + 6, ty(y) + 6, T - 12, T - 12);
+      cx.save(); cx.translate(tx(x) + T / 2, ty(y) + T / 2); cx.rotate(d * Math.PI / 2);
+      cx.fillStyle = COL.gold; cx.beginPath(); cx.moveTo(0, -14); cx.lineTo(-11, 6); cx.lineTo(11, 6); cx.closePath(); cx.fill(); cx.restore();
+    }
+  }
+
+  // ---------------- screens ----------------
+  var now = 0, hover = null;
+  function drawPlay() {
+    var sx = shake ? (Math.random() - 0.5) * shake : 0, sy = shake ? (Math.random() - 0.5) * shake : 0;
+    // top bar
+    text("ACT " + ROMAN[actOf(run.n)] + " · FLOOR " + (run.n % FLOORS_PER_ACT + 1) + "/" + FLOORS_PER_ACT, 24, 30, 18, COL.text, "left", 800);
+    text((run.daily ? "DAILY · " : "") + (run.vow ? VOWS[run.vow].name.toUpperCase() : "STILLHAND"), 24, 56, 12, COL.dim, "left", 600);
+    for (var i = 0; i < run.maxhp; i++) heart(W - 30 - i * 26, 30, 22, i < disp.hp);
+    text("SCORE " + run.score, W - 24, 58, 14, COL.gold, "right", 700);
+    // round line
+    var over = S.round > floorInfo.par;
+    text("ROUND " + S.round, 24, 100, 20, COL.text, "left", 800);
+    text("PAR " + floorInfo.par, 132, 101, 15, over ? COL.dim : COL.gold, "left", 700);
+    var left = floorInfo.limit - S.round + 1;
+    text(left > 0 ? "INCENSE " + left : "BURNT OUT", 206, 101, 13, left > 1 ? "#d9a066" : COL.red, "left", 800);
+    for (var a = 0; a < Math.max(S.ap, S.apMax); a++) {
+      cx.fillStyle = a < S.ap ? COL.gold : "#363b47"; cx.beginPath(); cx.arc(340 + a * 22, 100, 7, 0, 7); cx.fill();
+    }
+    // the incense stick over the board: burns from the right as the rounds pass
+    var frac = Math.max(0, Math.min(1, (floorInfo.limit - S.round + 1) / floorInfo.limit)), sx0 = BX, sw = L.w * T;
+    cx.fillStyle = "#3a3530"; cx.fillRect(sx0, 117, sw, 3);
+    cx.fillStyle = "#8a5a3a"; cx.fillRect(sx0, 116, sw * frac, 5);
+    if (frac > 0) {
+      var ex = sx0 + sw * frac, gl = cx.createRadialGradient(ex, 118, 0, ex, 118, 12);
+      gl.addColorStop(0, "rgba(255,170,80,0.9)"); gl.addColorStop(1, "rgba(255,120,40,0)");
+      cx.fillStyle = gl; cx.beginPath(); cx.arc(ex, 118, 12, 0, 7); cx.fill();
+      cx.fillStyle = "#ffcf7a"; cx.beginPath(); cx.arc(ex, 118, 3, 0, 7); cx.fill();
+    }
+    cx.save(); cx.translate(sx, sy);
+    drawBoard();
+    drawIntents();
+    drawTrickTargets();
+    drawUnits();
+    flashes.forEach(function (f) {
+      var a = f.life / f.max;
+      cx.fillStyle = f.t === "M" ? "rgba(255,170,60," + (0.6 * a) + ")" : "rgba(255,70,70," + (0.6 * a) + ")";
+      cx.fillRect(tx(f.x) + 2, ty(f.y) + 2, T - 4, T - 4);
+    });
+    pops.forEach(function (p) {
+      cx.globalAlpha = Math.min(1, p.life * 2);
+      text(p.text, tx(p.x) + T / 2, ty(p.y) + T / 2 - 20 - (0.9 - p.life) * 30, p.text.length > 3 ? 14 : 22, p.col, "center", 900);
+      cx.globalAlpha = 1;
+    });
+    cx.restore();
+    // bottom: info, tricks, undo, end
+    var y0 = BY + L.h * T + 18;
+    var info = "";
+    if (msgT > 0) info = msg;
+    else if (trickSel) info = C.TRICKS[trickSel].name + ": " + C.TRICKS[trickSel].blurb + " Pick a direction.";
+    else if (infoEnemy) info = C.KINDS[infoEnemy.t].name + " (" + infoEnemy.hp + "/" + C.KINDS[infoEnemy.t].hp + "): " + C.KINDS[infoEnemy.t].blurb + (C.KINDS[infoEnemy.t].shove ? "" : "");
+    else if (fc && fc.hurts) info = "Warning: you will be hit if you end the round here.";
+    else if (floorInfo.limit - S.round + 1 <= 0) info = "The incense is out: every round now costs a heart.";
+    else if (floorInfo.limit - S.round + 1 === 1) info = "Last round of incense. After this, every round costs a heart.";
+    else if (S.ap === 0) info = "Out of actions. END the round when ready.";
+    else info = "Step or shove. Red tiles are struck when you end the round.";
+    wrap(info, W / 2, y0, W - 60, 14, msgT > 0 ? COL.gold : (fc && fc.hurts && !infoEnemy && !trickSel ? "#ff9a9a" : COL.dim), 18, "center");
+    var by = y0 + 30;
+    for (var t = 0; t < 3; t++) {
+      var name = run.tricks[t], bx = 20 + t * 122;
+      if (!name) { button(bx, by, 112, 64, "—", null, { disabled: true, sub: "no trick" }); continue; }
+      var cd = S.cd[name] || 0;
+      (function (ti) {
+        button(bx, by, 112, 64, (ti + 1) + " " + C.TRICKS[name].name.toUpperCase(), function () { trickButton(ti); },
+          { on: trickSel === name, disabled: cd > 0, always: true, sub: cd > 0 ? "ready in " + cd : "ready", size: 15 });
+      })(t);
+    }
+    button(388, by, 100, 64, "UNDO", doUndo, { disabled: run.vow >= 5 || !undo.length, always: true, sub: run.vow >= 5 ? "vow" : "Z", size: 16 });
+    button(498, by, 122, 64, "END", endRound, { on: S.ap === 0 && !anim, sub: "Space", size: 20, fill: "#3a2626", stroke: "#7a3b3b" });
+    if (banner) {
+      var a2 = Math.min(1, banner.t * 2);
+      cx.globalAlpha = a2;
+      rr(60, BY + 3 * T - 10, W - 120, 96, 14); cx.fillStyle = "rgba(16,18,23,0.92)"; cx.fill();
+      text(banner.text, W / 2, BY + 3 * T + 24, 26, COL.text, "center", 800);
+      text(banner.sub, W / 2, BY + 3 * T + 56, 15, COL.gold, "center", 700);
+      cx.globalAlpha = 1;
+    }
+  }
+
+  function backdrop(ringY, ringR) {
+    var g = cx.createLinearGradient(0, 0, 0, H); g.addColorStop(0, "#1a1d26"); g.addColorStop(1, "#0c0e12"); cx.fillStyle = g; cx.fillRect(0, 0, W, H);
+    // an ink ring, brushed: thick on one side, open at the top right
+    cx.save(); cx.translate(W / 2, ringY);
+    for (var i = 0; i < 64; i++) {
+      var a0 = -0.9 + i * 0.085, a1 = a0 + 0.1, w = 3 + 10 * Math.sin(i / 63 * Math.PI);
+      cx.strokeStyle = "rgba(232,195,90," + (0.05 + 0.07 * Math.sin(i / 63 * Math.PI)) + ")"; cx.lineWidth = w;
+      cx.beginPath(); cx.arc(0, 0, ringR, a0, a1); cx.stroke();
+    }
+    cx.restore();
+    // incense smoke
+    for (var k = 0; k < 3; k++) {
+      cx.strokeStyle = "rgba(220,215,200," + (0.05 - k * 0.012) + ")"; cx.lineWidth = 6 - k * 1.5;
+      cx.beginPath();
+      for (var yy = H; yy > 0; yy -= 8) { var xx = 40 + k * 14 + Math.sin(yy * 0.018 + now * 0.7 + k) * (18 + (H - yy) * 0.03); if (yy === H) cx.moveTo(xx, yy); else cx.lineTo(xx, yy); }
+      cx.stroke();
+    }
+  }
+  function drawTitle() {
+    backdrop(250, 150);
+    var t = now;
+    text("STILLHAND", W / 2, 128, 64, COL.text, "center", 900);
+    text("Never strike. Let them hit each other.", W / 2, 180, 18, COL.gold, "center", 600);
+    // a little scene on a loop: two Brutes wind up, you step out from between them, they punch each other
+    var cy0 = 292, ph = (t % 3) / 3, duck = ph > 0.35 && ph < 0.85 ? Math.min(1, (ph - 0.35) * 8) : ph >= 0.85 ? Math.max(0, 1 - (ph - 0.85) * 8) : 0;
+    var lunge = ph > 0.5 && ph < 0.7 ? Math.sin((ph - 0.5) / 0.2 * Math.PI) : 0;
+    for (var gx = -3; gx <= 3; gx++) { cx.fillStyle = (gx + 7) % 2 ? "rgba(42,48,59,0.35)" : "rgba(30,34,42,0.35)"; cx.fillRect(W / 2 + gx * 56 - 28, cy0 - 28, 56, 56); cx.fillRect(W / 2 + gx * 56 - 28, cy0 + 28, 56, 56); }
+    [[-1, 1], [1, 3]].forEach(function (p) {
+      cx.save(); cx.translate(W / 2 + p[0] * (112 - lunge * 44), cy0 + Math.sin(t * 3 + p[0]) * 2);
+      cx.fillStyle = KCOL.B; rr(-22, -20, 44, 44, 10); cx.fill();
+      cx.fillStyle = "rgba(20,16,14,0.85)"; cx.fillRect(-9 * p[0] - 3, -8, 6, 4); cx.fillRect(3 * p[0] - 3, -8, 6, 4);
+      cx.rotate(p[1] * Math.PI / 2); cx.fillStyle = "#ffe3d8"; cx.beginPath(); cx.moveTo(0, -36); cx.lineTo(-10, -24); cx.lineTo(10, -24); cx.closePath(); cx.fill();
+      cx.restore();
+    });
+    if (lunge > 0.9) { cx.fillStyle = "rgba(255,90,80,0.5)"; cx.beginPath(); cx.arc(W / 2, cy0, 26, 0, 7); cx.fill(); text("-2", W / 2 - 40, cy0 - 30, 18, COL.gold, "center", 900); text("-2", W / 2 + 40, cy0 - 30, 18, COL.gold, "center", 900); }
+    var hy = cy0 + duck * 56;
+    cx.fillStyle = "rgba(0,0,0,0.35)"; cx.beginPath(); cx.ellipse(W / 2, hy + 22, 22, 7, 0, 0, 7); cx.fill();
+    cx.fillStyle = COL.hero; cx.beginPath(); cx.arc(W / 2, hy + 4, 22, 0, 7); cx.fill();
+    cx.fillStyle = "#c9b994"; cx.fillRect(W / 2 - 21, hy + 5, 42, 5);
+    cx.fillStyle = "#f6efe2"; cx.beginPath(); cx.arc(W / 2, hy - 14, 11, 0, 7); cx.fill();
+    cx.beginPath(); cx.arc(W / 2 - 22, hy + 2, 6, 0, 7); cx.arc(W / 2 + 22, hy + 2, 6, 0, 7); cx.fill();
+    var y = 392;
+    if (save.run) { button(170, y, 300, 56, "CONTINUE RUN", continueRun, { sub: "floor " + (save.run.n + 1) + " · score " + save.run.score, col: COL.gold }); y += 68; }
+    button(170, y, 300, 56, save.run ? "NEW RUN" : "START A RUN", function () { newRun((Math.random() * 4294967296) >>> 0, DEMO ? 0 : titleVow, false); }); y += 68;
+    
+    button(170, y, 300, 50, "HOW TO PLAY", function () { screen = "help"; helpPage = 0; }); y += 62;
+    text("Best " + save.best + "  ·  Runs " + save.runs + (DEMO ? "" : "  ·  Wins " + save.wins), W / 2, H - 70, 14, COL.dim, "center", 600);
+    text("FREE DEMO · ACT I", W / 2, H - 44, 13, COL.gold, "center", 700);
+    button(W - 64, H - 56, 48, 40, muted ? "♪×" : "♪", function () { muted = !muted; try { localStorage.setItem("still.mute", muted ? "1" : "0"); } catch (e) {} }, { size: 16 });
+  }
+
+  var HELP = [
+    ["You never strike.", "Step with the arrow keys, WASD or a swipe. Step into an enemy to shove it one tile. You get two actions a round, then press END."],
+    ["Red tiles get hit.", "When you end the round, every enemy strikes the tiles marked in red, in the numbered order. Then they move and aim again."],
+    ["Strikes travel with their owner.", "An enemy's strike is fixed to its body. Shove a Brute one tile and its punch lands one tile over - maybe on another enemy."],
+    ["Other ways to win.", "Shoved into a pillar, the wall or another enemy: 1 damage. Into a pit: gone. A green ring means that enemy will die this round."],
+    ["Every floor is proven.", "A program checked every possible line of play: each floor can be cleared without being hit once, using only steps and shoves. PAR is the fewest rounds that takes."],
+    ["The incense burns.", "Each floor gives you par plus a few rounds of incense. Once it is out, every round costs a heart. Undo anything until you end the round."],
+    [DEMO ? "A run is five floors here." : "A run is fifteen floors.", "Clear a floor to choose a trick or a blessing. Lose every heart and the run is over."]
+  ];
+  function drawHelp() {
+    backdrop(-400, 10);
+    function leave() { screen = run && helpFromPlay ? "play" : "title"; helpFromPlay = false; }
+    if (helpPage === 0) {
+      text("HOW TO PLAY", W / 2, 50, 26, COL.text, "center", 900);
+      var y = 100;
+      HELP.forEach(function (h) { text(h[0], 40, y, 18, COL.gold, "left", 800); y = wrap(h[1], 40, y + 26, W - 80, 15, COL.text, 20, "left") + 12; });
+      button(60, H - 76, 240, 52, "ENEMIES  >", function () { helpPage = 1; sfx("tick"); });
+      button(340, H - 76, 240, 52, "BACK", leave);
+      return;
+    }
+    text("ENEMIES", W / 2, 50, 26, COL.text, "center", 900);
+    var kinds = DEMO ? ["B", "A"] : ["B", "A", "R", "M", "W", "K"], yy = 110;
+    kinds.forEach(function (k) {
+      cx.save(); cx.translate(70, yy + 14); cx.scale(0.9, 0.9); drawEnemyIcon(k); cx.restore();
+      text(C.KINDS[k].name + "  ·  " + C.KINDS[k].hp + " HP" + (C.KINDS[k].speed ? "  ·  moves " + C.KINDS[k].speed : ""), 120, yy, 17, KCOL[k], "left", 800);
+      wrap(C.KINDS[k].blurb, 120, yy + 24, W - 160, 14, COL.text, 18, "left");
+      yy += 84;
+    });
+    if (DEMO) text("Four more enemies wait in Acts II and III of the full game.", W / 2, yy + 10, 14, COL.dim, "center", 600);
+    text("Keys: arrows / WASD step · Space ends the round · Z undo · 1-3 tricks", W / 2, H - 112, 13, COL.dim, "center", 600);
+    button(60, H - 76, 240, 52, "<  RULES", function () { helpPage = 0; sfx("tick"); });
+    button(340, H - 76, 240, 52, "BACK", leave);
+  }
+  var helpFromPlay = false;
+  function drawEnemyIcon(t) { drawEnemyShape(t); }
+  function drawEnemyShape(t) {
+    cx.fillStyle = KCOL[t];
+    if (t === "B") { rr(-22, -20, 44, 44, 10); cx.fill(); }
+    else if (t === "A") { cx.beginPath(); cx.moveTo(0, -24); cx.lineTo(22, 20); cx.lineTo(-22, 20); cx.closePath(); cx.fill(); }
+    else if (t === "R") { cx.beginPath(); cx.ellipse(0, 2, 26, 21, 0, 0, 7); cx.fill(); }
+    else if (t === "M") { cx.beginPath(); for (var i = 0; i < 6; i++) { var a = i * Math.PI / 3 + Math.PI / 6; cx.lineTo(Math.cos(a) * 24, Math.sin(a) * 24 + 2); } cx.closePath(); cx.fill(); }
+    else if (t === "W") { cx.beginPath(); cx.moveTo(0, -24); cx.lineTo(24, 2); cx.lineTo(0, 26); cx.lineTo(-24, 2); cx.closePath(); cx.fill(); }
+    else if (t === "K") { rr(-24, -22, 48, 48, 4); cx.fill(); }
+  }
+
+  function drawReward() {
+    backdrop(-400, 10);
+    var est = 110 + (result ? result.lines.length * 26 + (result.mult > 1 ? 26 : 0) + 50 : 0) + (run.n % FLOORS_PER_ACT === 0 ? 34 : 0) + 22 + 290;
+    var top = Math.max(0, Math.floor((H - est) / 2));
+    cx.save(); cx.translate(0, top);
+    text("FLOOR CLEARED", W / 2, 60, 30, COL.text, "center", 900);
+    var y = 110;
+    if (result) {
+      result.lines.forEach(function (l) { text(l[0], 150, y, 16, COL.text, "left", 600); text("+" + l[1], W - 150, y, 16, COL.gold, "right", 700); y += 26; });
+      if (result.mult > 1) { text("Vow bonus", 150, y, 16, COL.text, "left", 600); text("x" + result.mult.toFixed(1), W - 150, y, 16, COL.gold, "right", 700); y += 26; }
+      text("Score " + run.score, W / 2, y + 12, 20, COL.gold, "center", 800); y += 50;
+    }
+    var lastAct = run.n % FLOORS_PER_ACT === 0;
+    if (lastAct) { text("ACT " + ROMAN[actOf(run.n)] + " BEGINS" + (run.vow < 2 ? " · HEARTS RESTORED" : ""), W / 2, y, 15, COL.good, "center", 800); y += 34; }
+    text("Choose one", W / 2, y, 16, COL.dim, "center", 700); y += 22;
+    var n = offers.length, cw = 186, gap = 14, x0 = (W - (n * cw + (n - 1) * gap)) / 2;
+    offers.forEach(function (o, i) {
+      var x = x0 + i * (cw + gap), def = o.kind === "trick" ? C.TRICKS[o.id] : PASSIVES[o.id];
+      var hot = hover && hover.x >= x && hover.x <= x + cw && hover.y >= y + top && hover.y <= y + top + 250;
+      rr(x, y, cw, 250, 14); cx.fillStyle = hot ? "#2c3240" : "#232833"; cx.fill();
+      cx.strokeStyle = o.kind === "trick" ? COL.gold : "#6aa6c8"; cx.lineWidth = 2; cx.stroke();
+      text(o.kind === "trick" ? "TRICK" : "BLESSING", x + cw / 2, y + 24, 12, o.kind === "trick" ? COL.gold : "#8cc4e4", "center", 800);
+      text(def.name, x + cw / 2, y + 58, 22, COL.text, "center", 800);
+      wrap(def.blurb, x + cw / 2, y + 100, cw - 26, 14, COL.text, 19, "center");
+      if (o.kind === "trick") text("1 action · recharge " + def.cd, x + cw / 2, y + 222, 12, COL.dim, "center", 600);
+      text("[" + (i + 1) + "]", x + cw / 2, y + 240, 11, COL.dim, "center", 600);
+      (function (ii) { buttons.push({ x: x, y: y + top, w: cw, h: 250, fn: function () { takeOffer(ii); } }); })(i);
+    });
+    y += 270;
+    text("Hearts " + run.hp + "/" + run.maxhp + "   ·   Tricks " + (run.tricks.length ? run.tricks.map(function (t) { return C.TRICKS[t].name; }).join(", ") : "none"), W / 2, y + 10, 13, COL.dim, "center", 600);
+    cx.restore();
+  }
+
+  function drawOver() {
+    backdrop(250, 92);
+    var f = result.final;
+    text(f.win ? "THE TEMPLE IS STILL" : "YOUR HANDS FALL", W / 2, 120, 32, f.win ? COL.gold : COL.text, "center", 900);
+    text(f.win ? "Run complete" + (f.vow ? " under the " + VOWS[f.vow].name : "") : "Reached floor " + (f.floors + 1) + " of " + (ACTS * FLOORS_PER_ACT), W / 2, 162, 16, COL.dim, "center", 600);
+    text(String(f.score), W / 2, 250, 64, COL.gold, "center", 900);
+    text(f.newBest ? "NEW BEST" : "best " + save.best, W / 2, 300, 15, f.newBest ? COL.good : COL.dim, "center", 800);
+    text("Floors unhurt " + f.flawless + "   ·   At par " + f.atPar + "   ·   Misdirected kills " + run.misdirect, W / 2, 350, 14, COL.text, "center", 600);
+    if (f.daily) text("Daily run " + run.seed + " · today's best " + save.daily[String(run.seed)], W / 2, 380, 14, COL.dim, "center", 600);
+    if (f.unlocked) text("Unlocked: " + VOWS[save.vow].name + " - " + VOWS[save.vow].blurb, W / 2, 410, 14, COL.good, "center", 700);
+    button(170, 470, 300, 56, "NEW RUN", function () { newRun((Math.random() * 4294967296) >>> 0, DEMO ? 0 : titleVow, false); });
+    button(170, 538, 300, 50, "TITLE", function () { screen = "title"; });
+  }
+  
+  function drawDemoEnd() {
+    backdrop(110, 90);
+    text("ACT I CLEARED", W / 2, 110, 34, COL.gold, "center", 900);
+    text("Demo complete · score " + result.final.score + (result.final.newBest ? " (new best)" : ""), W / 2, 152, 16, COL.dim, "center", 600);
+    var y = 210;
+    ["The full game goes on:", "- Acts II and III: fifteen floors a run",
+     "- Rams, Mortars, Wardens and Anchors", "- Six tricks and six blessings to build a run around",
+     "- Five Vows that make each win harder", "- A Daily run with the same floors for everyone",
+     "- 120 floors, every one proven clearable unhurt"].forEach(function (s, i) {
+      text(s, i ? 120 : W / 2, y, i ? 16 : 18, i ? COL.text : COL.gold, i ? "left" : "center", i ? 600 : 800); y += i ? 30 : 40;
+    });
+    button(140, y + 30, 360, 64, "GET THE FULL GAME", function () { window.open(STORE_URL, "_blank"); }, { col: COL.gold, size: 20 });
+    button(170, y + 110, 300, 50, "PLAY AGAIN", function () { newRun((Math.random() * 4294967296) >>> 0, 0, false); });
+    button(170, y + 172, 300, 46, "TITLE", function () { screen = "title"; });
+  }
+  
+
+  // ---------------- main loop ----------------
+  var last = 0;
+  function frame(ts) {
+    var dt = Math.min(0.05, (ts - last) / 1000 || 0); last = ts; now = ts / 1000;
+    stepAnim(dt);
+    flashes = flashes.filter(function (f) { f.life -= dt; return f.life > 0; });
+    pops = pops.filter(function (p) { p.life -= dt; return p.life > 0; });
+    if (shake) shake = Math.max(0, shake - dt * 40);
+    if (msgT > 0) msgT -= dt;
+    if (banner) { banner.t -= dt; if (banner.t <= 0) banner = null; }
+    draw();
+    requestAnimationFrame(frame);
+  }
+  function draw() {
+    cx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    buttons = [];
+    if (screen === "title") drawTitle();
+    else if (screen === "play") drawPlay();
+    else if (screen === "help") drawHelp();
+    else if (screen === "reward") drawReward();
+    else if (screen === "over") drawOver();
+    else if (screen === "demoend") drawDemoEnd();
+    if (screen === "play") {
+      button(W - 170, 76, 70, 36, "?", function () { helpFromPlay = true; helpPage = 0; screen = "help"; }, { size: 16 });
+      button(W - 92, 76, 70, 36, "MENU", function () { screen = "title"; }, { size: 13 });
+    }
+  }
+  function resize() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H);
+    dpr = window.devicePixelRatio || 1;
+    cv.style.width = Math.floor(W * scale) + "px"; cv.style.height = Math.floor(H * scale) + "px";
+    cv.width = Math.floor(W * scale * dpr); cv.height = Math.floor(H * scale * dpr);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // ---------------- input ----------------
+  function toLocal(ev) { var r = cv.getBoundingClientRect(); return { x: (ev.clientX - r.left) / r.width * W, y: (ev.clientY - r.top) / r.height * H }; }
+  var down = null;
+  cv.addEventListener("pointerdown", function (ev) { audio(); cv.focus(); down = toLocal(ev); down.t = performance.now(); ev.preventDefault(); });
+  cv.addEventListener("pointermove", function (ev) { hover = toLocal(ev); });
+  cv.addEventListener("pointerleave", function () { hover = null; });
+  cv.addEventListener("pointerup", function (ev) {
+    if (!down) return;
+    var p = toLocal(ev), dx = p.x - down.x, dy = p.y - down.y, start = down;
+    down = null;
+    var onBoard = screen === "play" && start.x >= BX && start.x < BX + L.w * T && start.y >= BY && start.y < BY + L.h * T;
+    if (onBoard && Math.max(Math.abs(dx), Math.abs(dy)) > 28) {
+      act(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 2 : 0));
+      return;
+    }
+    for (var i = buttons.length - 1; i >= 0; i--) {
+      var b = buttons[i];
+      if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) { if (b.fn) b.fn(); return; }
+    }
+    if (onBoard) {
+      var gx = Math.floor((p.x - BX) / T), gy = Math.floor((p.y - BY) / T), ddx = gx - S.hx, ddy = gy - S.hy;
+      if (Math.abs(ddx) + Math.abs(ddy) === 1) { act(ddx === 1 ? 1 : ddx === -1 ? 3 : ddy === 1 ? 2 : 0); return; }
+      var u = C.unitAt(S, gx, gy);
+      infoEnemy = u && u !== "hero" ? u : null;
+      if (trickSel && (gx === S.hx || gy === S.hy) && !(gx === S.hx && gy === S.hy)) act(gx > S.hx ? 1 : gx < S.hx ? 3 : gy > S.hy ? 2 : 0);
+    }
+  });
+  window.addEventListener("keydown", function (ev) {
+    audio();
+    var k = ev.key, dir = { ArrowUp: 0, ArrowRight: 1, ArrowDown: 2, ArrowLeft: 3, w: 0, d: 1, s: 2, a: 3, W: 0, D: 1, S: 2, A: 3 }[k];
+    if (screen === "play") {
+      if (dir !== undefined) { act(dir); ev.preventDefault(); return; }
+      if (k === " " || k === "Enter") { endRound(); ev.preventDefault(); return; }
+      if (k === "z" || k === "Z" || k === "Backspace" || k === "u") { doUndo(); ev.preventDefault(); return; }
+      if (k === "1" || k === "2" || k === "3") { trickButton(+k - 1); return; }
+      if (k === "Escape") { if (trickSel) trickSel = null; else screen = "title"; return; }
+    } else if (screen === "reward") {
+      if (k === "1" || k === "2" || k === "3") takeOffer(+k - 1);
+    } else if (screen === "title") {
+      if (k === "Enter" || k === " ") { if (save.run) continueRun(); else newRun((Math.random() * 4294967296) >>> 0, DEMO ? 0 : titleVow, false); ev.preventDefault(); }
+    } else if (screen === "help") {
+      if (k === "ArrowRight" || k === "ArrowLeft") { helpPage = 1 - helpPage; return; }
+      if (k === "Escape" || k === "Enter" || k === " ") { screen = run && helpFromPlay ? "play" : "title"; helpFromPlay = false; ev.preventDefault(); }
+    } else if (screen === "over") {
+      if (k === "Enter" || k === " ") { newRun((Math.random() * 4294967296) >>> 0, DEMO ? 0 : titleVow, false); ev.preventDefault(); }
+    }
+  });
+
+  // hooks for automated checks and the store capture
+  window.STILL_APP = {
+    state: function () { return { screen: screen, S: S, run: run, offers: offers, anim: !!anim, floor: floorInfo, result: result }; },
+    newRun: function (seed, vow, daily) { newRun(seed >>> 0, vow || 0, !!daily); },
+    move: act, end: endRound, undo: doUndo, trick: function (i) { trickButton(i); }, take: takeOffer,
+    title: function () { screen = "title"; }, help: function (pg) { helpPage = pg || 0; screen = "help"; },
+    idle: function () { return !anim; },
+    fx: function () { return pops.map(function (p) { return p.text; }); },
+    setRun: function (patch) { for (var k in patch) run[k] = patch[k]; startFloor(); }
+  };
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

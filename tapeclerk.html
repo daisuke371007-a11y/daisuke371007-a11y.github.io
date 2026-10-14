@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TAPECLERK</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #14130f; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; outline: none; }
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0"></canvas>
+<script>window.TAPE_EDITION = "demo";</script>
+<script>
+// TAPECLERK: the clerk, the tape and the rule card.
+// A card maps (state, symbol read) to (symbol to write, move L or R, next state). States are A, B, C...;
+// the next state "!" means STOP after this rule. If the card has no rule for what the clerk sees, the clerk stops too.
+// Symbol "_" is a blank cell. The clerk starts in state A on the first symbol of the input (cell 0).
+(function (root) {
+  "use strict";
+  var STATES = "ABCDEFGH";
+
+  // a card as text: "A1:0RB  A_:1L!" (rules separated by spaces or new lines)
+  function parseCard(text) {
+    var rules = {}, errors = [];
+    String(text).split(/[\s,;]+/).filter(Boolean).forEach(function (tok) {
+      var m = tok.match(/^([A-H])(.):(.)([LR])([A-H!])$/);
+      if (!m) { errors.push("Cannot read rule \"" + tok + "\"."); return; }
+      rules[m[1] + m[2]] = { w: m[3], m: m[4], n: m[5] };
+    });
+    return { rules: rules, errors: errors };
+  }
+  function cardText(rules) {
+    return Object.keys(rules).sort().map(function (k) { var r = rules[k]; return k.charAt(0) + k.charAt(1) + ":" + r.w + r.m + r.n; }).join(" ");
+  }
+  function count(rules) { return Object.keys(rules).length; }
+  function statesUsed(rules) { var s = {}; Object.keys(rules).forEach(function (k) { s[k.charAt(0)] = 1; if (rules[k].n !== "!") s[rules[k].n] = 1; }); return Object.keys(s).length; }
+
+  // a tape that grows both ways
+  function Tape(input) {
+    this.cells = {}; this.lo = 0; this.hi = -1;
+    for (var i = 0; i < input.length; i++) if (input.charAt(i) !== "_") this.set(i, input.charAt(i));
+    this.lo = 0; this.hi = Math.max(-1, input.length - 1);
+  }
+  Tape.prototype.get = function (i) { var c = this.cells[i]; return c === undefined ? "_" : c; };
+  Tape.prototype.set = function (i, c) { if (c === "_") delete this.cells[i]; else this.cells[i] = c; if (i < this.lo) this.lo = i; if (i > this.hi) this.hi = i; };
+  // the written part, from the first to the last non-blank cell
+  Tape.prototype.text = function () {
+    var ks = Object.keys(this.cells).map(Number);
+    if (!ks.length) return "";
+    var a = Math.min.apply(null, ks), b = Math.max.apply(null, ks), s = "";
+    for (var i = a; i <= b; i++) s += this.get(i);
+    return s;
+  };
+  Tape.prototype.ones = function () { var n = 0; for (var k in this.cells) if (this.cells[k] !== "_") n++; return n; };
+
+  // the clerk at work
+  function Clerk(rules, input) { this.rules = rules; this.tape = new Tape(input); this.head = 0; this.state = "A"; this.steps = 0; this.done = null; this.last = null; }
+  // one rule: returns false once the clerk has stopped
+  Clerk.prototype.step = function () {
+    if (this.done) return false;
+    var sym = this.tape.get(this.head), r = this.rules[this.state + sym];
+    if (!r) { this.done = "stuck"; this.last = null; return false; }
+    this.tape.set(this.head, r.w);
+    this.last = { state: this.state, read: sym, rule: r, at: this.head };
+    this.head += r.m === "R" ? 1 : -1;
+    this.steps++;
+    if (r.n === "!") { this.done = "stop"; return false; }
+    this.state = r.n;
+    return true;
+  };
+  function run(rules, input, limit) {
+    var c = new Clerk(rules, input);
+    while (c.steps < limit && c.step()) {}
+    if (!c.done) c.done = "limit";
+    return { done: c.done, steps: c.steps, out: c.tape.text(), ones: c.tape.ones(), state: c.state, head: c.head };
+  }
+
+  // check a card against a level. Task levels compare the tape; beaver levels score steps or ones.
+  function check(level, rules) {
+    var res = { ok: true, rules: count(rules), states: statesUsed(rules), steps: 0, results: [] };
+    if (res.states > level.maxStates) { res.ok = false; res.error = "This job allows at most " + level.maxStates + " states (A-" + STATES.charAt(level.maxStates - 1) + ")."; return res; }
+    var bad = Object.keys(rules).filter(function (k) { var r = rules[k]; return level.alphabet.indexOf(k.charAt(1)) < 0 || level.alphabet.indexOf(r.w) < 0; });
+    if (bad.length) { res.ok = false; res.error = "Rule " + bad[0] + " uses a symbol this job does not have."; return res; }
+    if (level.kind === "beaver") {
+      var r = run(rules, "", level.limit);
+      res.steps = r.steps; res.score = level.score === "ones" ? r.ones : r.steps; res.results.push({ input: "", out: r.out, done: r.done, steps: r.steps });
+      if (r.done === "limit") { res.ok = false; res.error = "The clerk was still working after " + level.limit + " steps. A beaver has to stop."; }
+      return res;
+    }
+    level.tests.forEach(function (t) {
+      var r = run(rules, t.in, level.limit), good = r.done !== "limit" && r.out === t.out;
+      res.results.push({ input: t.in, want: t.out, out: r.out, done: r.done, steps: r.steps, ok: good });
+      res.steps += r.steps;
+      if (!good) res.ok = false;
+    });
+    return res;
+  }
+
+  var API = { STATES: STATES, parseCard: parseCard, cardText: cardText, count: count, statesUsed: statesUsed, Tape: Tape, Clerk: Clerk, run: run, check: check };
+  if (typeof module !== "undefined" && module.exports) module.exports = API;
+  else root.TM = API;
+})(this);
+
+</script>
+<script>
+// The jobs. ref is one card that does the job (never shown to the player).
+// Task jobs: every test input must end as the wanted tape. Beaver jobs: start on a blank tape, stop, and score high.
+(function (root) {
+  "use strict";
+  var L = [];
+  // a fixed little random source per job, so the extra checks are the same for everyone
+  function rng(seed) { return function (n) { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return n === undefined ? seed / 0x7fffffff : Math.floor(seed / 0x7fffffff * n); }; }
+  function seedOf(id) { var h = 7; for (var i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) & 0x7fffffff; return h || 1; }
+  function ones(n) { return new Array(n + 1).join("1"); }
+  function str(r, chars, lo, hi) { var n = lo + r(hi - lo + 1), s = ""; for (var i = 0; i < n; i++) s += chars.charAt(r(chars.length)); return s; }
+  function job(ch, id, title, o) {
+    var tests = (o.tests || []).map(function (p) { return { in: p[0], out: p[1] }; });
+    // beyond the tests you can see, every job is checked on 20 more inputs made from its exact definition,
+    // so a card has to do the job in general, not just learn the examples
+    if (o.gen && o.fn) {
+      var r = rng(seedOf(id)), seen = {}, tries = 0;
+      tests.forEach(function (t) { seen[t.in] = 1; });
+      while (tests.length < (o.tests || []).length + 20 && tries++ < 2000) {
+        var inp = o.gen(r);
+        if (seen[inp]) continue;
+        seen[inp] = 1; tests.push({ in: inp, out: o.fn(inp), hidden: true });
+      }
+    }
+    L.push({ id: id, ch: ch, title: title, kind: o.kind || "task", alphabet: o.alphabet, maxStates: o.maxStates || 6, limit: o.limit || [0, 100, 500, 500, 1000, 1000][ch],
+      tests: tests, ref: o.ref, text: o.text, hint: o.hint || "", score: o.score, record: o.record });
+  }
+  var SPEC = {
+    ERASER: [function (r) { return ones(r(13)); }, function () { return ""; }],
+    INVERT: [function (r) { return str(r, "01", 1, 10); }, function (s) { return s.replace(/./g, function (c) { return c === "0" ? "1" : "0"; }); }],
+    ONEMORE: [function (r) { return ones(r(13)); }, function (s) { return s + "1"; }],
+    FIRST: [function (r) { return str(r, "01", 1, 10); }, function (s) { return s.charAt(0); }],
+    EVENODD: [function (r) { return ones(r(15)); }, function (s) { return s.length % 2 ? "O" : "E"; }],
+    BOOKENDS: [function (r) { return str(r, "01", 0, 8); }, function (s) { return "X" + s + "X"; }],
+    
+  };
+  var job0 = job;
+  job = function (ch, id, title, o) { if (SPEC[id]) { o.gen = SPEC[id][0]; o.fn = SPEC[id][1]; } job0(ch, id, title, o); };
+  // ---------------- I. FIRST DAY ----------------
+  job(1, "STAMP", "STAMP", { alphabet: "_1", maxStates: 1, tests: [["", "1"]], ref: "A_:1R!",
+    text: "Welcome to the tape room. The clerk reads the cell under them, looks up the rule for their state and what they read, writes, steps left or right, and moves to the next state. ! means stop.\nJob: stamp a single 1 on the blank tape.",
+    hint: "One rule: in state A, reading a blank, write 1, move right, stop." });
+  job(1, "THREE", "THREE IN A ROW", { alphabet: "_1", maxStates: 3, tests: [["", "111"]], ref: "A_:1RB B_:1RC C_:1R!",
+    text: "Stamp 111 on a blank tape. The clerk has no memory except their state.", hint: "Each state can stand for 'how many so far'." });
+  job(1, "ERASER", "ERASER", { alphabet: "_1", maxStates: 2, tests: [["1111", ""], ["1", ""], ["", ""], ["111111", ""]], ref: "A1:_RA",
+    text: "Erase a line of 1s, however long. The clerk starts on the first 1. If there is no rule for what the clerk sees, the clerk simply stops.", hint: "One rule is enough." });
+  job(1, "INVERT", "INVERT", { alphabet: "_01", maxStates: 2, tests: [["0110", "1001"], ["1", "0"], ["000", "111"], ["101100", "010011"]], ref: "A0:1RA A1:0RA",
+    text: "Turn every 0 into 1 and every 1 into 0." });
+  job(1, "ONEMORE", "ONE MORE", { alphabet: "_1", maxStates: 2, tests: [["111", "1111"], ["", "1"], ["1", "11"], ["11111", "111111"]], ref: "A1:1RA A_:1R!",
+    text: "Counting in ones: 111 is three. Add one.", hint: "Where can a new 1 go without moving the others?" });
+  job(1, "FIRST", "FIRST ONLY", { alphabet: "_01", maxStates: 2, tests: [["0110", "0"], ["1", "1"], ["10", "1"], ["111000", "1"]], ref: "A0:0RB A1:1RB B0:_RB B1:_RB",
+    text: "Keep the first digit. Erase the rest." });
+  job(1, "EVENODD", "EVEN OR ODD", { alphabet: "_1EO", maxStates: 2, tests: [["11", "E"], ["", "E"], ["1", "O"], ["111", "O"], ["111111", "E"]], ref: "A1:_RB B1:_RA A_:ER! B_:OR!",
+    text: "Is the line of 1s even or odd? Leave only E or O on the tape.", hint: "Two states: 'even so far' and 'odd so far'." });
+  job(1, "BOOKENDS", "BOOKENDS", { alphabet: "_01X", maxStates: 3, tests: [["011", "X011X"], ["1", "X1X"], ["0000", "X0000X"], ["", "XX"]], ref: "A0:0LB A1:1LB A_:XRC B_:XRC C0:0RC C1:1RC C_:XR!",
+    text: "Put an X at both ends of the number." });
+  
+
+  var CH = ["", "FIRST DAY", "ARITHMETIC", "CHECKING", "BUSY BEAVERS", "OVERTIME"];
+  L.forEach(function (lv, i) { lv.index = i; });
+  var API = { LEVELS: L, CHAPTERS: CH };
+  if (typeof module !== "undefined" && module.exports) module.exports = API;
+  else root.TLEVELS = API;
+})(this);
+
+</script>
+<script>
+// Generated by prove.js.
+var TPROOFS = {"STAMP": {"min": 1, "proven": true, "best": "A_:1L!", "nodes": 7}, "THREE": {"min": 3, "proven": true, "best": "A_:1LB B_:_LC C_:1RA", "nodes": 311}, "ERASER": {"min": 1, "proven": true, "best": "A1:_RA", "nodes": 7}, "INVERT": {"min": 2, "proven": true, "best": "A0:1RA A1:0RA", "nodes": 229}, "ONEMORE": {"min": 2, "proven": true, "best": "A1:1LA A_:1L!", "nodes": 78}, "FIRST": {"min": 4, "proven": true, "best": "A0:0RB A1:1RB B0:_RB B1:_RB", "nodes": 12611}, "EVENODD": {"min": 4, "proven": true, "best": "A1:_RB A_:EL! B1:_RA B_:OL!", "nodes": 9120}, "BOOKENDS": {"min": 7, "proven": false, "nothingUpTo": 5, "best": "A0:0LB A1:1LB A_:XRC B_:XRC C0:0RC C1:1RC C_:XR!", "nodes": 3645440}};
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var TMx = window.TM, LVx = window.TLEVELS, PROOF = window.TPROOFS || {};
+  var ED = window.TAPE_EDITION || "full", DEMO = ED === "demo";
+  var STORE_URL = "https://kqmigqkqri.itch.io/tapeclerk";
+  var LEVELS = LVx.LEVELS, W = 1200, H = 760;
+  var FONT = "'Segoe UI', system-ui, -apple-system, sans-serif", MONO = "ui-monospace, Consolas, 'Courier New', monospace";
+  var COL = { bg: "#1b1a17", panel: "#23211c", panel2: "#2a2722", line: "#3a362e", text: "#efe6cf", dim: "#9a9180", brass: "#d4a24c", stamp: "#c0473a",
+    ok: "#8fc77f", paper: "#efe6cf", paper2: "#e3d8bd", ink: "#2b2622", sel: "#d4a24c" };
+  var ROMAN = ["", "I", "II", "III", "IV", "V"];
+  var cv = document.getElementById("c"), cx = cv.getContext("2d"), scale = 1, dpr = 1;
+
+  // ---------------- save ----------------
+  var KEY = DEMO ? "tapeclerk.demo.v1" : "tapeclerk.v1";
+  var store = { cards: {}, best: {}, hints: {}, muted: false };
+  try { var raw = localStorage.getItem(KEY); if (raw) { var o = JSON.parse(raw); for (var k in o) store[k] = o[k]; } } catch (e) {}
+  function persist() { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) {} }
+
+  function solved(lv) { return !!store.best[lv.id]; }
+  function chapterOpen(ch) {
+    if (ch === 1) return true;
+    var prev = LEVELS.filter(function (l) { return l.ch === ch - 1; }), done = prev.filter(solved).length;
+    return done >= Math.min(4, prev.length - 1);
+  }
+  function goalText(lv) {
+    var p = PROOF[lv.id];
+    if (lv.kind === "beaver") return { n: lv.record, line: "Proven record: " + lv.record + (lv.score === "ones" ? " ones" : " steps") };
+    if (!p) return { n: null, line: "" };
+    return p.proven ? { n: p.min, proven: true, line: "Proven fewest: " + p.min + " rules. Every smaller card was tried." }
+                    : { n: p.min, proven: false, line: "Best known: " + p.min + " rules. Proven: nothing with " + p.nothingUpTo + " or fewer works." };
+  }
+  function star(lv) {
+    var b = store.best[lv.id]; if (!b) return 0;
+    if (lv.kind === "beaver") return b.score >= lv.record ? 2 : 1;
+    var g = goalText(lv);
+    if (g.n === null) return 1;
+    if (!g.proven && b.rules < g.n) return 3;
+    return b.rules <= g.n ? 2 : 1;
+  }
+
+  // ---------------- sound ----------------
+  var ac = null;
+  function tone(f, d, type, vol, delay) {
+    if (store.muted) return;
+    try {
+      if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
+      if (ac.state === "suspended") ac.resume();
+      var t0 = ac.currentTime + (delay || 0), o = ac.createOscillator(), g = ac.createGain();
+      o.type = type || "triangle"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol || 0.05, t0 + 0.005); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+      o.connect(g); g.connect(ac.destination); o.start(t0); o.stop(t0 + d + 0.02);
+    } catch (e) {}
+  }
+  function sfx(k) {
+    if (k === "stamp") { tone(180, 0.05, "square", 0.04); tone(90, 0.06, "sine", 0.05); }
+    else if (k === "step") tone(1300, 0.015, "square", 0.015);
+    else if (k === "type") tone(700, 0.02, "triangle", 0.03);
+    else if (k === "pass") [523, 659, 784, 1047].forEach(function (f, i) { tone(f, 0.25, "triangle", 0.06, i * 0.08); });
+    else if (k === "fail") [330, 247].forEach(function (f, i) { tone(f, 0.22, "sawtooth", 0.04, i * 0.12); });
+    else if (k === "deny") tone(140, 0.08, "square", 0.04);
+  }
+
+  // ---------------- drawing helpers ----------------
+  function rr(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
+  function text(s, x, y, size, col, align, weight, font) { cx.font = (weight || 500) + " " + size + "px " + (font || FONT); cx.fillStyle = col || COL.text; cx.textAlign = align || "left"; cx.textBaseline = "middle"; cx.fillText(s, x, y); }
+  function tw(s, size, weight, font) { cx.font = (weight || 500) + " " + size + "px " + (font || FONT); return cx.measureText(s).width; }
+  function wrap(s, x, y, maxW, size, col, lh) {
+    String(s).split("\n").forEach(function (para) {
+      var words = para.split(" "), line = "";
+      for (var i = 0; i < words.length; i++) { var t = line ? line + " " + words[i] : words[i]; if (tw(t, size) > maxW && line) { text(line, x, y, size, col); line = words[i]; y += lh; } else line = t; }
+      text(line, x, y, size, col); y += lh;
+    });
+    return y;
+  }
+  var buttons = [], hover = { x: -1, y: -1 };
+  function button(x, y, w, h, label, fn, o) {
+    o = o || {};
+    var hot = hover.x >= x && hover.x <= x + w && hover.y >= y && hover.y <= y + h && !o.disabled;
+    rr(x, y, w, h, 7);
+    cx.fillStyle = o.disabled ? "#1f1d19" : o.primary ? (hot ? "#e3b45e" : "#d4a24c") : o.on ? "#3b3426" : hot ? "#38332a" : (o.fill || "#2c2924"); cx.fill();
+    cx.strokeStyle = o.primary ? "#efc77a" : o.on ? COL.brass : "#4a443a"; cx.lineWidth = o.on ? 2 : 1; cx.stroke();
+    text(label, x + w / 2, y + h / 2 + 1, o.size || 13, o.disabled ? "#5a5448" : o.primary ? "#211a0c" : (o.col || COL.text), "center", 700, o.mono ? MONO : FONT);
+    if (!o.disabled && fn) buttons.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+  function symLabel(s) { return s === "_" ? "" : s; }
+
+  // ---------------- the clerk ----------------
+  function drawClerk(x, y, state, s) {
+    s = s || 1;
+    cx.save(); cx.translate(x, y); cx.scale(s, s);
+    cx.fillStyle = "#3a5068"; rr(-16, 4, 32, 30, 8); cx.fill();                // jacket
+    cx.fillStyle = "#efe6cf"; cx.beginPath(); cx.moveTo(-5, 4); cx.lineTo(0, 14); cx.lineTo(5, 4); cx.closePath(); cx.fill();
+    cx.fillStyle = COL.stamp; cx.fillRect(-1.5, 6, 3, 10);                      // tie
+    cx.fillStyle = "#e8c9a2"; cx.beginPath(); cx.arc(0, -8, 11, 0, 7); cx.fill(); // head
+    cx.fillStyle = "#2b2622"; cx.fillRect(-13, -18, 26, 5); cx.fillRect(-9, -26, 18, 9); // hat
+    cx.fillStyle = "#2b2622"; cx.fillRect(-5, -9, 3, 2); cx.fillRect(2, -9, 3, 2);
+    cx.restore();
+    if (state) {
+      rr(x + 14 * s, y - 30 * s, 22, 22, 6); cx.fillStyle = COL.brass; cx.fill();
+      text(state, x + 14 * s + 11, y - 30 * s + 12, 14, "#211a0c", "center", 900, MONO);
+    }
+  }
+  // the tape around the head, centred on view position vx (cells)
+  function drawTape(clerk, y0, vx, cellW) {
+    var cols = Math.ceil(W / cellW) + 2, first = Math.floor(vx - cols / 2);
+    for (var i = first; i < first + cols; i++) {
+      var x = W / 2 + (i - vx) * cellW - cellW / 2;
+      cx.fillStyle = i % 2 ? COL.paper : COL.paper2; cx.fillRect(x, y0, cellW - 2, cellW + 6);
+      var s = clerk ? clerk.tape.get(i) : "_";
+      if (s !== "_") text(s, x + cellW / 2 - 1, y0 + cellW / 2 + 4, cellW * 0.55, COL.ink, "center", 800, MONO);
+      cx.fillStyle = "rgba(43,38,34,0.25)"; cx.fillRect(x, y0 + cellW + 6, cellW - 2, 3);
+      if (i === 0) { cx.fillStyle = "rgba(192,71,58,0.5)"; cx.fillRect(x, y0 + cellW + 10, cellW - 2, 3); }
+    }
+    // perforations
+    cx.fillStyle = "rgba(0,0,0,0.25)";
+    for (var j = first; j < first + cols; j++) { var px = W / 2 + (j - vx) * cellW; cx.beginPath(); cx.arc(px - cellW / 2, y0 + 5, 2, 0, 7); cx.fill(); }
+  }
+
+  // ---------------- play ----------------
+  var screen = "title", cur = null, rules = {}, sel = { r: 0, c: 0 }, buf = "", clerk = null, testIdx = 0, running = false, speed = 8, acc = 0, viewX = 0, result = null, msg = "", msgT = 0, flash = 0;
+  function openLevel(lv) {
+    cur = lv; screen = "play";
+    rules = store.cards[lv.id] ? TMx.parseCard(store.cards[lv.id]).rules : {};
+    sel = { r: 0, c: lv.alphabet.length > 1 ? 1 : 0 }; buf = ""; testIdx = 0; result = null; running = false;
+    resetClerk();
+  }
+  function input() { return cur.kind === "beaver" ? "" : cur.tests[testIdx].in; }
+  function resetClerk() { clerk = new TMx.Clerk(rules, input()); viewX = 0; running = false; acc = 0; }
+  function saveCard() { store.cards[cur.id] = TMx.cardText(rules); persist(); result = null; }
+  function say(s) { msg = s; msgT = 2.5; }
+  function setRule(key, r) { if (r) rules[key] = r; else delete rules[key]; saveCard(); resetClerk(); }
+  function stepOnce() {
+    if (!clerk || clerk.done) return false;
+    var before = clerk.head, ok = clerk.step();
+    if (clerk.last) sfx(clerk.steps % 2 ? "step" : "stamp");
+    return ok;
+  }
+  function testAll() {
+    var r = TMx.check(cur, rules);
+    result = r;
+    if (r.ok && !r.error) {
+      var prev = store.best[cur.id], rec = cur.kind === "beaver" ? { score: r.score, rules: r.rules, steps: r.steps } : { rules: r.rules, steps: r.steps };
+      if (cur.kind === "beaver") {
+        if (!prev || r.score > prev.score) store.best[cur.id] = rec;
+      } else if (!prev || r.rules < prev.rules || (r.rules === prev.rules && r.steps < prev.steps)) store.best[cur.id] = rec;
+      persist(); sfx("pass"); flash = 1.5;
+    } else sfx("fail");
+  }
+  function nextLevel() {
+    var nx = LEVELS[cur.index + 1];
+    if (DEMO && !nx) { screen = "demoend"; return; }
+    if (!nx || !chapterOpen(nx.ch)) { screen = "map"; return; }
+    openLevel(nx);
+  }
+
+  // grid geometry
+  var GX = 40, GY = 300, CW = 0, RH = 0;
+  function gridGeom() {
+    var nCols = cur.alphabet.length, nRows = cur.maxStates;
+    CW = Math.min(150, Math.floor((760 - GX - 60) / nCols));
+    RH = Math.min(52, Math.floor((H - GY - 124) / nRows));
+    return { nCols: nCols, nRows: nRows };
+  }
+  function drawGrid() {
+    var g = gridGeom(), alpha = cur.alphabet, S = TMx.STATES;
+    text("RULE CARD", GX, GY - 34, 12, COL.dim, "left", 800);
+    text("reads →", GX + 60, GY - 12, 11, COL.dim, "left", 600);
+    for (var c = 0; c < g.nCols; c++) {
+      var sx = GX + 60 + c * CW;
+      rr(sx + 4, GY - 2, CW - 8, 4, 2); cx.fillStyle = "#3a362e"; cx.fill();
+      text(alpha[c] === "_" ? "blank" : alpha[c], sx + CW / 2, GY + 14, alpha[c] === "_" ? 13 : 18, COL.paper, "center", 800, alpha[c] === "_" ? FONT : MONO);
+    }
+    var nextKey = clerk && !clerk.done ? clerk.state + clerk.tape.get(clerk.head) : null, lastKey = clerk && clerk.last ? clerk.last.state + clerk.last.read : null;
+    for (var r = 0; r < g.nRows; r++) {
+      var y = GY + 30 + r * RH, st = S.charAt(r);
+      rr(GX, y + 3, 48, RH - 6, 6); cx.fillStyle = clerk && clerk.state === st && !clerk.done ? COL.brass : "#2c2924"; cx.fill();
+      text(st, GX + 24, y + RH / 2, 18, clerk && clerk.state === st && !clerk.done ? "#211a0c" : COL.text, "center", 900, MONO);
+      for (var c2 = 0; c2 < g.nCols; c2++) {
+        var x = GX + 60 + c2 * CW, key = st + alpha[c2], rule = rules[key], isSel = sel.r === r && sel.c === c2;
+        rr(x + 3, y + 3, CW - 6, RH - 6, 6);
+        cx.fillStyle = key === nextKey ? "#3b3426" : rule ? "#efe6cf" : "#26231e"; cx.fill();
+        cx.strokeStyle = isSel ? COL.sel : key === lastKey ? COL.stamp : "#3a362e"; cx.lineWidth = isSel ? 3 : key === lastKey ? 2 : 1; cx.stroke();
+        if (isSel && buf) text(buf + "█", x + CW / 2, y + RH / 2, 18, key === nextKey ? COL.brass : COL.ink, "center", 800, MONO);
+        else if (rule) {
+          var col = key === nextKey ? COL.brass : COL.ink;
+          var s1 = rule.w === "_" ? "_" : rule.w, s3 = rule.n === "!" ? "STOP" : rule.n;
+          text(s1 + " " + rule.m + " " + s3, x + CW / 2, y + RH / 2, rule.n === "!" ? 15 : 18, col, "center", 800, MONO);
+        } else text("·", x + CW / 2, y + RH / 2, 18, "#4a443a", "center", 800);
+        buttons.push({ x: x + 3, y: y + 3, w: CW - 6, h: RH - 6, fn: (function (rr2, cc2) { return function () { sel = { r: rr2, c: cc2 }; buf = ""; }; })(r, c2) });
+      }
+    }
+    // chooser for the selected cell
+    var py = GY + 30 + g.nRows * RH + 12;
+    var key0 = S.charAt(sel.r) + alpha[sel.c], r0 = rules[key0];
+    text("Rule " + S.charAt(sel.r) + " reading " + (alpha[sel.c] === "_" ? "blank" : alpha[sel.c]) + ":", GX, py + 4, 12, COL.dim, "left", 700);
+    var bx = GX + 190;
+    text("write", bx - 4, py + 4, 11, COL.dim, "right", 600);
+    alpha.split("").forEach(function (s, i) {
+      button(bx + i * 34, py - 10, 30, 28, s === "_" ? "_" : s, function () { var r1 = r0 || { w: s, m: "R", n: "A" }; setRule(key0, { w: s, m: r1.m, n: r1.n }); }, { on: r0 && r0.w === s, mono: true });
+    });
+    bx += alpha.length * 34 + 30;
+    text("move", bx - 4, py + 4, 11, COL.dim, "right", 600);
+    ["L", "R"].forEach(function (m, i) { button(bx + i * 34, py - 10, 30, 28, m, function () { var r1 = r0 || { w: alpha[sel.c], m: m, n: "A" }; setRule(key0, { w: r1.w, m: m, n: r1.n }); }, { on: r0 && r0.m === m, mono: true }); });
+    var py2 = py + 34, bx2 = GX + 190;
+    text("then", bx2 - 4, py2 + 4, 11, COL.dim, "right", 600);
+    for (var k = 0; k < cur.maxStates; k++) (function (st2, i) {
+      button(bx2 + i * 34, py2 - 10, 30, 28, st2, function () { var r1 = r0 || { w: alpha[sel.c], m: "R", n: st2 }; setRule(key0, { w: r1.w, m: r1.m, n: st2 }); }, { on: r0 && r0.n === st2, mono: true });
+    })(S.charAt(k), k);
+    button(bx2 + cur.maxStates * 34, py2 - 10, 58, 28, "STOP", function () { var r1 = r0 || { w: alpha[sel.c], m: "R", n: "!" }; setRule(key0, { w: r1.w, m: r1.m, n: "!" }); }, { on: r0 && r0.n === "!", size: 12 });
+    button(bx2 + cur.maxStates * 34 + 66, py2 - 10, 62, 28, "CLEAR", function () { setRule(key0, null); }, { size: 12, disabled: !r0 });
+    text("or type it: write, L/R, next state - e.g. 1RB, or _LS (S or ! = STOP)", GX, py2 + 34, 12, COL.dim, "left", 500);
+  }
+
+  function drawPlay(dt) {
+    var lv = cur;
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    cx.fillStyle = COL.panel2; cx.fillRect(0, 0, W, 48);
+    button(10, 9, 74, 30, "◂ JOBS", function () { screen = "map"; });
+    text(ROMAN[lv.ch] + "  ·  " + lv.title, 100, 24, 18, COL.text, "left", 800);
+    button(W - 168, 9, 74, 30, "HELP", function () { helpFrom = "play"; screen = "help"; });
+    button(W - 86, 9, 76, 30, store.muted ? "SOUND OFF" : "SOUND", function () { store.muted = !store.muted; persist(); }, { size: 11 });
+    // run the clerk
+    if (running && clerk && !clerk.done) {
+      acc += dt * speed;
+      var n = 0;
+      while (acc >= 1 && n < 500) { acc -= 1; n++; if (!stepOnce()) break; if (clerk.steps >= lv.limit) { running = false; break; } }
+      if (clerk.done) running = false;
+    }
+    if (clerk) viewX += (clerk.head - viewX) * Math.min(1, dt * 8);
+    // the tape
+    var ty = 104, cellW = 46;
+    cx.fillStyle = "#151410"; cx.fillRect(0, 58, W, 150);
+    drawTape(clerk, ty, viewX, cellW);
+    if (clerk) drawClerk(W / 2 + (clerk.head - viewX) * cellW - 1, ty - 24, clerk.done ? null : clerk.state, 0.9);
+    // status under the tape
+    var st = !clerk ? "" : clerk.done === "stop" ? "STOPPED after " + clerk.steps + " steps" : clerk.done === "stuck" ? "No rule for " + clerk.state + " reading " + (clerk.tape.get(clerk.head) === "_" ? "blank" : clerk.tape.get(clerk.head)) + " - the clerk stops after " + clerk.steps + " steps" : clerk.steps >= lv.limit ? "Still working after " + lv.limit + " steps" : "state " + clerk.state + "  ·  step " + clerk.steps;
+    text(st, 40, 222, 14, clerk && clerk.done ? COL.brass : COL.text, "left", 700, MONO);
+    if (lv.kind !== "beaver" && clerk) {
+      var want = lv.tests[testIdx].out, now = clerk.tape.text();
+      text("tape: " + (now || "(blank)") + "     wanted: " + (want || "(blank)"), 40, 244, 13, clerk.done ? (now === want ? COL.ok : COL.stamp) : COL.dim, "left", 600, MONO);
+    } else if (clerk) text("1s on the tape: " + clerk.tape.ones(), 40, 244, 13, COL.dim, "left", 600, MONO);
+    // controls
+    var cy0 = 216;
+    button(560, cy0 - 14, 60, 28, "STEP", function () { if (clerk && clerk.done) resetClerk(); stepOnce(); }, { size: 12 });
+    button(626, cy0 - 14, 60, 28, running ? "PAUSE" : "RUN", function () { if (clerk && clerk.done) resetClerk(); running = !running; }, { size: 12 });
+    button(692, cy0 - 14, 60, 28, "RESET", resetClerk, { size: 12 });
+    button(560, cy0 + 18, 192, 22, "speed: " + speed + "/s", function () { speed = speed >= 64 ? 2 : speed * 2; }, { size: 11 });
+    drawGrid();
+    drawSide(dt);
+  }
+  function drawSide(dt) {
+    var lv = cur, x = 790, y = 70, mw = W - x - 24;
+    cx.fillStyle = COL.panel; cx.fillRect(x - 20, 48, W - x + 20, H - 48);
+    text(LVx.CHAPTERS[lv.ch], x, y, 11, COL.dim, "left", 800); y += 20;
+    y = wrap(lv.text, x, y, mw, 13, COL.text, 18) + 4;
+    if (lv.hint) {
+      if (store.hints[lv.id]) y = wrap("Hint: " + lv.hint, x, y, mw, 12, "#cdb37a", 17) + 4;
+      else { button(x, y, 70, 24, "HINT", function () { store.hints[lv.id] = 1; persist(); }, { size: 11 }); y += 34; }
+    }
+    text("Alphabet: " + lv.alphabet.split("").map(function (s) { return s === "_" ? "blank" : s; }).join("  ") + "   ·   states A-" + TMx.STATES.charAt(lv.maxStates - 1) + "   ·   limit " + lv.limit + " steps", x, y, 12, COL.dim, "left", 600); y += 24;
+    // tests
+    if (lv.kind !== "beaver") {
+      text("TESTS  (click one to watch it)", x, y, 11, COL.dim, "left", 800); y += 18;
+      var hiddenN = lv.tests.filter(function (t) { return t.hidden; }).length;
+      var shown = lv.tests.map(function (t, i) { return i; }).filter(function (i) {
+        if (!lv.tests[i].hidden) return true;
+        return result && result.results[i] && !result.results[i].ok;         // a failed extra check is shown so you can watch it
+      }).slice(0, 12);
+      shown.forEach(function (i) {
+        var t = lv.tests[i];
+        var res = result && result.results[i];
+        rr(x - 6, y - 10, mw + 12, 21, 4); cx.fillStyle = i === testIdx ? "#3b3426" : "rgba(0,0,0,0)"; cx.fill();
+        var line = (t.hidden ? "check: " : "") + (t.in || "(blank)") + "  →  " + (t.out || "(blank)");
+        text(line.length > 34 ? line.slice(0, 33) + "…" : line, x, y, 13, COL.text, "left", 600, MONO);
+        if (res) text(res.ok ? "✓" : "✗", x + mw, y, 14, res.ok ? COL.ok : COL.stamp, "right", 900);
+        buttons.push({ x: x - 6, y: y - 10, w: mw + 12, h: 21, fn: (function (ii) { return function () { testIdx = ii; resetClerk(); }; })(i) });
+        y += 22;
+      });
+      if (hiddenN) {
+        var hf = result ? lv.tests.filter(function (t, i) { return t.hidden && result.results[i] && !result.results[i].ok; }).length : -1;
+        text("+ " + hiddenN + " more checks made from the job's exact rule" + (hf > 0 ? "  (" + hf + " fail)" : hf === 0 ? "  ✓" : ""), x, y, 12, hf > 0 ? COL.stamp : hf === 0 ? COL.ok : COL.dim, "left", 600);
+        y += 20;
+      }
+    }
+    y += 6;
+    // goal and best
+    var g = goalText(lv), b = store.best[lv.id];
+    rr(x - 6, y, mw + 12, 66, 8); cx.fillStyle = "#2c2924"; cx.fill();
+    text("GOAL", x + 4, y + 16, 12, COL.brass, "left", 900);
+    wrap(g.line, x + 4, y + 36, mw - 10, 12, COL.text, 16);
+    y += 76;
+    if (b) {
+      var s = star(lv);
+      text("YOUR BEST  " + (lv.kind === "beaver" ? b.score + (lv.score === "ones" ? " ones" : " steps") : b.rules + " rules, " + b.steps + " steps") + (s === 3 ? "  ★ record" : s === 2 ? "  ★" : ""), x, y, 13, s >= 2 ? COL.brass : COL.ok, "left", 800); y += 24;
+    }
+    // result of the last test
+    if (result) {
+      if (result.error) y = wrap(result.error, x, y, mw, 12, COL.stamp, 17);
+      else if (lv.kind === "beaver") text("Stopped: " + result.score + (lv.score === "ones" ? " ones" : " steps") + " (record " + lv.record + ")", x, y, 13, COL.ok, "left", 800);
+      else if (result.ok) text("ALL TESTS PASS  ·  " + result.rules + " rules  ·  " + result.steps + " steps", x, y, 13, COL.ok, "left", 800);
+      else text(result.results.filter(function (q) { return !q.ok; }).length + " test(s) fail. Click a red one to watch.", x, y, 13, COL.stamp, "left", 800);
+    }
+    button(x, H - 104, mw, 40, lv.kind === "beaver" ? "SUBMIT THIS BEAVER" : "TEST ALL", testAll, { primary: true, size: 15 });
+    if (solved(lv)) {
+      var nx = LEVELS[lv.index + 1];
+      if (DEMO && !nx) { button(x, H - 56, mw, 40, "FIRST DAY DONE ▸", nextLevel); return; }
+      if (nx && chapterOpen(nx.ch)) button(x, H - 56, mw, 40, "NEXT JOB: " + nx.title + " ▸", nextLevel);
+      else button(x, H - 56, mw, 40, "JOBS", function () { screen = "map"; });
+    }
+    if (flash > 0) {
+      flash -= dt;
+      cx.globalAlpha = Math.min(1, flash * 2);
+      cx.save(); cx.translate(380, 160); cx.rotate(-0.12);
+      rr(-140, -36, 280, 72, 10); cx.strokeStyle = COL.stamp; cx.lineWidth = 5; cx.stroke();
+      text(star(lv) >= 2 ? "APPROVED ★" : "APPROVED", 0, 2, 34, COL.stamp, "center", 900);
+      cx.restore(); cx.globalAlpha = 1;
+    }
+    if (msgT > 0) { msgT -= dt; text(msg, 40, H - 20, 13, COL.brass, "left", 700); }
+  }
+
+  // ---------------- map, title, help ----------------
+  function drawMap() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    button(20, 16, 90, 32, "◂ TITLE", function () { screen = "title"; });
+    text("THE JOB BOARD", W / 2, 34, 24, COL.text, "center", 900);
+    var colW = (W - 60) / 5;
+    for (var c = 1; c <= 5; c++) {
+      var x = 30 + (c - 1) * colW, y = 84, locked = DEMO && c > 1, open = !locked && chapterOpen(c);
+      text(ROMAN[c] + ". " + LVx.CHAPTERS[c], x + 8, y, 14, open ? COL.brass : "#5a5448", "left", 800);
+      y += 24;
+      if (locked) {
+        rr(x + 4, y, colW - 16, 130, 8); cx.fillStyle = "#211f1b"; cx.fill();
+        wrap(c === 2 ? "Binary and unary sums: increment, add, subtract, double." : c === 3 ? "Yes-or-no jobs: multiples of three, palindromes, brackets, sorting." : c === 4 ? "The busy beaver game, with its proven records." : "Overtime: reverse and copy whole words.", x + 16, y + 22, colW - 40, 12, COL.dim, 17);
+        text("FULL GAME", x + 16, y + 110, 11, COL.brass, "left", 800);
+        continue;
+      }
+      if (!open) text("open after " + Math.min(4, LEVELS.filter(function (l) { return l.ch === c - 1; }).length - 1) + " jobs in " + ROMAN[c - 1], x + 8, y + 4, 11, "#5a5448", "left", 700), y += 20;
+      LEVELS.filter(function (l) { return l.ch === c; }).forEach(function (lv) {
+        var h = 46, s = star(lv), b = store.best[lv.id];
+        var hot = open && hover.x >= x + 4 && hover.x <= x + colW - 12 && hover.y >= y && hover.y <= y + h - 6;
+        rr(x + 4, y, colW - 16, h - 6, 7);
+        cx.fillStyle = b ? (hot ? "#2f3a29" : "#263022") : hot ? "#3a352b" : open ? "#2c2924" : "#1f1d19"; cx.fill();
+        cx.strokeStyle = b ? "#4f6b44" : "#3a362e"; cx.lineWidth = 1; cx.stroke();
+        text(lv.title, x + 14, y + 13, 12, open ? COL.text : "#5a5448", "left", 800);
+        var g = goalText(lv);
+        var info = b ? (lv.kind === "beaver" ? b.score + " / " + lv.record : b.rules + " / " + g.n + " rules") : (lv.kind === "beaver" ? "record " + lv.record : "goal " + g.n + " rules");
+        text((s >= 2 ? "★ " : "") + info, x + 14, y + 29, 11, s >= 2 ? COL.brass : b ? COL.ok : COL.dim, "left", 700, MONO);
+        if (open) buttons.push({ x: x + 4, y: y, w: colW - 16, h: h - 6, fn: (function (l) { return function () { openLevel(l); }; })(lv) });
+        y += h;
+      });
+    }
+    text("rules: your best / the goal   ·   ★ = at the goal or the record", W / 2, H - 20, 12, COL.dim, "center", 600);
+    button(W / 2 - 140, H - 74, 280, 40, "GET THE FULL GAME", function () { window.open(STORE_URL, "_blank"); }, { primary: true });
+  }
+  // the title runs the four-state busy beaver champion, forever
+  var titleClerk = null, titleAcc = 0, titleView = 0, titleWait = 0;
+  var CHAMP = TMx.parseCard("A_:1RB A1:1LB B_:1LA B1:_LC C_:1R! C1:1LD D_:1RD D1:_RA").rules;
+  function drawTitle(dt) {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    if (!titleClerk) { titleClerk = new TMx.Clerk(CHAMP, ""); titleView = 0; }
+    if (titleClerk.done) { titleWait += dt; if (titleWait > 2) { titleClerk = null; titleWait = 0; } }
+    else { titleAcc += dt * 14; while (titleAcc >= 1) { titleAcc -= 1; titleClerk.step(); } }
+    if (titleClerk) {
+      titleView += (titleClerk.head - titleView) * Math.min(1, dt * 6);
+      cx.fillStyle = "#151410"; cx.fillRect(0, 100, W, 130);
+      drawTape(titleClerk, 136, titleView, 42);
+      drawClerk(W / 2 + (titleClerk.head - titleView) * 42, 112, titleClerk.done ? null : titleClerk.state, 0.85);
+      text(titleClerk.done ? "STOPPED after " + titleClerk.steps + " steps - the most any four-state card can do" : "step " + titleClerk.steps, W / 2, 252, 13, titleClerk.done ? COL.brass : COL.dim, "center", 700, MONO);
+    }
+    text("TAPECLERK", W / 2, 340, 66, COL.text, "center", 900);
+    text("One clerk. One tape. One card of rules. Anything computable.", W / 2, 392, 18, COL.brass, "center", 600);
+    var any = LEVELS.filter(solved).length, next = LEVELS.filter(function (l) { return !solved(l) && chapterOpen(l.ch); })[0];
+    button(W / 2 - 150, 440, 300, 50, any ? "CONTINUE" : "START", function () { if (next) openLevel(next); else screen = "map"; }, { primary: true, size: 16 });
+    button(W / 2 - 150, 502, 145, 40, "JOBS", function () { screen = "map"; });
+    button(W / 2 + 5, 502, 145, 40, "HOW TO PLAY", function () { helpFrom = "title"; screen = "help"; });
+    text(any + " / " + LEVELS.length + " jobs done", W / 2, 580, 13, COL.dim, "center", 600);
+    text("FREE DEMO · FIRST DAY", W / 2, 606, 13, COL.brass, "center", 700);
+    text("from the maker of TUBECLERK", W / 2, H - 28, 12, "#6a6252", "center", 600);
+  }
+  var helpFrom = "title";
+  function drawHelp() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    text("HOW THE TAPE ROOM WORKS", W / 2, 44, 24, COL.text, "center", 900);
+    var x = 100, y = 96;
+    [["The clerk", "stands on one cell of an endless paper tape and is always in one state (A, B, C...). They begin in state A on the first symbol of the input."],
+     ["A rule", "says: in this state, reading this symbol, write this symbol, step left or right, and go to this state. STOP means stop after this rule. Each rule is one cell of the card."],
+     ["No rule?", "If the card has no rule for what the clerk sees, the clerk simply stops. Often that is all you need."],
+     ["Editing", "Click a cell of the card, then use the buttons - or type three keys: the symbol to write (_ for blank), L or R, and the next state letter, or S (or !) for STOP. Arrow keys move around the card; Delete clears a rule."],
+     ["Watching", "STEP and RUN walk the clerk through the chosen test. Click any test to watch that one. The card cell about to be used glows; the one just used is outlined red."],
+     ["Judging", "TEST ALL runs every test. The job is done when every tape ends exactly as wanted (blanks at the ends do not matter). Fewer rules is better; most jobs show the proven fewest. Each job has a step limit per test (shown on the right); a run that goes over it fails."],
+     ["Busy beavers", "Start on a blank tape, use a few states, and make the clerk work as long as possible - but stop in the end. The records are proven theorems."],
+     ["Keys", "Space: one step  ·  Enter: run / pause  ·  R: reset  ·  T: test all"]].forEach(function (r) {
+      text(r[0], x, y + 9, 15, COL.brass, "left", 800); y = wrap(r[1], x + 150, y + 9, W - x - 260, 14, COL.text, 20) + 12;
+    });
+    button(W / 2 - 100, H - 70, 200, 42, "BACK", function () { screen = helpFrom === "play" && cur ? "play" : "title"; });
+  }
+  
+  function drawDemoEnd() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    text("FIRST DAY DONE", W / 2, 130, 40, COL.brass, "center", 900);
+    var st = LEVELS.filter(function (l) { return star(l) >= 2; }).length;
+    text(st + " of 8 jobs at the proven fewest rules.", W / 2, 178, 17, COL.text, "center", 600);
+    var y = 250;
+    ["The full game has 26 jobs in five chapters:", "II   Arithmetic: increment, add, subtract, double", "III  Checking: multiples of three, palindromes, brackets, sorting",
+     "IV   Busy beavers: the proven records for 2, 3 and 4 states", "V    Overtime: reverse and copy whole words"].forEach(function (s, i) {
+      text(s, i ? 300 : W / 2, y, i ? 15 : 16, i ? COL.text : COL.brass, i ? "left" : "center", i ? 600 : 800, i ? MONO : FONT); y += i ? 30 : 42;
+    });
+    button(W / 2 - 160, y + 26, 320, 54, "GET THE FULL GAME", function () { window.open(STORE_URL, "_blank"); }, { primary: true, size: 17 });
+    button(W / 2 - 120, y + 96, 240, 40, "JOBS", function () { screen = "map"; });
+  }
+  
+
+  // ---------------- loop and input ----------------
+  var last = 0;
+  function frame(ts) {
+    var dt = Math.min(0.05, (ts - last) / 1000 || 0); last = ts;
+    cx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+    buttons = [];
+    if (screen === "title") drawTitle(dt);
+    else if (screen === "map") drawMap();
+    else if (screen === "help") drawHelp();
+    else if (screen === "play") drawPlay(dt);
+    else if (screen === "demoend") drawDemoEnd();
+    requestAnimationFrame(frame);
+  }
+  function resize() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H); dpr = window.devicePixelRatio || 1;
+    cv.style.width = Math.floor(W * scale) + "px"; cv.style.height = Math.floor(H * scale) + "px";
+    cv.width = Math.floor(W * scale * dpr); cv.height = Math.floor(H * scale * dpr);
+  }
+  window.addEventListener("resize", resize); resize();
+  function local(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+  cv.addEventListener("mousemove", function (e) { hover = local(e); });
+  cv.addEventListener("mouseleave", function () { hover = { x: -1, y: -1 }; });
+  cv.addEventListener("click", function (e) {
+    var m = local(e);
+    cv.focus();
+    for (var i = buttons.length - 1; i >= 0; i--) { var b = buttons[i]; if (m.x >= b.x && m.x <= b.x + b.w && m.y >= b.y && m.y <= b.y + b.h) { b.fn(); return; } }
+  });
+  window.addEventListener("keydown", function (e) {
+    if (screen === "title" && (e.key === "Enter" || e.key === " ")) { var next = LEVELS.filter(function (l) { return !solved(l) && chapterOpen(l.ch); })[0]; if (next) openLevel(next); else screen = "map"; e.preventDefault(); return; }
+    if (screen === "help" && (e.key === "Escape" || e.key === "Enter")) { screen = helpFrom === "play" && cur ? "play" : "title"; return; }
+    if (screen === "map" && e.key === "Escape") { screen = "title"; return; }
+    if (screen !== "play") return;
+    var k = e.key, g = gridGeom(), alpha = cur.alphabet;
+    if (k === "ArrowUp") { sel.r = (sel.r + g.nRows - 1) % g.nRows; buf = ""; e.preventDefault(); return; }
+    if (k === "ArrowDown") { sel.r = (sel.r + 1) % g.nRows; buf = ""; e.preventDefault(); return; }
+    if (k === "ArrowLeft") { sel.c = (sel.c + g.nCols - 1) % g.nCols; buf = ""; e.preventDefault(); return; }
+    if (k === "ArrowRight") { sel.c = (sel.c + 1) % g.nCols; buf = ""; e.preventDefault(); return; }
+    if (k === "Escape") { buf = ""; if (!buf) screen = screen; return; }
+    if (k === "Delete" || k === "Backspace") { if (buf) buf = buf.slice(0, -1); else setRule(TMx.STATES.charAt(sel.r) + alpha[sel.c], null); e.preventDefault(); return; }
+    if (k === " ") { if (clerk && clerk.done) resetClerk(); stepOnce(); e.preventDefault(); return; }
+    if (k === "Enter") { if (clerk && clerk.done) resetClerk(); running = !running; e.preventDefault(); return; }
+    if (k.length !== 1) return;
+    // typing a rule: symbol, direction, next state
+    if (buf.length === 0) {
+      var sym = k === "." ? "_" : k;
+      if (alpha.indexOf(sym) < 0) {
+        if ((k === "r" || k === "R") && !e.ctrlKey) { resetClerk(); return; }
+        if (k === "t" || k === "T") { testAll(); return; }
+        say("\"" + k + "\" is not a symbol of this job. Symbols: " + alpha.split("").join(" ")); sfx("deny"); return;
+      }
+      buf = sym; sfx("type"); return;
+    }
+    if (buf.length === 1) { var m = k.toUpperCase(); if (m !== "L" && m !== "R") { say("Second key: L or R."); sfx("deny"); return; } buf += m; sfx("type"); return; }
+    if (buf.length === 2) {
+      var nx = k === "!" || k === "s" || k === "S" ? "!" : k.toUpperCase(), idx = TMx.STATES.indexOf(nx);
+      if (nx !== "!" && (idx < 0 || idx >= cur.maxStates)) { say("Third key: a state A-" + TMx.STATES.charAt(cur.maxStates - 1) + ", or ! (or S) to stop."); sfx("deny"); return; }
+      setRule(TMx.STATES.charAt(sel.r) + alpha[sel.c], { w: buf[0], m: buf[1], n: nx });
+      buf = ""; sfx("stamp");
+      sel.c = (sel.c + 1) % g.nCols; if (sel.c === 0) sel.r = (sel.r + 1) % g.nRows;
+    }
+  });
+
+  window.TAPE_APP = {
+    state: function () { return { screen: screen, cur: cur, rules: rules, result: result, clerk: clerk, store: store, sel: sel }; },
+    open: function (id) { var lv = LEVELS.filter(function (l) { return l.id === id; })[0]; if (lv) openLevel(lv); },
+    card: function (text) { rules = TMx.parseCard(text).rules; saveCard(); resetClerk(); },
+    test: function () { testAll(); return result; }, run: function (on) { running = on; }, speed: function (s) { speed = s; },
+    pick: function (i) { testIdx = i; resetClerk(); }, screen: function (s) { screen = s; }, next: nextLevel, step: stepOnce
+  };
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1656 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>CLACKDOWN</title>
+<style>
+  :root{ --ink:#f3ecdf; --dim:#a79f92; --gold:#ffcf4a; --red:#ff5a5f; --teal:#6fe3d0;
+         --panel:rgba(22,18,16,.94); --edge:rgba(255,207,74,.28); }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  [hidden]{display:none!important}
+  html,body{height:100%;margin:0}
+  body{background:#0f0c0b;color:var(--ink);font-family:"Trebuchet MS","Segoe UI",system-ui,sans-serif;
+       display:flex;align-items:center;justify-content:center;overflow:hidden;user-select:none}
+  #wrap{position:relative}
+  canvas{display:block;width:100%;height:100%;touch-action:none}
+  .ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:14px;
+      background:rgba(10,8,7,.82);backdrop-filter:blur(3px);z-index:5}
+  .ov[hidden]{display:none!important}
+  .card{width:min(500px,96%);max-height:96%;overflow:auto;background:var(--panel);border:1px solid var(--edge);
+        border-radius:14px;padding:18px 20px;box-shadow:0 20px 60px rgba(0,0,0,.6)}
+  h1{margin:4px 0 0;text-align:center;font-size:48px;letter-spacing:5px;line-height:1;
+     background:linear-gradient(180deg,#fff7e6,#ffcf4a 55%,#ff8a3d);-webkit-background-clip:text;background-clip:text;color:transparent;
+     filter:drop-shadow(0 3px 0 #3a2410)}
+  h2{margin:0 0 8px;font-size:21px;letter-spacing:2px;color:var(--gold)}
+  .tag{text-align:center;color:var(--dim);margin:8px 0 14px;font-size:14px;line-height:1.45}
+  p{margin:7px 0;line-height:1.5;font-size:14px}
+  .btn{display:block;width:100%;margin:7px 0;padding:12px 14px;border-radius:10px;cursor:pointer;border:1px solid var(--edge);
+       background:linear-gradient(180deg,#3a2c22,#241b15);color:var(--ink);font:inherit;font-size:16px;font-weight:bold;letter-spacing:2px}
+  .btn:hover{border-color:var(--gold)}
+  .btn[hidden]{display:none!important}
+  .btn.go{background:linear-gradient(180deg,#ffd35a,#e79a2a);color:#2a1606;border-color:#ffe39a}
+  .btn small{display:block;font-size:11px;font-weight:normal;letter-spacing:1px;opacity:.75;margin-top:2px}
+  .row{display:flex;gap:8px;align-items:stretch}
+  .row .btn{margin:7px 0}
+  .heat{display:flex;align-items:center;justify-content:space-between;margin:4px 0 2px;gap:8px}
+  .heat button{width:44px;padding:8px 0;border-radius:8px;border:1px solid var(--edge);background:#241b15;color:var(--ink);font:inherit;font-size:16px;cursor:pointer}
+  .heat button:disabled{opacity:.3;cursor:default}
+  .heat .lbl{flex:1;text-align:center;font-size:13px;color:var(--dim)}
+  .heat .lbl b{color:var(--gold);display:block;font-size:15px}
+  .cards{display:grid;grid-template-columns:1fr;gap:8px;margin-top:8px}
+  .up{padding:12px 14px;border-radius:12px;border:1px solid var(--edge);cursor:pointer;background:linear-gradient(180deg,#33271f,#1f1813);text-align:left}
+  .up:hover{border-color:var(--gold);background:linear-gradient(180deg,#46352a,#2a2019)}
+  .up .k{font-size:10px;letter-spacing:2px;color:var(--teal)}
+  .up .n{font-size:17px;font-weight:bold;color:var(--gold);margin-top:2px}
+  .up .d{font-size:13px;color:var(--dim);margin-top:3px;line-height:1.35}
+  .big{text-align:center;font-size:34px;color:var(--gold);letter-spacing:2px;margin:4px 0}
+  .mid{text-align:center;color:var(--dim);font-size:13px}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:6px 0}
+  td{padding:4px 5px;border-bottom:1px solid rgba(255,207,74,.12)}
+  td.r{text-align:right;color:var(--gold)}
+  .keys{display:grid;grid-template-columns:auto 1fr;gap:5px 10px;font-size:13px;margin:8px 0}
+  .keys b{color:var(--gold);white-space:nowrap}
+  .foot{text-align:center;color:var(--dim);font-size:11px;margin-top:10px;letter-spacing:1px}
+  .note{color:var(--teal);text-align:center;font-size:13px;margin-top:6px}
+</style>
+
+<div id="wrap">
+  <canvas id="cv"></canvas>
+
+  <div class="ov" id="ovTitle">
+    <div class="card">
+      <h1>CLACKDOWN</h1>
+      <div class="tag">Dominoes &times; Tower Defense.<br>Build the line. Tap it. Watch the horde fall.</div>
+      <div class="heat" id="heatBox" hidden>
+        <button id="heatDown">&lsaquo;</button>
+        <div class="lbl"><b id="heatName">Heat 0</b><span id="heatDesc">The standard run.</span></div>
+        <button id="heatUp">&rsaquo;</button>
+      </div>
+      <button class="btn go" id="btnPlay">PLAY<small>20 waves &middot; save between waves</small></button>
+      <button class="btn" id="btnResume" hidden>CONTINUE</button>
+      <div class="row">
+        <button class="btn" id="btnDaily">DAILY RUN</button>
+        <button class="btn" id="btnHow">HOW TO</button>
+      </div>
+      <button class="btn" id="btnRecords">RECORDS</button>
+      <div class="foot" id="titleFoot"></div>
+    </div>
+  </div>
+
+  <div class="ov" id="ovHow" hidden>
+    <div class="card">
+      <h2>HOW TO PLAY</h2>
+      <p>The horde marches down toward your keep. <b>Tap a standing domino to knock it over.</b> It falls the way it points, knocks the next one, and every domino in the chain crushes whatever it lands on &mdash; plus a shockwave to both sides.</p>
+      <p><b>Longer chains hit harder.</b> Every domino later in a chain carries more momentum, and long chains pay out gold.</p>
+      <p>Fallen dominoes stand back up on their own after a few seconds, so timing is everything: wait until the horde is walking along your line, then tap.</p>
+      <div class="keys">
+        <b>Tap / click a domino</b><span>Knock it over</span>
+        <b>Drag on an empty square</b><span>Place a domino; the drag sets which way it falls</span>
+        <b>Tap an empty square</b><span>Place a domino facing the arrow in the tray</span>
+        <b>Right-click / R</b><span>Turn a domino / turn the arrow</span>
+        <b>1 &ndash; 8</b><span>Pick a domino type</span>
+        <b>X</b><span>Remove tool (half refund)</span>
+        <b>Space</b><span>Start the next wave</span>
+        <b>F</b><span>Double speed</span>
+        <b>Esc</b><span>Pause</span>
+      </div>
+      <p>Watch out for purple <b>Knockers</b>: they tip your dominoes over when they walk into them. Blue <b>Shieldbugs</b> shrug off the first hit of every chain.</p>
+      <button class="btn go" id="btnHowBack">GOT IT</button>
+    </div>
+  </div>
+
+  <div class="ov" id="ovRecords" hidden>
+    <div class="card">
+      <h2>RECORDS</h2>
+      <div id="recBody"></div>
+      <button class="btn go" id="btnRecBack">BACK</button>
+    </div>
+  </div>
+
+  <div class="ov" id="ovReward" hidden>
+    <div class="card">
+      <h2 id="rwTitle">WAVE CLEARED</h2>
+      <div class="mid" id="rwSub"></div>
+      <div class="cards" id="rwCards"></div>
+    </div>
+  </div>
+
+  <div class="ov" id="ovPause" hidden>
+    <div class="card">
+      <h2>PAUSED</h2>
+      <button class="btn go" id="btnUnpause">RESUME</button>
+      <button class="btn" id="btnPauseHow">HOW TO PLAY</button>
+      <button class="btn" id="btnQuit">SAVE &amp; QUIT TO MENU</button>
+    </div>
+  </div>
+
+  <div class="ov" id="ovOver" hidden>
+    <div class="card">
+      <h2 id="ovHead">THE KEEP HAS FALLEN</h2>
+      <div class="big" id="ovScore"></div>
+      <div class="mid" id="ovSub"></div>
+      <table id="ovTable"></table>
+      <div class="note" id="ovNote"></div>
+      <button class="btn go" id="btnAgain">PLAY AGAIN</button>
+      <button class="btn" id="btnEndless" hidden>KEEP GOING &mdash; ENDLESS</button>
+      <div class="row">
+        <button class="btn" id="btnCopy">COPY RESULT</button>
+        <button class="btn" id="btnMenu">MENU</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* CLACKDOWN - dominoes x tower defense. Rules only, no DOM.
+   Deterministic: same seed + same commands at the same ticks => same result.
+   The rules never call the random, trig or power helpers (browsers differ in the last bits). */
+(function (root) {
+  "use strict";
+
+  var TICK = 1 / 60;
+  var COLS = 12, ROWS = 14;
+  var WAVES = 20;                 // a full run; endless continues after
+  var DIRS = [[0, -1], [1, 0], [0, 1], [-1, 0]];   // 0 up, 1 right, 2 down, 3 left
+  var DIR_NAMES = ["up", "right", "down", "left"];
+
+  // ---------- deterministic helpers ----------
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function makeRng(seed) {
+    var f = mulberry32(seed), o = function () { o.s = (o.s + 1) | 0; return f(); };
+    o.s = 0; o.seed = seed;
+    return o;
+  }
+  function resumeRng(seed, calls) { var r = makeRng(seed); for (var i = 0; i < calls; i++) r(); return r; }
+  function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+  function tri(p) { p = p - Math.floor(p); return p < 0.5 ? p * 4 - 1 : 3 - p * 4; }
+
+  // ---------- dominoes ----------
+  // cost in gold, dmg per landing, fall = seconds to topple
+  var DOMINOES = {
+    basic:  { name: "Domino",        cost: 2,  dmg: 2,   fall: 0.11, col: "#f4efe3", desc: "Falls the way it points. Crushes what it lands on." },
+    heavy:  { name: "Heavy Domino",  cost: 6,  dmg: 5,   fall: 0.17, col: "#9aa6b8", desc: "Hits two and a half times as hard, falls a little slower." },
+    split:  { name: "Splitter",      cost: 7,  dmg: 2,   fall: 0.11, col: "#7fd6ff", desc: "Also knocks the dominoes to its left and right: one chain becomes three." },
+    bomb:   { name: "Bomb Domino",   cost: 9,  dmg: 2,   fall: 0.11, col: "#ff7a59", desc: "Blows up the 3x3 around where it lands." },
+    spring: { name: "Spring",        cost: 6,  dmg: 2,   fall: 0.09, col: "#b8f36a", desc: "Launches the chain two cells ahead, over a gap." },
+    echo:   { name: "Echo Domino",   cost: 8,  dmg: 2,   fall: 0.11, col: "#c79bff", desc: "Hits its cells twice." },
+    gold:   { name: "Gold Domino",   cost: 5,  dmg: 2,   fall: 0.11, col: "#ffd35a", desc: "Pays gold for every domino that fell before it in the chain." },
+    frost:  { name: "Frost Domino",  cost: 6,  dmg: 2,   fall: 0.11, col: "#bfefff", desc: "Slows everything it hits for 3 seconds." }
+  };
+  var DOMINO_ORDER = ["basic", "heavy", "split", "bomb", "spring", "echo", "gold", "frost"];
+
+  // ---------- monsters ----------
+  // spd in cells per second
+  var MONSTERS = {
+    grunt:   { name: "Grunt",    hp: 3,   spd: 0.62, gold: 1,  pts: 10,  r: 0.30, col: "#8be07a" },
+    runner:  { name: "Runner",   hp: 2,   spd: 1.15, gold: 1,  pts: 12,  r: 0.26, col: "#ffe070" },
+    brute:   { name: "Brute",    hp: 12,  spd: 0.40, gold: 3,  pts: 40,  r: 0.40, col: "#e07a5a" },
+    shield:  { name: "Shieldbug",hp: 6,   spd: 0.50, gold: 2,  pts: 25,  r: 0.34, col: "#7aa6e0", shield: true },
+    knocker: { name: "Knocker",  hp: 5,   spd: 0.55, gold: 2,  pts: 25,  r: 0.33, col: "#d68bff", knocks: true },
+    splitter:{ name: "Splitter", hp: 5,   spd: 0.52, gold: 2,  pts: 20,  r: 0.34, col: "#5ee0c8", splits: "mite" },
+    mite:    { name: "Mite",     hp: 1,   spd: 0.95, gold: 0,  pts: 4,   r: 0.20, col: "#5ee0c8" },
+    boss:    { name: "Toppler",  hp: 170, spd: 0.20, gold: 30, pts: 800, r: 0.75, col: "#ff4d6d", knocks: true, boss: true }
+  };
+
+  // ---------- upgrades ----------
+  var UPGRADES = [
+    // unlocks
+    { id: "u_heavy",  kind: "unlock", dom: "heavy",  name: "Heavy Dominoes",  desc: "Unlock Heavy Dominoes: 2.5x damage." },
+    { id: "u_split",  kind: "unlock", dom: "split",  name: "Splitters",       desc: "Unlock Splitters: one chain becomes three." },
+    { id: "u_bomb",   kind: "unlock", dom: "bomb",   name: "Bomb Dominoes",   desc: "Unlock Bomb Dominoes: 3x3 blast on landing." },
+    { id: "u_spring", kind: "unlock", dom: "spring", name: "Springs",         desc: "Unlock Springs: jump the chain over a gap." },
+    { id: "u_echo",   kind: "unlock", dom: "echo",   name: "Echo Dominoes",   desc: "Unlock Echo Dominoes: every hit lands twice." },
+    { id: "u_gold",   kind: "unlock", dom: "gold",   name: "Gold Dominoes",   desc: "Unlock Gold Dominoes: long chains pay out." },
+    { id: "u_frost",  kind: "unlock", dom: "frost",  name: "Frost Dominoes",  desc: "Unlock Frost Dominoes: slow the horde." },
+    // stacking
+    { id: "momentum", kind: "stack", max: 4, name: "Momentum",      desc: "Every domino later in a chain hits harder (+50% ramp)." },
+    { id: "reset",    kind: "stack", max: 3, name: "Quick Reset",   desc: "Fallen dominoes stand back up 25% sooner." },
+    { id: "power",    kind: "stack", max: 4, name: "Hardwood",      desc: "+1 damage on every domino." },
+    { id: "thrift",   kind: "stack", max: 3, name: "Bulk Order",    desc: "All dominoes cost 1 less (never below 1)." },
+    { id: "payday",   kind: "stack", max: 99, name: "Payday",       desc: "+25 gold right now." },
+    { id: "wall",     kind: "stack", max: 3, name: "Thick Walls",   desc: "+5 keep health." },
+    { id: "bounty",   kind: "stack", max: 3, name: "Bounty",        desc: "+1 gold from every kill." },
+    // relics (once)
+    { id: "r_tenth",   kind: "relic", name: "Domino Effect",  desc: "Every 10th domino in a chain explodes." },
+    { id: "r_first",   kind: "relic", name: "Loaded Die",     desc: "The first domino in every chain deals x4 damage." },
+    { id: "r_after",   kind: "relic", name: "Aftershock",     desc: "When a chain of 15+ ends, its last cell blows up." },
+    { id: "r_refund",  kind: "relic", name: "House Rules",    desc: "Chains of 20+ refund 5 gold." },
+    { id: "r_domino",  kind: "relic", name: "Standing Order", desc: "Knockers no longer tip your dominoes over." }
+  ];
+  function upg(id) { for (var i = 0; i < UPGRADES.length; i++) if (UPGRADES[i].id === id) return UPGRADES[i]; return null; }
+  function lv(g, id) { return g.up[id] || 0; }
+
+  // ---------- heat (difficulty ladder, unlocked by winning) ----------
+  var HEAT = [
+    { name: "Heat 0", desc: "The standard run." },
+    { name: "Heat 1", desc: "Monsters have 20% more health." },
+    { name: "Heat 2", desc: "Monsters move 12% faster." },
+    { name: "Heat 3", desc: "Knockers show up twice as often." },
+    { name: "Heat 4", desc: "Brutes and bosses have 40% more health." },
+    { name: "Heat 5", desc: "The keep starts with 15 health." }
+  ];
+
+  // ---------- creation ----------
+  function newGame(seed, opts) {
+    opts = opts || {};
+    var heat = clamp(opts.heat | 0, 0, HEAT.length - 1);
+    var g = {
+      seed: seed >>> 0, rng: makeRng(seed >>> 0),
+      heat: heat, mode: opts.mode || "run",
+      t: 0, wave: 0, phase: "build",        // build | wave | reward | over
+      gold: 40, lives: heat >= 5 ? 15 : 20, maxLives: heat >= 5 ? 15 : 20,
+      score: 0, over: false, won: false,
+      up: {}, unlocked: { basic: true }, relics: {},
+      grid: [],                            // [r][c] -> domino or null
+      mons: [], nextMonId: 1,
+      spawns: [], spawnT: 0,
+      falling: [],                         // dominoes currently toppling
+      pulses: [],                          // delayed hits (echo)
+      chains: {}, nextChainId: 1,
+      bestChain: 0, kills: 0, leaks: 0,
+      events: [], offered: null,
+      stats: { chains: 0, longest: 0, dominoesFallen: 0 }
+    };
+    for (var r = 0; r < ROWS; r++) { var row = []; for (var c = 0; c < COLS; c++) row.push(null); g.grid.push(row); }
+    if (opts.starter !== false) starterLine(g);
+    return g;
+  }
+
+  // the opening hook: a ready-made line across the path so the first tap already wipes a group
+  function starterLine(g) {
+    for (var c = 0; c < COLS; c++) g.grid[6][c] = makeDomino("basic", c, 6, 1);
+  }
+
+  function makeDomino(type, c, r, dir) {
+    return { type: type, c: c, r: r, dir: dir, state: "up", t: 0, downT: 0, chain: 0, idx: 0 };
+  }
+
+  function inBounds(c, r) { return c >= 0 && c < COLS && r >= 0 && r < ROWS; }
+  function at(g, c, r) { return inBounds(c, r) ? g.grid[r][c] : null; }
+
+  function cost(g, type) {
+    var base = DOMINOES[type].cost - lv(g, "thrift");
+    return base < 1 ? 1 : base;
+  }
+  function resetTime(g) { return 2.8 * (1 - 0.25 * lv(g, "reset")); }
+  function momentum(g) { return 0.05 * (1 + 0.5 * lv(g, "momentum")); }
+
+  // ---------- player commands ----------
+  function place(g, type, c, r, dir) {
+    if (g.over) return false;
+    if (!inBounds(c, r) || g.grid[r][c]) return false;
+    if (!g.unlocked[type]) return false;
+    var price = cost(g, type);
+    if (g.gold < price) return false;
+    g.gold -= price;
+    g.grid[r][c] = makeDomino(type, c, r, dir & 3);
+    g.events.push({ k: "place", c: c, r: r, type: type });
+    return true;
+  }
+  function remove(g, c, r) {
+    var d = at(g, c, r);
+    if (!d || d.state === "falling") return false;
+    g.grid[r][c] = null;
+    var back = Math.floor(cost(g, d.type) / 2);
+    g.gold += back;
+    g.events.push({ k: "remove", c: c, r: r, refund: back });
+    return true;
+  }
+  function rotate(g, c, r) {
+    var d = at(g, c, r);
+    if (!d || d.state !== "up") return false;
+    d.dir = (d.dir + 1) & 3;
+    return true;
+  }
+  // tap a standing domino: it falls and starts a chain
+  function knock(g, c, r, byMonster) {
+    var d = at(g, c, r);
+    if (!d || d.state !== "up") return false;
+    var ch = { id: g.nextChainId++, len: 0, kills: 0, pts: 0, open: 0, lastC: c, lastR: r, byMonster: !!byMonster };
+    g.chains[ch.id] = ch;
+    startFall(g, d, ch);
+    g.events.push({ k: "knock", c: c, r: r, byMonster: !!byMonster });
+    return true;
+  }
+
+  function startFall(g, d, ch) {
+    d.state = "falling";
+    d.t = 0;
+    d.chain = ch.id;
+    d.idx = ch.len++;
+    ch.open++;
+    g.falling.push(d);
+  }
+
+  // ---------- waves ----------
+  function startWave(g) {
+    if (g.over || g.phase !== "build") return false;
+    g.wave++;
+    g.phase = "wave";
+    g.spawns = planWave(g, g.wave);
+    g.spawnT = 0;
+    g.events.push({ k: "wave", n: g.wave });
+    return true;
+  }
+
+  function planWave(g, n) {
+    var list = [], t = 1.0, i;
+    // the first wave teaches the one idea: a group walks onto your line, you tap, it is gone
+    if (n === 1) {
+      for (i = 0; i < 3; i++) {
+        var w1 = 3 + Math.floor(g.rng() * 2), l1 = Math.floor(g.rng() * (COLS - w1 + 1));
+        for (var k1 = 0; k1 < w1; k1++) list.push({ at: t, type: "grunt", x: l1 + k1 });
+        t += 6.5;
+      }
+      return list;
+    }
+    var knockBoost = g.heat >= 3 ? 2 : 1;
+    var groups = 3 + Math.floor(n * 0.9);
+    var endless = n > WAVES;
+    for (i = 0; i < groups; i++) {
+      var roll = g.rng();
+      var type = "grunt";
+      if (n >= 2 && roll < 0.22) type = "runner";
+      else if (n >= 4 && roll < 0.34) type = "brute";
+      else if (n >= 5 && roll < 0.34 + 0.08 * knockBoost) type = "knocker";
+      else if (n >= 7 && roll < 0.56) type = "shield";
+      else if (n >= 9 && roll < 0.66) type = "splitter";
+      // a group walks in a line across a few columns: exactly what a sideways domino sweep eats
+      var width = 2 + Math.floor(g.rng() * (n < 5 ? 3 : 5));
+      if (type === "brute") width = 1 + Math.floor(g.rng() * 2);
+      var left = Math.floor(g.rng() * (COLS - width + 1));
+      var rows = 1 + (n >= 6 ? Math.floor(g.rng() * 2) : 0) + (endless ? 1 : 0);
+      for (var rr = 0; rr < rows; rr++) {
+        for (var k = 0; k < width; k++) {
+          list.push({ at: t + rr * 0.9, type: type, x: left + k });
+        }
+      }
+      t += 2.4 - Math.min(1.3, n * 0.06) + g.rng() * 1.2;
+    }
+    if (n === 10 || n === WAVES || (endless && n % 5 === 0)) {
+      list.push({ at: t + 1.5, type: "boss", x: 5.5 });
+      for (i = 0; i < 6; i++) list.push({ at: t + 2.5 + i * 0.3, type: "grunt", x: 3 + i });
+    }
+    list.sort(function (a, b) { return a.at - b.at || a.x - b.x; });
+    return list;
+  }
+
+  function hpScale(g) {
+    var n = g.wave;
+    var s = 1 + 0.10 * (n - 1) + (n > 12 ? 0.08 * (n - 12) : 0);
+    if (g.heat >= 1) s *= 1.2;
+    return s;
+  }
+
+  function spawn(g, type, x, y) {
+    var m = MONSTERS[type];
+    var hp = type === "mite" ? m.hp : Math.round(m.hp * hpScale(g) * 10) / 10;
+    if (g.heat >= 4 && (type === "brute" || type === "boss")) hp = Math.round(hp * 1.4 * 10) / 10;
+    var mon = {
+      id: g.nextMonId++, type: type, x: x, y: y == null ? -0.6 : y, hp: hp, maxHp: hp,
+      slowT: 0, wob: g.rng(), shieldUsedBy: 0, lastChain: 0, lastHitT: -1
+    };
+    g.mons.push(mon);
+    return mon;
+  }
+
+  // ---------- step ----------
+  function step(g, input) {
+    input = input || {};
+    g.events.length = 0;
+    if (g.over) return g;
+    if (input.knock) knock(g, input.knock.c, input.knock.r, false);
+    g.t += TICK;
+    var i, d;
+
+    // --- spawning ---
+    if (g.phase === "wave") {
+      g.spawnT += TICK;
+      while (g.spawns.length && g.spawns[0].at <= g.spawnT) {
+        var s = g.spawns.shift();
+        spawn(g, s.type, s.x);
+      }
+    }
+
+    // --- falling dominoes ---
+    for (i = 0; i < g.falling.length; i++) {
+      d = g.falling[i];
+      d.t += TICK / (DOMINOES[d.type].fall);
+    }
+    // land in a stable order
+    var landed = [];
+    for (i = g.falling.length - 1; i >= 0; i--) {
+      if (g.falling[i].t >= 1) { landed.push(g.falling[i]); g.falling.splice(i, 1); }
+    }
+    landed.sort(function (a, b) { return a.chain - b.chain || a.idx - b.idx; });
+    for (i = 0; i < landed.length; i++) land(g, landed[i]);
+
+    // --- echo pulses ---
+    for (i = g.pulses.length - 1; i >= 0; i--) {
+      var p = g.pulses[i];
+      p.t -= TICK;
+      if (p.t <= 0) {
+        g.pulses.splice(i, 1);
+        hitCell(g, p.c, p.r, p.dmg, g.chains[p.chain], "echo");
+        hitCell(g, p.c2, p.r2, p.dmg, g.chains[p.chain], "echo");
+      }
+    }
+
+    // --- fallen dominoes stand back up ---
+    var rt = resetTime(g);
+    for (var r = 0; r < ROWS; r++) for (var c = 0; c < COLS; c++) {
+      d = g.grid[r][c];
+      if (d && d.state === "down") {
+        d.downT += TICK;
+        if (d.downT >= rt) { d.state = "up"; d.downT = 0; g.events.push({ k: "stand", c: c, r: r }); }
+      }
+    }
+
+    // --- monsters ---
+    var speedMul = g.heat >= 2 ? 1.12 : 1;
+    for (i = g.mons.length - 1; i >= 0; i--) {
+      var m = g.mons[i], def = MONSTERS[m.type];
+      if (m.slowT > 0) m.slowT -= TICK;
+      var v = def.spd * speedMul * (m.slowT > 0 ? 0.5 : 1);
+      m.y += v * TICK;
+      m.wob += TICK * 0.35;
+      if (!def.boss) m.x = clamp(m.x + tri(m.wob) * 0.12 * TICK, 0, COLS - 1);
+      // knockers tip over whatever they walk into
+      if (def.knocks && !g.relics.r_domino) {
+        var kc = Math.round(m.x), kr = Math.round(m.y);
+        var kd = at(g, kc, kr);
+        if (kd && kd.state === "up") knock(g, kc, kr, true);
+        if (def.boss) {                                      // the boss is wide: it tips its neighbours too
+          var kd2 = at(g, kc + 1, kr); if (kd2 && kd2.state === "up") knock(g, kc + 1, kr, true);
+          var kd3 = at(g, kc - 1, kr); if (kd3 && kd3.state === "up") knock(g, kc - 1, kr, true);
+        }
+      }
+      if (m.y >= ROWS - 0.1) {
+        g.mons.splice(i, 1);
+        var dmg = def.boss ? 8 : 1;
+        g.lives -= dmg;
+        g.leaks++;
+        g.events.push({ k: "leak", x: m.x, dmg: dmg });
+      }
+    }
+
+    // --- chains that have finished ---
+    for (var id in g.chains) {
+      if (!g.chains.hasOwnProperty(id)) continue;
+      var ch = g.chains[id];
+      if (ch.open === 0) {
+        finishChain(g, ch);
+        delete g.chains[id];
+      }
+    }
+
+    // --- end of wave / run ---
+    if (g.lives <= 0) {
+      g.lives = 0; g.over = true; g.won = false; g.phase = "over";
+      g.events.push({ k: "lose" });
+      return g;
+    }
+    if (g.phase === "wave" && g.spawns.length === 0 && g.mons.length === 0 && g.falling.length === 0) {
+      endWave(g);
+    }
+    return g;
+  }
+
+  function land(g, d) {
+    var ch = g.chains[d.chain];
+    var type = DOMINOES[d.type];
+    var dx = DIRS[d.dir][0], dy = DIRS[d.dir][1];
+    var reach = d.type === "spring" ? 2 : 1;
+    var tc = d.c + dx * reach, tr = d.r + dy * reach;
+    d.state = "down"; d.downT = 0;
+    g.stats.dominoesFallen++;
+
+    // damage: momentum makes every later domino in a chain heavier
+    var mult = 1 + momentum(g) * d.idx;
+    if (mult > 5) mult = 5;
+    var dmg = (type.dmg + lv(g, "power")) * mult;
+    if (g.relics.r_first && d.idx === 0) dmg *= 4;
+
+    hitCell(g, d.c, d.r, dmg, ch, d.type);
+    hitCell(g, d.c + dx, d.r + dy, dmg, ch, d.type);
+    if (reach === 2) hitCell(g, tc, tr, dmg, ch, d.type);
+    // the slam throws a shockwave out to both sides of where it lands
+    var side = dmg * 0.6;
+    hitCell(g, d.c + dx - dy, d.r + dy + dx, side, ch, "wave");
+    hitCell(g, d.c + dx + dy, d.r + dy - dx, side, ch, "wave");
+
+    if (d.type === "bomb" || (g.relics.r_tenth && d.idx > 0 && (d.idx + 1) % 10 === 0)) {
+      blast(g, d.c + dx, d.r + dy, dmg * (d.type === "bomb" ? 2.5 : 2), ch);
+    }
+    if (d.type === "echo") {
+      g.pulses.push({ t: 0.3, c: d.c, r: d.r, c2: d.c + dx, r2: d.r + dy, dmg: dmg, chain: d.chain });
+    }
+    if (d.type === "frost") {
+      frostCell(g, d.c, d.r); frostCell(g, d.c + dx, d.r + dy);
+    }
+    if (d.type === "gold") {
+      var pay = 1 + Math.floor(d.idx / 2);
+      g.gold += pay;
+      g.events.push({ k: "gold", c: d.c, r: d.r, amount: pay });
+    }
+    g.events.push({ k: "land", c: d.c, r: d.r, dir: d.dir, idx: d.idx, type: d.type, chain: d.chain });
+
+    // pass the push on
+    if (ch) {
+      ch.lastC = tc; ch.lastR = tr;
+      pushInto(g, tc, tr, ch);
+      if (d.type === "split") {
+        var lx = DIRS[(d.dir + 3) & 3], rx = DIRS[(d.dir + 1) & 3];
+        pushInto(g, d.c + lx[0], d.r + lx[1], ch);
+        pushInto(g, d.c + rx[0], d.r + rx[1], ch);
+      }
+      ch.open--;
+    }
+  }
+
+  function pushInto(g, c, r, ch) {
+    var n = at(g, c, r);
+    if (n && n.state === "up") startFall(g, n, ch);
+  }
+
+  function frostCell(g, c, r) {
+    for (var i = 0; i < g.mons.length; i++) {
+      var m = g.mons[i];
+      if (inCell(m, c, r)) m.slowT = 3;
+    }
+  }
+
+  function blast(g, c, r, dmg, ch) {
+    for (var yy = -1; yy <= 1; yy++) for (var xx = -1; xx <= 1; xx++) hitCell(g, c + xx, r + yy, dmg, ch, "blast");
+    g.events.push({ k: "blast", c: c, r: r });
+  }
+
+  function inCell(m, c, r) {
+    var def = MONSTERS[m.type];
+    var pad = 0.5 + def.r * 0.6;
+    var ex = m.x - c, ey = m.y - r;
+    if (ex < 0) ex = -ex;
+    if (ey < 0) ey = -ey;
+    return ex <= pad && ey <= pad;
+  }
+
+  function hitCell(g, c, r, dmg, ch, src) {
+    if (!inBounds(c, r)) return;
+    for (var i = g.mons.length - 1; i >= 0; i--) {
+      var m = g.mons[i];
+      if (!inCell(m, c, r)) continue;
+      var def = MONSTERS[m.type];
+      // a shield soaks the first hit of every chain
+      if (def.shield && ch && m.shieldUsedBy !== ch.id) { m.shieldUsedBy = ch.id; g.events.push({ k: "block", x: m.x, y: m.y }); continue; }
+      // one hit per domino cell per tick: a monster standing in two cells of the same domino is hit once
+      if (m.lastHitT === g.t && m.lastChain === (ch ? ch.id : -1)) continue;
+      m.lastHitT = g.t; m.lastChain = ch ? ch.id : -1;
+      m.hp -= dmg;
+      g.events.push({ k: "hit", x: m.x, y: m.y, dmg: dmg, src: src });
+      if (m.hp <= 0) kill(g, i, ch);
+    }
+  }
+
+  function kill(g, i, ch) {
+    var m = g.mons[i], def = MONSTERS[m.type];
+    g.mons.splice(i, 1);
+    g.kills++;
+    var goldGain = def.gold + (def.gold > 0 ? lv(g, "bounty") : 0);
+    g.gold += goldGain;
+    var mul = ch ? 1 + Math.floor(ch.len / 5) * 0.25 : 1;
+    var pts = Math.round(def.pts * mul);
+    g.score += pts;
+    if (ch) { ch.kills++; ch.pts += pts; }
+    g.events.push({ k: "kill", x: m.x, y: m.y, type: m.type, gold: goldGain, pts: pts, chain: ch ? ch.len : 0 });
+    if (def.splits) {
+      spawn(g, def.splits, clamp(m.x - 0.3, 0, COLS - 1), m.y - 0.2);
+      spawn(g, def.splits, clamp(m.x + 0.3, 0, COLS - 1), m.y - 0.2);
+    }
+  }
+
+  function finishChain(g, ch) {
+    g.stats.chains++;
+    // long chains pay: the crowd throws coins
+    var purse = Math.floor(ch.len / 8);
+    if (purse > 0) { g.gold += purse; g.events.push({ k: "gold", c: ch.lastC, r: ch.lastR, amount: purse }); }
+    if (ch.len > g.bestChain) g.bestChain = ch.len;
+    if (ch.len > g.stats.longest) g.stats.longest = ch.len;
+    if (g.relics.r_after && ch.len >= 15) blast(g, ch.lastC, ch.lastR, 6 + ch.len * 0.3, ch);
+    if (g.relics.r_refund && ch.len >= 20) { g.gold += 5; g.events.push({ k: "gold", c: ch.lastC, r: ch.lastR, amount: 5 }); }
+    g.events.push({ k: "chain", len: ch.len, kills: ch.kills, pts: ch.pts, byMonster: ch.byMonster });
+  }
+
+  function endWave(g) {
+    var bonus = 6 + g.wave;
+    g.gold += bonus;
+    g.events.push({ k: "waveClear", n: g.wave, bonus: bonus });
+    if (g.mode === "run" && g.wave >= WAVES && !g.won) {
+      g.won = true;
+      g.over = true;
+      g.phase = "over";
+      g.events.push({ k: "win" });
+      return;
+    }
+    g.phase = "reward";
+    g.offered = offer(g);
+  }
+
+  // ---------- rewards ----------
+  function available(g, u) {
+    if (u.kind === "unlock") return !g.unlocked[u.dom];
+    if (u.kind === "relic") return !g.relics[u.id];
+    return lv(g, u.id) < u.max;
+  }
+  function offer(g) {
+    var pool = [], i, out = [];
+    // early on, make sure new domino types show up so the board gets interesting fast
+    var unlocks = [], others = [];
+    for (i = 0; i < UPGRADES.length; i++) {
+      var u = UPGRADES[i];
+      if (!available(g, u)) continue;
+      if (u.id === "payday") continue;
+      (u.kind === "unlock" ? unlocks : others).push(u.id);
+    }
+    if (unlocks.length && g.wave <= 6) {
+      var k0 = Math.floor(g.rng() * unlocks.length);
+      if (k0 >= unlocks.length) k0 = unlocks.length - 1;
+      out.push(unlocks[k0]); unlocks.splice(k0, 1);
+    }
+    pool = unlocks.concat(others);
+    while (out.length < 3 && pool.length) {
+      var k = Math.floor(g.rng() * pool.length);
+      if (k >= pool.length) k = pool.length - 1;
+      out.push(pool[k]); pool.splice(k, 1);
+    }
+    while (out.length < 3) out.push("payday");       // never run dry
+    return out;
+  }
+  function choose(g, id) {
+    if (g.phase !== "reward" || !g.offered || g.offered.indexOf(id) < 0) return false;
+    var u = upg(id);
+    if (u.kind === "unlock") g.unlocked[u.dom] = true;
+    else if (u.kind === "relic") g.relics[u.id] = true;
+    else g.up[id] = lv(g, id) + 1;
+    if (id === "payday") g.gold += 25;
+    if (id === "wall") { g.lives += 5; g.maxLives += 5; }
+    g.offered = null;
+    g.phase = "build";
+    g.events.push({ k: "choose", id: id });
+    return true;
+  }
+  // after holding the keep, carry on with the same board for as long as it lasts
+  function continueEndless(g) {
+    if (!g.won) return false;
+    g.mode = "endless"; g.over = false; g.phase = "reward"; g.offered = offer(g);
+    return true;
+  }
+  function skipReward(g) {                 // the UI never needs it, the bot does
+    if (g.phase !== "reward") return false;
+    g.offered = null; g.phase = "build"; return true;
+  }
+
+  // ---------- save / resume (between waves only) ----------
+  function save(g) {
+    var dom = [];
+    for (var r = 0; r < ROWS; r++) for (var c = 0; c < COLS; c++) {
+      var d = g.grid[r][c];
+      if (d) dom.push([c, r, d.dir, d.type]);
+    }
+    return {
+      v: 1, seed: g.seed, rng: g.rng.s, heat: g.heat, mode: g.mode, wave: g.wave, phase: g.phase,
+      gold: g.gold, lives: g.lives, maxLives: g.maxLives, score: g.score, up: g.up, unlocked: g.unlocked,
+      relics: g.relics, offered: g.offered, bestChain: g.bestChain, kills: g.kills, leaks: g.leaks, dom: dom,
+      stats: g.stats
+    };
+  }
+  function load(o) {
+    if (!o || o.v !== 1 || (o.phase !== "build" && o.phase !== "reward")) return null;
+    var g = newGame(o.seed, { heat: o.heat, mode: o.mode, starter: false });
+    g.rng = resumeRng(o.seed, o.rng);
+    g.wave = o.wave; g.phase = o.phase; g.gold = o.gold; g.lives = o.lives; g.maxLives = o.maxLives;
+    g.score = o.score; g.up = o.up || {}; g.unlocked = o.unlocked || { basic: true }; g.relics = o.relics || {};
+    g.offered = o.offered || null; g.bestChain = o.bestChain || 0; g.kills = o.kills || 0; g.leaks = o.leaks || 0;
+    g.stats = o.stats || g.stats;
+    for (var i = 0; i < o.dom.length; i++) {
+      var e = o.dom[i];
+      g.grid[e[1]][e[0]] = makeDomino(e[3], e[0], e[1], e[2]);
+    }
+    return g;
+  }
+
+  function shareText(g) {
+    return "CLACKDOWN  " + (g.won ? "held the keep" : "fell on wave " + g.wave) +
+      (g.heat ? " (Heat " + g.heat + ")" : "") + "\n" +
+      g.score + " pts · longest chain " + g.bestChain + " · " + g.kills + " crushed";
+  }
+
+  var api = {
+    TICK: TICK, COLS: COLS, ROWS: ROWS, WAVES: WAVES, DIRS: DIRS, DIR_NAMES: DIR_NAMES,
+    DOMINOES: DOMINOES, DOMINO_ORDER: DOMINO_ORDER, MONSTERS: MONSTERS, UPGRADES: UPGRADES, HEAT: HEAT,
+    newGame: newGame, step: step, place: place, remove: remove, rotate: rotate, knock: knock,
+    startWave: startWave, choose: choose, skipReward: skipReward, continueEndless: continueEndless, cost: cost, resetTime: resetTime,
+    momentum: momentum, planWave: planWave, spawn: spawn, at: at, upg: upg, available: available,
+    save: save, load: load, shareText: shareText, makeRng: makeRng, clamp: clamp, tri: tri
+  };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.CLACK = api;
+})(typeof window !== "undefined" ? window : this);
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var E = window.CLACK;
+  var cv = document.getElementById("cv"), ctx = cv.getContext("2d"), wrap = document.getElementById("wrap");
+
+  // ---------- layout (logical pixels) ----------
+  var W = 552, H = 800, CELL = 46, BY = 58, BH = CELL * E.ROWS, TRAY = BY + BH + 6;
+  var scale = 1;
+  function fit() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H);
+    var cw = Math.floor(W * scale), ch = Math.floor(H * scale);
+    wrap.style.width = cw + "px"; wrap.style.height = ch + "px";
+    var dpr = Math.min(2, window.devicePixelRatio || 1);
+    cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
+    ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+  }
+  window.addEventListener("resize", fit);
+
+  // ---------- storage ----------
+  var store = (function () {
+    var ok = true;
+    try { localStorage.setItem("__c", "1"); localStorage.removeItem("__c"); } catch (e) { ok = false; }
+    return {
+      get: function (k, d) { if (!ok) return d; try { var v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+      set: function (k, v) { if (!ok) return; try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+      del: function (k) { if (!ok) return; try { localStorage.removeItem(k); } catch (e) {} }
+    };
+  })();
+  var rec = store.get("clack.rec", null) || { bestScore: 0, bestChain: 0, bestWave: 0, crushed: 0, runs: 0, wins: 0, heatMax: 0, seenD: { basic: 1 }, seenM: {}, tut: 0 };
+  function saveRec() { store.set("clack.rec", rec); }
+  var heatSel = 0;
+
+  // ---------- audio ----------
+  var AC = null, master = null, musicGain = null;
+  var sfxOn = store.get("clack.sfx", true), musicOn = store.get("clack.music", true);
+  function audio() {
+    if (AC) { if (AC.state === "suspended") AC.resume(); return AC; }
+    var C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return null;
+    AC = new C();
+    master = AC.createGain(); master.gain.value = 0.8; master.connect(AC.destination);
+    musicGain = AC.createGain(); musicGain.gain.value = musicOn ? 0.16 : 0; musicGain.connect(master);
+    startMusic();
+    return AC;
+  }
+  var noiseBuf = null;
+  function noiseBuffer() {
+    if (noiseBuf) return noiseBuf;
+    var n = Math.floor(AC.sampleRate * 0.25);
+    noiseBuf = AC.createBuffer(1, n, AC.sampleRate);
+    var d = noiseBuf.getChannelData(0);
+    for (var i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    return noiseBuf;
+  }
+  var lastClack = 0;
+  function clack(idx) {
+    if (!sfxOn || !audio()) return;
+    var now = AC.currentTime;
+    if (now - lastClack < 0.018) return;       // a long chain would otherwise stack hundreds of voices
+    lastClack = now;
+    var pitch = 900 + Math.min(idx, 60) * 28;
+    var src = AC.createBufferSource(); src.buffer = noiseBuffer();
+    var bp = AC.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = pitch * 2.2; bp.Q.value = 6;
+    var gn = AC.createGain();
+    gn.gain.setValueAtTime(0.5, now); gn.gain.exponentialRampToValueAtTime(0.001, now + 0.06);
+    src.connect(bp); bp.connect(gn); gn.connect(master); src.start(now); src.stop(now + 0.07);
+    var o = AC.createOscillator(), og = AC.createGain();
+    o.type = "triangle"; o.frequency.value = pitch;
+    og.gain.setValueAtTime(0.12, now); og.gain.exponentialRampToValueAtTime(0.001, now + 0.05);
+    o.connect(og); og.connect(master); o.start(now); o.stop(now + 0.06);
+  }
+  function tone(type, f, dur, vol, to) {
+    if (!sfxOn || !audio()) return;
+    var now = AC.currentTime, o = AC.createOscillator(), gn = AC.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, now);
+    if (to) o.frequency.exponentialRampToValueAtTime(Math.max(30, to), now + dur);
+    gn.gain.setValueAtTime(0.0001, now); gn.gain.exponentialRampToValueAtTime(vol, now + 0.01);
+    gn.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    o.connect(gn); gn.connect(master); o.start(now); o.stop(now + dur + 0.02);
+  }
+  function thump(vol) {
+    if (!sfxOn || !audio()) return;
+    var now = AC.currentTime, src = AC.createBufferSource(); src.buffer = noiseBuffer();
+    var lp = AC.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 260;
+    var gn = AC.createGain(); gn.gain.setValueAtTime(vol, now); gn.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
+    src.connect(lp); lp.connect(gn); gn.connect(master); src.start(now); src.stop(now + 0.26);
+    tone("sine", 110, 0.22, vol * 0.6, 45);
+  }
+  var SFX = {
+    squish: function () { tone("sine", 320 + Math.random() * 90, 0.08, 0.10, 140); },
+    coin: function () { tone("square", 1320, 0.05, 0.05); setTimeout(function () { tone("square", 1760, 0.07, 0.05); }, 45); },
+    place: function () { tone("triangle", 520, 0.05, 0.08, 700); },
+    remove: function () { tone("triangle", 600, 0.07, 0.07, 300); },
+    leak: function () { thump(0.5); tone("sawtooth", 180, 0.3, 0.12, 80); },
+    blast: function () { thump(0.7); },
+    horn: function () { tone("sawtooth", 196, 0.45, 0.07); tone("sawtooth", 294, 0.45, 0.05); },
+    fanfare: function () { [523, 659, 784, 1046].forEach(function (f, i) { setTimeout(function () { tone("triangle", f, 0.25, 0.12); }, i * 110); }); },
+    lose: function () { [392, 330, 262, 196].forEach(function (f, i) { setTimeout(function () { tone("triangle", f, 0.4, 0.12); }, i * 160); }); },
+    pick: function () { tone("sine", 660, 0.12, 0.1, 990); },
+    block: function () { tone("square", 240, 0.06, 0.05); },
+    bigChain: function (n) { var base = n >= 40 ? 784 : 659; [0, 4, 7, 12].forEach(function (s, i) { setTimeout(function () { tone("triangle", base * Math.pow(2, s / 12), 0.18, 0.1); }, i * 70); }); }
+  };
+  var musicTimer = null, musicStep = 0;
+  var BASS = [0, 0, 7, 5, 0, 0, 3, 5], LEAD = [12, 15, 17, 15, 19, 17, 15, 12];
+  function startMusic() {
+    if (musicTimer) clearInterval(musicTimer);
+    musicTimer = setInterval(function () {
+      if (!AC || !musicOn || AC.state !== "running") return;
+      var root = 110, now = AC.currentTime, i = musicStep++;
+      var tense = g && g.phase === "wave";
+      var bn = BASS[i % 8];
+      var o = AC.createOscillator(), gn = AC.createGain();
+      o.type = "triangle"; o.frequency.value = root * Math.pow(2, bn / 12) / 2;
+      gn.gain.setValueAtTime(0.0001, now); gn.gain.exponentialRampToValueAtTime(0.35, now + 0.02);
+      gn.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+      o.connect(gn); gn.connect(musicGain); o.start(now); o.stop(now + 0.3);
+      if (tense && i % 2 === 0) {
+        var l = AC.createOscillator(), lg = AC.createGain();
+        l.type = "square"; l.frequency.value = root * Math.pow(2, LEAD[(i >> 1) % 8] / 12);
+        lg.gain.setValueAtTime(0.0001, now); lg.gain.exponentialRampToValueAtTime(0.06, now + 0.02);
+        lg.gain.exponentialRampToValueAtTime(0.0001, now + 0.22);
+        l.connect(lg); lg.connect(musicGain); l.start(now); l.stop(now + 0.24);
+      }
+    }, 300);
+  }
+
+  // ---------- game state ----------
+  var g = null, paused = false, speed = 1, selType = "basic", curDir = 1, tool = "play";
+  var daily = false, pending = 0, armed = null;
+  var parts = [], texts = [], rings = [], slams = [], shake = 0, flash = 0, flashCol = "#fff";
+  var chainFx = {};                  // chain id -> {len, x, y, t}
+  var banner = null, tip = null, hover = null, drag = null;
+
+  function cellCenter(c, r) { return { x: c * CELL + CELL / 2, y: BY + r * CELL + CELL / 2 }; }
+
+  function newRun(opts) {
+    audio();
+    hideAll();
+    var seed;
+    if (opts.daily) {
+      var d = new Date(); seed = d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+      seed = (seed * 2654435761) >>> 0;
+    } else seed = (Math.random() * 4294967295) >>> 0;
+    daily = !!opts.daily;
+    g = E.newGame(seed, { heat: opts.daily ? 1 : heatSel });
+    selType = "basic"; curDir = 1; tool = "play"; paused = false; speed = 1;
+    parts = []; texts = []; rings = []; slams = []; chainFx = {}; banner = null; armed = null; pending = 0;
+    rec.runs++; saveRec();
+    store.del("clack.run");
+    // the first wave rolls in by itself so the first tap happens within seconds
+    setTimeout(function () { if (g && g.wave === 0 && g.phase === "build") beginWave(); }, 1200);
+    if (rec.tut < 1) setTip("The horde is coming. When they walk along the line, TAP A DOMINO!", 99);
+  }
+  function beginWave() {
+    if (!g || g.phase !== "build") return;
+    E.startWave(g);
+    drain();
+  }
+
+  // ---------- input ----------
+  function toLogical(ev) {
+    var r = cv.getBoundingClientRect();
+    var p = ev.touches && ev.touches.length ? ev.touches[0] : (ev.changedTouches && ev.changedTouches.length ? ev.changedTouches[0] : ev);
+    return { x: (p.clientX - r.left) / r.width * W, y: (p.clientY - r.top) / r.height * H };
+  }
+  function cellAt(p) {
+    if (p.y < BY || p.y >= BY + BH) return null;
+    var c = Math.floor(p.x / CELL), r = Math.floor((p.y - BY) / CELL);
+    if (c < 0 || c >= E.COLS || r < 0 || r >= E.ROWS) return null;
+    return { c: c, r: r };
+  }
+  function dirFromDrag(dx, dy) {
+    if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? 1 : 3;
+    return dy > 0 ? 2 : 0;
+  }
+
+  // tray buttons (hit boxes, rebuilt every frame)
+  var trayHits = [];
+  function onDown(ev) {
+    audio();
+    if (!g || g.over || paused) return;
+    var p = toLogical(ev);
+    for (var i = 0; i < trayHits.length; i++) {
+      var h = trayHits[i];
+      if (p.x >= h.x && p.x <= h.x + h.w && p.y >= h.y && p.y <= h.y + h.h) { h.fn(); ev.preventDefault(); return; }
+    }
+    var cell = cellAt(p);
+    if (!cell) return;
+    if (ev.button === 2) { E.rotate(g, cell.c, cell.r); ev.preventDefault(); return; }
+    var d = E.at(g, cell.c, cell.r);
+    if (tool === "remove") {
+      if (d && E.remove(g, cell.c, cell.r)) drain();
+      return;
+    }
+    if (d) {
+      if (d.state === "up") { pendingKnock = { c: cell.c, r: cell.r }; if (rec.tut < 1) { rec.tut = 1; saveRec(); } }
+      return;
+    }
+    drag = { c: cell.c, r: cell.r, x: p.x, y: p.y, dir: curDir, moved: false };
+    ev.preventDefault();
+  }
+  function onMove(ev) {
+    var p = toLogical(ev);
+    hover = cellAt(p);
+    if (!drag) return;
+    var dx = p.x - drag.x, dy = p.y - drag.y;
+    if (dx * dx + dy * dy > 14 * 14) { drag.moved = true; drag.dir = dirFromDrag(dx, dy); }
+    if (ev.cancelable) ev.preventDefault();
+  }
+  function onUp() {
+    if (!drag || !g) { drag = null; return; }
+    var ok = E.place(g, selType, drag.c, drag.r, drag.dir);
+    if (ok) { curDir = drag.dir; drain(); if (rec.tut < 2 && rec.tut >= 1) { rec.tut = 2; saveRec(); setTip("Build long lines. The longer the chain, the harder every domino hits.", 7); } }
+    else if (g.gold < E.cost(g, selType)) { say("Not enough gold", "#ff8a8a", drag.c, drag.r); SFX.block(); }
+    drag = null;
+  }
+  var pendingKnock = null;
+  cv.addEventListener("mousedown", onDown);
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+  cv.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  cv.addEventListener("touchstart", function (e) { onDown(e); e.preventDefault(); }, { passive: false });
+  cv.addEventListener("touchmove", function (e) { onMove(e); e.preventDefault(); }, { passive: false });
+  cv.addEventListener("touchend", function (e) { onUp(e); e.preventDefault(); hover = null; }, { passive: false });
+
+  window.addEventListener("keydown", function (e) {
+    var k = e.key.toLowerCase();
+    if (k === " " || k.indexOf("arrow") === 0) e.preventDefault();
+    if (k === "escape" || k === "p") { togglePause(); return; }
+    if (!g || g.over || paused) return;
+    if (k === "r") { if (hover && E.at(g, hover.c, hover.r)) E.rotate(g, hover.c, hover.r); else curDir = (curDir + 1) & 3; }
+    if (k === "x") tool = tool === "remove" ? "play" : "remove";
+    if (k === "f") speed = speed === 1 ? 2 : 1;
+    if (k === " " && g.phase === "build") beginWave();
+    var n = parseInt(k, 10);
+    if (n >= 1 && n <= 8) { var t = E.DOMINO_ORDER[n - 1]; if (g.unlocked[t]) { selType = t; tool = "play"; } }
+  });
+
+  // ---------- effects ----------
+  function say(text, col, c, r, big) {
+    var p = c == null ? { x: W / 2, y: BY + BH / 2 } : cellCenter(c, r);
+    texts.push({ text: text, col: col || "#fff", x: p.x, y: p.y, t: 0, life: big ? 1.6 : 0.9, big: !!big });
+  }
+  function burst(x, y, col, n, spd) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.random() * 6.2832, s = (0.3 + Math.random()) * (spd || 120);
+      parts.push({ x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 30, t: 0, life: 0.35 + Math.random() * 0.4, col: col, r: 1.5 + Math.random() * 2.5, g: 380 });
+    }
+  }
+  function setTip(text, secs) { tip = { text: text, t: 0, life: secs || 5 }; }
+  function showBanner(text, sub, col) { banner = { text: text, sub: sub || "", col: col || "#ffcf4a", t: 0, life: 1.8 }; }
+
+  function drain() {
+    if (!g) return;
+    for (var i = 0; i < g.events.length; i++) {
+      var e = g.events[i], p;
+      switch (e.k) {
+        case "land":
+          p = cellCenter(e.c, e.r);
+          var dd = E.DIRS[e.dir];
+          var lx = p.x + dd[0] * CELL, ly = p.y + dd[1] * CELL;
+          burst(lx, ly, "rgba(240,220,190,.8)", 3, 60);
+          rings.push({ x: lx, y: ly, t: 0, life: 0.28, r0: 6, r1: 26 + Math.min(20, e.idx * 0.6), col: "rgba(255,230,190," });
+          slams.push({ x: lx, y: ly, t: 0 });
+          clack(e.idx);
+          var cf = chainFx[e.chain] || (chainFx[e.chain] = { len: 0, x: lx, y: ly, t: 0 });
+          cf.len = e.idx + 1; cf.x = lx; cf.y = ly; cf.t = 0;
+          shake = Math.min(9, shake + 0.35 + e.idx * 0.02);
+          if (e.type === "gold") burst(lx, ly, "#ffd35a", 6, 90);
+          break;
+        case "kill":
+          p = { x: e.x * CELL + CELL / 2, y: BY + e.y * CELL + CELL / 2 };
+          burst(p.x, p.y, E.MONSTERS[e.type].col, 12, 150);
+          texts.push({ text: "+" + e.pts, col: "#fff2c0", x: p.x, y: p.y - 6, t: 0, life: 0.7 });
+          if (e.gold) parts.push({ coin: true, x: p.x, y: p.y, tx: 118, ty: 28, t: 0, life: 0.55 });
+          SFX.squish();
+          rec.crushed++;
+          if (!rec.seenM[e.type]) rec.seenM[e.type] = 1;
+          break;
+        case "blast":
+          p = cellCenter(e.c, e.r);
+          rings.push({ x: p.x, y: p.y, t: 0, life: 0.4, r0: 10, r1: CELL * 1.7, col: "rgba(255,140,80," });
+          burst(p.x, p.y, "#ff9a5a", 18, 220);
+          flash = 0.35; flashCol = "#ffb070"; shake = Math.min(12, shake + 5);
+          SFX.blast();
+          break;
+        case "chain":
+          if (e.len >= 8) {
+            var col = e.len >= 40 ? "#ff7ad9" : (e.len >= 20 ? "#6fe3d0" : "#ffcf4a");
+            showBanner("CHAIN ×" + e.len, e.kills ? e.kills + " crushed · +" + e.pts : "", col);
+            if (e.len >= 20) SFX.bigChain(e.len);
+          }
+          if (e.len > rec.bestChain) { rec.bestChain = e.len; }
+          if (rec.tut < 1 && !e.byMonster) { rec.tut = 1; saveRec(); setTip("Drag on an empty square to place a domino. Your drag sets which way it falls.", 8); }
+          break;
+        case "gold":
+          p = cellCenter(e.c, e.r);
+          texts.push({ text: "+" + e.amount + "g", col: "#ffd35a", x: p.x, y: p.y - 12, t: 0, life: 0.9 });
+          SFX.coin();
+          break;
+        case "knock":
+          if (e.byMonster) { say("!", "#d68bff", e.c, e.r); }
+          break;
+        case "block":
+          p = { x: e.x * CELL + CELL / 2, y: BY + e.y * CELL + CELL / 2 };
+          rings.push({ x: p.x, y: p.y, t: 0, life: 0.25, r0: 8, r1: 20, col: "rgba(122,166,224," });
+          SFX.block();
+          break;
+        case "leak":
+          flash = 0.5; flashCol = "#ff3040"; shake = Math.min(14, shake + 7);
+          texts.push({ text: "-" + e.dmg, col: "#ff6b6b", x: e.x * CELL + CELL / 2, y: BY + BH - 10, t: 0, life: 1 });
+          SFX.leak();
+          break;
+        case "place": SFX.place(); p = cellCenter(e.c, e.r); burst(p.x, p.y, "rgba(255,240,210,.7)", 4, 50);
+          if (!rec.seenD[e.type]) rec.seenD[e.type] = 1; break;
+        case "remove": SFX.remove(); break;
+        case "wave":
+          showBanner(e.n > E.WAVES ? "ENDLESS WAVE " + e.n : "WAVE " + e.n, waveHint(e.n), "#ffcf4a");
+          SFX.horn();
+          break;
+        case "waveClear":
+          texts.push({ text: "WAVE CLEAR  +" + e.bonus + "g", col: "#ffd35a", x: W / 2, y: BY + 60, t: 0, life: 1.4, big: true });
+          SFX.coin();
+          break;
+        case "win": SFX.fanfare(); break;
+        case "lose": SFX.lose(); break;
+      }
+    }
+  }
+  function waveHint(n) {
+    if (n === 10 || n === E.WAVES || (n > E.WAVES && n % 5 === 0)) return "The Toppler is coming";
+    if (n === 2) return "Runners: quick, but fragile";
+    if (n === 4) return "Brutes: they take a beating";
+    if (n === 5) return "Knockers tip your dominoes over";
+    if (n === 7) return "Shieldbugs ignore the first hit of a chain";
+    if (n === 9) return "Splitters burst into mites";
+    return "";
+  }
+
+  // ---------- drawing ----------
+  var PIPS = [[], [[0, 0]], [[-1, -1], [1, 1]], [[-1, -1], [0, 0], [1, 1]], [[-1, -1], [1, -1], [-1, 1], [1, 1]],
+              [[-1, -1], [1, -1], [0, 0], [-1, 1], [1, 1]], [[-1, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [1, 1]]];
+  function pipsFor(c, r) { var h = (c * 7 + r * 13) % 36; return [1 + (h % 6), 1 + Math.floor(h / 6)]; }
+
+  function roundRect(x, y, w, h, rad) {
+    ctx.beginPath();
+    ctx.moveTo(x + rad, y); ctx.lineTo(x + w - rad, y); ctx.quadraticCurveTo(x + w, y, x + w, y + rad);
+    ctx.lineTo(x + w, y + h - rad); ctx.quadraticCurveTo(x + w, y + h, x + w - rad, y + h);
+    ctx.lineTo(x + rad, y + h); ctx.quadraticCurveTo(x, y + h, x, y + h - rad);
+    ctx.lineTo(x, y + rad); ctx.quadraticCurveTo(x, y, x + rad, y); ctx.closePath();
+  }
+
+  // a domino seen from above: a thin slab while standing, a full tile when it has fallen
+  function drawDomino(d, ghost) {
+    var p = cellCenter(d.c, d.r), def = E.DOMINOES[d.type];
+    var dx = E.DIRS[d.dir][0], dy = E.DIRS[d.dir][1];
+    var f = 0;
+    if (d.state === "falling") { f = d.t * d.t; }
+    else if (d.state === "down") f = 1;
+    var along = CELL * (0.2 + 0.8 * f);             // length along the fall direction
+    var across = CELL * 0.78;
+    var cx = p.x + dx * CELL * 0.5 * f, cy = p.y + dy * CELL * 0.5 * f;
+    var w = dx !== 0 ? along : across, h = dx !== 0 ? across : along;
+    ctx.save();
+    ctx.globalAlpha = ghost ? 0.45 : 1;
+    // shadow grows as it falls
+    if (!ghost) {
+      ctx.fillStyle = "rgba(0,0,0,.35)";
+      roundRect(cx - w / 2 + 3, cy - h / 2 + 4, w, h, 5); ctx.fill();
+    }
+    var base = def.col;
+    if (d.state === "down") {
+      var rt = E.resetTime(g), k = Math.min(1, d.downT / rt);
+      ctx.fillStyle = shadeCol(base, -0.18);
+      roundRect(cx - w / 2, cy - h / 2, w, h, 5); ctx.fill();
+      // pips, like a real domino face
+      var pp = pipsFor(d.c, d.r);
+      ctx.fillStyle = "rgba(30,24,20,.75)";
+      var half = CELL * 0.24;
+      for (var s = 0; s < 2; s++) {
+        var sx = cx + (dx !== 0 ? (s ? 1 : -1) * half : 0), sy = cy + (dy !== 0 ? (s ? 1 : -1) * half : 0);
+        var list = PIPS[pp[s]];
+        for (var q = 0; q < list.length; q++) {
+          ctx.beginPath(); ctx.arc(sx + list[q][0] * 5.5, sy + list[q][1] * 5.5, 2.1, 0, 6.2832); ctx.fill();
+        }
+      }
+      ctx.strokeStyle = "rgba(30,24,20,.5)"; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      if (dx !== 0) { ctx.moveTo(cx, cy - h / 2 + 4); ctx.lineTo(cx, cy + h / 2 - 4); }
+      else { ctx.moveTo(cx - w / 2 + 4, cy); ctx.lineTo(cx + w / 2 - 4, cy); }
+      ctx.stroke();
+      // reset timer
+      ctx.strokeStyle = "rgba(255,207,74," + (0.25 + 0.45 * k) + ")"; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 6, -1.5708, -1.5708 + 6.2832 * k); ctx.stroke();
+    } else {
+      var grad = ctx.createLinearGradient(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2);
+      grad.addColorStop(0, shadeCol(base, 0.12)); grad.addColorStop(1, shadeCol(base, -0.22));
+      ctx.fillStyle = grad;
+      roundRect(cx - w / 2, cy - h / 2, w, h, 4); ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,.45)"; ctx.lineWidth = 1.2; ctx.stroke();
+      if (d.state === "up") {
+        // which way it will fall
+        ctx.fillStyle = "rgba(255,240,210,.55)";
+        var ax = p.x + dx * CELL * 0.3, ay = p.y + dy * CELL * 0.3;
+        ctx.beginPath();
+        ctx.moveTo(ax + dx * 6, ay + dy * 6);
+        ctx.lineTo(ax - dy * 5 - dx * 2, ay + dx * 5 - dy * 2);
+        ctx.lineTo(ax + dy * 5 - dx * 2, ay - dx * 5 - dy * 2);
+        ctx.closePath(); ctx.fill();
+        typeMark(d.type, p.x, p.y);
+      }
+    }
+    ctx.restore();
+  }
+  function typeMark(type, x, y) {
+    ctx.fillStyle = "rgba(20,14,10,.8)";
+    ctx.font = "bold 10px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    var m = { heavy: "H", split: "Y", bomb: "*", spring: "^", echo: "2", gold: "$", frost: "~" }[type];
+    if (m) ctx.fillText(m, x, y + 0.5);
+  }
+  function shadeCol(hex, amt) {
+    var n = parseInt(hex.slice(1), 16), r = n >> 16, gg = (n >> 8) & 255, b = n & 255;
+    function f(v) { return Math.max(0, Math.min(255, Math.round(amt >= 0 ? v + (255 - v) * amt : v * (1 + amt)))); }
+    return "rgb(" + f(r) + "," + f(gg) + "," + f(b) + ")";
+  }
+
+  function drawMonster(m, time) {
+    var def = E.MONSTERS[m.type];
+    var x = m.x * CELL + CELL / 2, y = BY + m.y * CELL + CELL / 2;
+    var r = def.r * CELL;
+    var bob = Math.sin(time * 9 + m.id) * 1.5;
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,.3)";
+    ctx.beginPath(); ctx.ellipse(x, y + r * 0.8, r * 0.9, r * 0.35, 0, 0, 6.2832); ctx.fill();
+    ctx.fillStyle = m.slowT > 0 ? "#9fdcff" : def.col;
+    ctx.beginPath(); ctx.ellipse(x, y + bob, r, r * 0.92, 0, 0, 6.2832); ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,.45)"; ctx.lineWidth = 1.5; ctx.stroke();
+    if (def.shield) { ctx.strokeStyle = "rgba(190,220,255,.9)"; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(x, y + bob, r + 3, 3.4, 6.0); ctx.stroke(); }
+    if (def.knocks && !def.boss) { ctx.fillStyle = "rgba(255,255,255,.8)"; ctx.fillRect(x - r * 0.5, y + bob - r - 3, r, 3); }
+    if (def.boss) {
+      ctx.fillStyle = "#ffd35a";
+      ctx.beginPath(); ctx.moveTo(x - r * 0.6, y - r * 0.7); ctx.lineTo(x - r * 0.4, y - r * 1.25); ctx.lineTo(x - r * 0.1, y - r * 0.85);
+      ctx.lineTo(x + r * 0.15, y - r * 1.3); ctx.lineTo(x + r * 0.4, y - r * 0.85); ctx.lineTo(x + r * 0.62, y - r * 1.2); ctx.lineTo(x + r * 0.62, y - r * 0.7); ctx.closePath(); ctx.fill();
+    }
+    // eyes
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(x - r * 0.33, y + bob - r * 0.12, r * 0.24, 0, 6.2832); ctx.arc(x + r * 0.33, y + bob - r * 0.12, r * 0.24, 0, 6.2832); ctx.fill();
+    ctx.fillStyle = "#1a1210";
+    ctx.beginPath(); ctx.arc(x - r * 0.3, y + bob - r * 0.02, r * 0.11, 0, 6.2832); ctx.arc(x + r * 0.36, y + bob - r * 0.02, r * 0.11, 0, 6.2832); ctx.fill();
+    if (m.hp < m.maxHp) {
+      var bw = Math.max(18, r * 1.8), k = Math.max(0, m.hp / m.maxHp);
+      ctx.fillStyle = "rgba(0,0,0,.6)"; ctx.fillRect(x - bw / 2, y - r - 9, bw, 4);
+      ctx.fillStyle = k > 0.5 ? "#8be07a" : (k > 0.25 ? "#ffcf4a" : "#ff5a5f"); ctx.fillRect(x - bw / 2, y - r - 9, bw * k, 4);
+    }
+    ctx.restore();
+  }
+
+  function drawBoard(time) {
+    // table
+    ctx.fillStyle = "#2a1f18"; ctx.fillRect(0, BY, W, BH);
+    for (var r = 0; r < E.ROWS; r++) for (var c = 0; c < E.COLS; c++) {
+      if ((r + c) % 2 === 0) { ctx.fillStyle = "rgba(255,230,190,.035)"; ctx.fillRect(c * CELL, BY + r * CELL, CELL, CELL); }
+    }
+    ctx.strokeStyle = "rgba(255,230,190,.06)"; ctx.lineWidth = 1;
+    for (var i = 0; i <= E.COLS; i++) { ctx.beginPath(); ctx.moveTo(i * CELL + 0.5, BY); ctx.lineTo(i * CELL + 0.5, BY + BH); ctx.stroke(); }
+    for (i = 0; i <= E.ROWS; i++) { ctx.beginPath(); ctx.moveTo(0, BY + i * CELL + 0.5); ctx.lineTo(W, BY + i * CELL + 0.5); ctx.stroke(); }
+    // where the horde comes from
+    var fog = ctx.createLinearGradient(0, BY, 0, BY + CELL * 1.6);
+    fog.addColorStop(0, "rgba(120,40,60,.45)"); fog.addColorStop(1, "rgba(120,40,60,0)");
+    ctx.fillStyle = fog; ctx.fillRect(0, BY, W, CELL * 1.6);
+    // the keep wall along the bottom
+    var ky = BY + BH - 5;
+    ctx.fillStyle = "#6b4a36"; ctx.fillRect(0, ky, W, 8);
+    ctx.fillStyle = "#8a6247";
+    for (i = 0; i < W; i += 24) ctx.fillRect(i + 2, ky - 5, 14, 6);
+  }
+
+  function drawHud() {
+    ctx.fillStyle = "#1a1310"; ctx.fillRect(0, 0, W, BY);
+    ctx.fillStyle = "rgba(255,207,74,.18)"; ctx.fillRect(0, BY - 2, W, 2);
+    // lives
+    ctx.textBaseline = "middle"; ctx.textAlign = "left";
+    ctx.font = "bold 18px 'Trebuchet MS',sans-serif";
+    ctx.fillStyle = "#ff6b6b"; ctx.fillText("♥ " + g.lives, 12, 20);
+    ctx.fillStyle = "#ffd35a"; ctx.fillText("● " + g.gold, 98, 20);
+    ctx.font = "12px 'Trebuchet MS',sans-serif"; ctx.fillStyle = "#a79f92";
+    ctx.fillText(g.score + " pts" + (g.heat ? "  ·  Heat " + g.heat : "") + (daily ? "  ·  Daily" : ""), 12, 44);
+    ctx.textAlign = "center";
+    ctx.font = "bold 16px 'Trebuchet MS',sans-serif"; ctx.fillStyle = "#f3ecdf";
+    var wv = g.wave === 0 ? "GET READY" : (g.mode === "endless" ? "WAVE " + g.wave : "WAVE " + g.wave + " / " + E.WAVES);
+    ctx.fillText(wv, W / 2 + 20, 20);
+    ctx.font = "12px 'Trebuchet MS',sans-serif"; ctx.fillStyle = "#a79f92";
+    var left = g.spawns.length + g.mons.length;
+    ctx.fillText(g.phase === "wave" ? left + " left" : (g.phase === "build" ? "build phase" : ""), W / 2 + 20, 44);
+    // buttons: speed, pause, sound
+    hudButton(W - 118, 10, 34, 34, speed === 2 ? "»2" : "»", speed === 2, function () { speed = speed === 1 ? 2 : 1; });
+    hudButton(W - 78, 10, 34, 34, "II", false, togglePause);
+    hudButton(W - 40, 10, 34, 34, sfxOn ? "♪" : "×", false, function () {
+      sfxOn = !sfxOn; musicOn = sfxOn; store.set("clack.sfx", sfxOn); store.set("clack.music", musicOn);
+      if (musicGain) musicGain.gain.value = musicOn ? 0.16 : 0;
+    });
+  }
+  function hudButton(x, y, w, h, label, on, fn) {
+    ctx.fillStyle = on ? "#ffcf4a" : "#2e231c"; roundRect(x, y, w, h, 7); ctx.fill();
+    ctx.strokeStyle = "rgba(255,207,74,.35)"; ctx.lineWidth = 1; ctx.stroke();
+    ctx.fillStyle = on ? "#2a1606" : "#f3ecdf"; ctx.font = "bold 14px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+    trayHits.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+
+  function drawTray() {
+    var y = TRAY, h = H - TRAY;
+    ctx.fillStyle = "#1a1310"; ctx.fillRect(0, y - 6, W, h + 6);
+    // direction
+    var bx = 6, bw = 50;
+    trayButton(bx, y + 4, bw, 58, "", curDir === -1, function () { curDir = (curDir + 1) & 3; });
+    var ax = bx + bw / 2, ay = y + 4 + 24, dd = E.DIRS[curDir];
+    ctx.fillStyle = "#ffcf4a";
+    ctx.beginPath(); ctx.moveTo(ax + dd[0] * 14, ay + dd[1] * 14); ctx.lineTo(ax - dd[1] * 10 - dd[0] * 6, ay + dd[0] * 10 - dd[1] * 6); ctx.lineTo(ax + dd[1] * 10 - dd[0] * 6, ay - dd[0] * 10 - dd[1] * 6); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#a79f92"; ctx.font = "10px sans-serif"; ctx.textAlign = "center"; ctx.fillText("TURN (R)", ax, y + 54);
+    // types
+    var types = E.DOMINO_ORDER.filter(function (t) { return g.unlocked[t]; });
+    var x = bx + bw + 6, tw = Math.min(56, (W - x - 64) / Math.max(1, types.length) - 4);
+    types.forEach(function (t, i) {
+      var sel = tool === "play" && selType === t, price = E.cost(g, t), can = g.gold >= price;
+      trayButton(x, y + 4, tw, 58, "", sel, function () { selType = t; tool = "play"; });
+      var pd = { type: t, c: 0, r: 0, dir: 1, state: "up" };
+      ctx.save();
+      ctx.globalAlpha = can ? 1 : 0.4;
+      var grad = ctx.createLinearGradient(x + tw / 2 - 5, y + 12, x + tw / 2 + 5, y + 40);
+      grad.addColorStop(0, shadeCol(E.DOMINOES[t].col, 0.1)); grad.addColorStop(1, shadeCol(E.DOMINOES[t].col, -0.25));
+      ctx.fillStyle = grad; roundRect(x + tw / 2 - 6, y + 11, 12, 30, 3); ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,.5)"; ctx.stroke();
+      typeMark(t, x + tw / 2, y + 26);
+      ctx.fillStyle = sel ? "#2a1606" : (can ? "#ffd35a" : "#8a7f70"); ctx.font = "bold 11px sans-serif"; ctx.textAlign = "center";
+      ctx.fillText(price + "g", x + tw / 2, y + 54);
+      ctx.fillStyle = "#6c645a"; ctx.font = "9px sans-serif"; ctx.fillText(String(E.DOMINO_ORDER.indexOf(t) + 1), x + 7, y + 12);
+      ctx.restore();
+      x += tw + 4;
+    });
+    // remove tool
+    trayButton(W - 58, y + 4, 52, 58, "", tool === "remove", function () { tool = tool === "remove" ? "play" : "remove"; });
+    ctx.strokeStyle = tool === "remove" ? "#2a1606" : "#ff8a8a"; ctx.lineWidth = 2.5;
+    var tx = W - 32, ty = y + 26;
+    ctx.beginPath(); ctx.moveTo(tx - 8, ty - 8); ctx.lineTo(tx + 8, ty + 8); ctx.moveTo(tx + 8, ty - 8); ctx.lineTo(tx - 8, ty + 8); ctx.stroke();
+    ctx.fillStyle = tool === "remove" ? "#2a1606" : "#a79f92"; ctx.font = "10px sans-serif"; ctx.textAlign = "center"; ctx.fillText("REMOVE", tx, y + 54);
+    // start wave
+    if (g.phase === "build" && g.wave > 0) {
+      var sw = 190, sx = W / 2 - sw / 2, sy = TRAY - 58;
+      var pulse = 0.5 + 0.5 * Math.sin(performance.now() / 260);
+      ctx.fillStyle = "rgba(0,0,0,.4)"; roundRect(sx + 3, sy + 4, sw, 44, 22); ctx.fill();
+      var gr = ctx.createLinearGradient(0, sy, 0, sy + 44); gr.addColorStop(0, "#ffd35a"); gr.addColorStop(1, "#e79a2a");
+      ctx.fillStyle = gr; roundRect(sx, sy, sw, 44, 22); ctx.fill();
+      ctx.strokeStyle = "rgba(255,240,200," + (0.4 + pulse * 0.5) + ")"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.fillStyle = "#2a1606"; ctx.font = "bold 16px 'Trebuchet MS',sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("START WAVE " + (g.wave + 1) + "  ▶", W / 2, sy + 23);
+      trayHits.push({ x: sx, y: sy, w: sw, h: 44, fn: beginWave });
+    }
+  }
+  function trayButton(x, y, w, h, label, on, fn) {
+    ctx.fillStyle = on ? "#ffcf4a" : "#2a2019"; roundRect(x, y, w, h, 8); ctx.fill();
+    ctx.strokeStyle = on ? "#fff0c0" : "rgba(255,207,74,.22)"; ctx.lineWidth = on ? 2 : 1; ctx.stroke();
+    trayHits.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+
+  function drawPreview() {
+    if (!g || g.over || tool !== "play") return;
+    var c = null, dir = curDir;
+    if (drag) { c = { c: drag.c, r: drag.r }; dir = drag.dir; }
+    else if (hover && !("ontouchstart" in window)) c = hover;
+    if (!c || E.at(g, c.c, c.r)) {
+      if (c && tool === "play" && E.at(g, c.c, c.r) && E.at(g, c.c, c.r).state === "up") {
+        var p = cellCenter(c.c, c.r);
+        ctx.strokeStyle = "rgba(255,207,74,.7)"; ctx.lineWidth = 2; ctx.strokeRect(p.x - CELL / 2 + 2, BY + c.r * CELL + 2, CELL - 4, CELL - 4);
+      }
+      return;
+    }
+    drawDomino({ type: selType, c: c.c, r: c.r, dir: dir, state: "up" }, true);
+  }
+
+  function drawTutorialPointer(time) {
+    if (!g || rec.tut >= 1 || g.phase !== "wave") return;
+    // point at the first standing domino of the ready-made line once monsters are close
+    var near = false;
+    for (var i = 0; i < g.mons.length; i++) if (g.mons[i].y > 4.6 && g.mons[i].y < 7) near = true;
+    if (!near) return;
+    for (var c = 0; c < E.COLS; c++) {
+      var d = E.at(g, c, 6);
+      if (d && d.state === "up") {
+        var p = cellCenter(c, 6), k = 0.5 + 0.5 * Math.sin(time * 8);
+        ctx.strokeStyle = "rgba(255,207,74," + (0.5 + k * 0.5) + ")"; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(p.x, p.y, 16 + k * 8, 0, 6.2832); ctx.stroke();
+        ctx.fillStyle = "#ffcf4a"; ctx.font = "bold 15px 'Trebuchet MS',sans-serif"; ctx.textAlign = "center";
+        ctx.fillText("TAP!", p.x, p.y - 34 - k * 4);
+        return;
+      }
+    }
+  }
+
+  function draw(time, dt) {
+    trayHits = [];
+    ctx.save();
+    if (shake > 0.2) { ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake); shake *= 0.86; } else shake = 0;
+    ctx.fillStyle = "#0f0c0b"; ctx.fillRect(-20, -20, W + 40, H + 40);
+    if (!g) { drawAttract(time); ctx.restore(); return; }
+    drawBoard(time);
+    var r, c, d;
+    // fallen first, then standing, so falling slabs sit on top of the table
+    for (r = 0; r < E.ROWS; r++) for (c = 0; c < E.COLS; c++) { d = g.grid[r][c]; if (d && d.state === "down") drawDomino(d); }
+    for (var i = 0; i < g.mons.length; i++) drawMonster(g.mons[i], time);
+    for (r = 0; r < E.ROWS; r++) for (c = 0; c < E.COLS; c++) { d = g.grid[r][c]; if (d && d.state !== "down") drawDomino(d); }
+    drawPreview();
+    // landing slams
+    for (i = slams.length - 1; i >= 0; i--) {
+      var sl = slams[i]; sl.t += dt;
+      if (sl.t > 0.12) { slams.splice(i, 1); continue; }
+      ctx.fillStyle = "rgba(255,248,230," + (0.55 * (1 - sl.t / 0.12)) + ")";
+      ctx.fillRect(sl.x - CELL / 2, sl.y - CELL / 2, CELL, CELL);
+    }
+    // rings
+    for (i = rings.length - 1; i >= 0; i--) {
+      var rg = rings[i]; rg.t += dt;
+      if (rg.t > rg.life) { rings.splice(i, 1); continue; }
+      var k = rg.t / rg.life;
+      ctx.strokeStyle = rg.col + (1 - k) * 0.8 + ")"; ctx.lineWidth = 3 * (1 - k) + 1;
+      ctx.beginPath(); ctx.arc(rg.x, rg.y, rg.r0 + (rg.r1 - rg.r0) * k, 0, 6.2832); ctx.stroke();
+    }
+    // particles
+    for (i = parts.length - 1; i >= 0; i--) {
+      var p = parts[i]; p.t += dt;
+      if (p.t > p.life) { parts.splice(i, 1); continue; }
+      if (p.coin) {
+        var q = p.t / p.life, e2 = q * q;
+        var px = p.x + (p.tx - p.x) * e2, py = p.y + (p.ty - p.y) * e2 - Math.sin(q * 3.1416) * 40;
+        ctx.fillStyle = "#ffd35a"; ctx.beginPath(); ctx.arc(px, py, 4, 0, 6.2832); ctx.fill();
+        ctx.strokeStyle = "#a8741a"; ctx.lineWidth = 1; ctx.stroke();
+        continue;
+      }
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.g * dt;
+      ctx.globalAlpha = 1 - p.t / p.life; ctx.fillStyle = p.col;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.2832); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    // live chain counters
+    for (var id in chainFx) {
+      if (!chainFx.hasOwnProperty(id)) continue;
+      var cf = chainFx[id]; cf.t += dt;
+      if (cf.t > 0.6) { delete chainFx[id]; continue; }
+      if (cf.len < 4) continue;
+      var sz = 14 + Math.min(18, cf.len * 0.35);
+      ctx.globalAlpha = 1 - cf.t / 0.6;
+      ctx.font = "bold " + sz + "px 'Trebuchet MS',sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.lineWidth = 4; ctx.strokeStyle = "rgba(20,12,8,.85)"; ctx.strokeText("×" + cf.len, cf.x, cf.y - 26);
+      ctx.fillStyle = cf.len >= 40 ? "#ff7ad9" : (cf.len >= 20 ? "#6fe3d0" : "#ffcf4a"); ctx.fillText("×" + cf.len, cf.x, cf.y - 26);
+      ctx.globalAlpha = 1;
+    }
+    drawTutorialPointer(time);
+    // floating texts
+    for (i = texts.length - 1; i >= 0; i--) {
+      var tx = texts[i]; tx.t += dt;
+      if (tx.t > tx.life) { texts.splice(i, 1); continue; }
+      ctx.globalAlpha = 1 - tx.t / tx.life;
+      ctx.font = "bold " + (tx.big ? 20 : 12) + "px 'Trebuchet MS',sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.lineWidth = 3; ctx.strokeStyle = "rgba(20,12,8,.8)"; ctx.strokeText(tx.text, tx.x, tx.y - tx.t * 26);
+      ctx.fillStyle = tx.col; ctx.fillText(tx.text, tx.x, tx.y - tx.t * 26);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+
+    if (flash > 0) { ctx.globalAlpha = flash * 0.35; ctx.fillStyle = flashCol; ctx.fillRect(0, BY, W, BH); ctx.globalAlpha = 1; flash = Math.max(0, flash - dt * 2.2); }
+    drawHud();
+    drawTray();
+    // banner
+    if (banner) {
+      banner.t += dt;
+      if (banner.t > banner.life) banner = null;
+      else {
+        var a = banner.t < 0.15 ? banner.t / 0.15 : (banner.t > banner.life - 0.4 ? (banner.life - banner.t) / 0.4 : 1);
+        var s = 1 + (banner.t < 0.15 ? (1 - banner.t / 0.15) * 0.4 : 0);
+        ctx.save(); ctx.globalAlpha = a; ctx.translate(W / 2, BY + 150); ctx.scale(s, s);
+        ctx.font = "bold 40px 'Trebuchet MS',sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.lineWidth = 7; ctx.strokeStyle = "rgba(20,12,8,.9)"; ctx.strokeText(banner.text, 0, 0);
+        ctx.fillStyle = banner.col; ctx.fillText(banner.text, 0, 0);
+        if (banner.sub) { ctx.font = "bold 15px 'Trebuchet MS',sans-serif"; ctx.lineWidth = 4; ctx.strokeText(banner.sub, 0, 34); ctx.fillStyle = "#f3ecdf"; ctx.fillText(banner.sub, 0, 34); }
+        ctx.restore();
+      }
+    }
+    // tip
+    if (tip) {
+      tip.t += dt;
+      if (tip.t > tip.life) tip = null;
+      else {
+        ctx.save(); ctx.globalAlpha = Math.min(1, (tip.life - tip.t) * 2, tip.t * 4);
+        ctx.font = "bold 13px 'Trebuchet MS',sans-serif";
+        var tw2 = Math.min(W - 24, ctx.measureText(tip.text).width + 28);
+        ctx.fillStyle = "rgba(20,14,10,.92)"; roundRect(W / 2 - tw2 / 2, BY + 8, tw2, 30, 15); ctx.fill();
+        ctx.strokeStyle = "rgba(255,207,74,.5)"; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = "#ffcf4a"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        wrapText(tip.text, W / 2, BY + 23, tw2 - 20);
+        ctx.restore();
+      }
+    }
+  }
+  function wrapText(text, x, y, maxW) {
+    if (ctx.measureText(text).width <= maxW) { ctx.fillText(text, x, y); return; }
+    ctx.font = "bold 11px 'Trebuchet MS',sans-serif"; ctx.fillText(text, x, y);
+  }
+
+  // title-screen background: a slow demo chain on an empty board
+  var attract = null;
+  function drawAttract(time) {
+    if (!attract) {
+      attract = E.newGame(7, { starter: false });
+      attract.gold = 999;
+      for (var c = 0; c < E.COLS; c++) { E.place(attract, "basic", c, 5, 1); E.place(attract, "basic", E.COLS - 1 - c, 9, 3); }
+      E.place(attract, "basic", E.COLS - 1, 6, 2); E.place(attract, "basic", E.COLS - 1, 7, 2); E.place(attract, "basic", E.COLS - 1, 8, 2);
+      attract.grid[5][E.COLS - 1].dir = 2;
+      attract.t0 = 0;
+    }
+    var saved = g; g = attract;
+    attract.t0 += 1 / 60;
+    if (attract.t0 > 1 && E.at(attract, 0, 5).state === "up" && attract.falling.length === 0) E.knock(attract, 0, 5);
+    E.step(attract, {});
+    drawBoard(time);
+    for (var r = 0; r < E.ROWS; r++) for (var c2 = 0; c2 < E.COLS; c2++) { var d = attract.grid[r][c2]; if (d) drawDomino(d); }
+    g = saved;
+  }
+
+  // ---------- overlays ----------
+  function show(id) { document.getElementById(id).hidden = false; }
+  function hide(id) { document.getElementById(id).hidden = true; }
+  function hideAll() { ["ovTitle", "ovHow", "ovRecords", "ovReward", "ovPause", "ovOver"].forEach(hide); }
+  function togglePause() {
+    if (!g || g.over || g.phase === "reward") return;
+    paused = !paused;
+    if (paused) show("ovPause"); else hide("ovPause");
+  }
+  function persist() {
+    if (g && !g.over && (g.phase === "build" || g.phase === "reward") && !daily) store.set("clack.run", E.save(g));
+  }
+
+  function openReward() {
+    document.getElementById("rwTitle").textContent = "WAVE " + g.wave + " CLEARED";
+    document.getElementById("rwSub").textContent = "Pick one  ·  gold " + g.gold + "  ·  keep " + g.lives + "/" + g.maxLives;
+    var box = document.getElementById("rwCards"); box.innerHTML = "";
+    (g.offered || []).forEach(function (id) {
+      var u = E.upg(id), lvNow = g.up[id] || 0;
+      var kind = u.kind === "unlock" ? "NEW DOMINO" : (u.kind === "relic" ? "RELIC" : (lvNow ? "UPGRADE · LEVEL " + lvNow + " → " + (lvNow + 1) : "UPGRADE"));
+      var el = document.createElement("div"); el.className = "up";
+      el.innerHTML = '<div class="k">' + kind + '</div><div class="n">' + u.name + '</div><div class="d">' + u.desc + '</div>';
+      el.addEventListener("click", function () {
+        SFX.pick(); E.choose(g, id); drain(); hide("ovReward");
+        if (u.kind === "unlock") { selType = u.dom; rec.seenD[u.dom] = 1; setTip("New: " + E.DOMINOES[u.dom].name + ". " + E.DOMINOES[u.dom].desc, 7); }
+        persist(); saveRec();
+      });
+      box.appendChild(el);
+    });
+    show("ovReward");
+  }
+
+  function openOver() {
+    store.del("clack.run");
+    var won = g.won;
+    if (g.score > rec.bestScore) rec.bestScore = g.score;
+    if (g.wave > rec.bestWave) rec.bestWave = g.wave;
+    if (g.bestChain > rec.bestChain) rec.bestChain = g.bestChain;
+    var note = "";
+    if (won) {
+      rec.wins++;
+      if (!daily && g.heat >= rec.heatMax && g.heat < E.HEAT.length - 1) { rec.heatMax = g.heat + 1; note = "Unlocked " + E.HEAT[rec.heatMax].name + ": " + E.HEAT[rec.heatMax].desc; }
+    }
+    saveRec();
+    document.getElementById("ovHead").textContent = won ? (g.mode === "endless" ? "ENDLESS OVER" : "THE KEEP HOLDS") : "THE KEEP HAS FALLEN";
+    document.getElementById("ovHead").style.color = won ? "#6fe3d0" : "#ff6b6b";
+    document.getElementById("ovScore").textContent = g.score.toLocaleString() + " pts";
+    document.getElementById("ovSub").textContent = (g.mode === "endless" ? "endless wave " : "wave ") + g.wave + (g.heat ? "  ·  Heat " + g.heat : "") + (daily ? "  ·  Daily" : "");
+    document.getElementById("ovTable").innerHTML =
+      "<tr><td>Longest chain</td><td class='r'>×" + g.bestChain + "</td></tr>" +
+      "<tr><td>Monsters crushed</td><td class='r'>" + g.kills + "</td></tr>" +
+      "<tr><td>Dominoes toppled</td><td class='r'>" + g.stats.dominoesFallen + "</td></tr>" +
+      "<tr><td>Best ever</td><td class='r'>" + rec.bestScore.toLocaleString() + " pts · ×" + rec.bestChain + "</td></tr>";
+    document.getElementById("ovNote").textContent = note;
+    document.getElementById("btnEndless").hidden = !(won && g.mode === "run");
+    show("ovOver");
+  }
+
+  function openRecords() {
+    var html = "<table>" +
+      "<tr><td>Best score</td><td class='r'>" + rec.bestScore.toLocaleString() + "</td></tr>" +
+      "<tr><td>Longest chain</td><td class='r'>×" + rec.bestChain + "</td></tr>" +
+      "<tr><td>Furthest wave</td><td class='r'>" + rec.bestWave + "</td></tr>" +
+      "<tr><td>Keeps held / runs</td><td class='r'>" + rec.wins + " / " + rec.runs + "</td></tr>" +
+      "<tr><td>Monsters crushed, all time</td><td class='r'>" + rec.crushed.toLocaleString() + "</td></tr>" +
+      "<tr><td>Highest Heat unlocked</td><td class='r'>" + rec.heatMax + "</td></tr></table>";
+    html += "<h2 style='margin-top:12px'>DOMINOES</h2><table>";
+    E.DOMINO_ORDER.forEach(function (t) {
+      var seen = rec.seenD[t];
+      html += "<tr><td style='color:" + (seen ? E.DOMINOES[t].col : "#554c43") + "'>" + (seen ? E.DOMINOES[t].name : "? ? ?") + "</td><td style='color:#a79f92;font-size:12px'>" + (seen ? E.DOMINOES[t].desc : "") + "</td></tr>";
+    });
+    html += "</table><h2 style='margin-top:12px'>MONSTERS</h2><table>";
+    Object.keys(E.MONSTERS).forEach(function (t) {
+      var seen = rec.seenM[t], m = E.MONSTERS[t];
+      html += "<tr><td style='color:" + (seen ? m.col : "#554c43") + "'>" + (seen ? m.name : "? ? ?") + "</td><td class='r'>" + (seen ? m.hp + " hp" : "") + "</td></tr>";
+    });
+    html += "</table>";
+    document.getElementById("recBody").innerHTML = html;
+    show("ovRecords");
+  }
+
+  function refreshTitle() {
+    heatSel = Math.min(heatSel, rec.heatMax);
+    document.getElementById("heatBox").hidden = rec.heatMax === 0;
+    document.getElementById("heatName").textContent = E.HEAT[heatSel].name;
+    document.getElementById("heatDesc").textContent = E.HEAT[heatSel].desc;
+    document.getElementById("heatDown").disabled = heatSel <= 0;
+    document.getElementById("heatUp").disabled = heatSel >= rec.heatMax;
+    document.getElementById("btnResume").hidden = !store.get("clack.run", null);
+    document.getElementById("titleFoot").textContent = rec.bestScore ? "best " + rec.bestScore.toLocaleString() + " pts · longest chain ×" + rec.bestChain : "Made for Bezi Mega Jam — Genre Collision";
+  }
+
+  document.getElementById("btnPlay").addEventListener("click", function () { newRun({}); });
+  document.getElementById("btnDaily").addEventListener("click", function () { newRun({ daily: true }); });
+  document.getElementById("btnHow").addEventListener("click", function () { show("ovHow"); });
+  document.getElementById("btnHowBack").addEventListener("click", function () { hide("ovHow"); });
+  document.getElementById("btnRecords").addEventListener("click", openRecords);
+  document.getElementById("btnRecBack").addEventListener("click", function () { hide("ovRecords"); });
+  document.getElementById("heatDown").addEventListener("click", function () { heatSel = Math.max(0, heatSel - 1); refreshTitle(); });
+  document.getElementById("heatUp").addEventListener("click", function () { heatSel = Math.min(rec.heatMax, heatSel + 1); refreshTitle(); });
+  document.getElementById("btnUnpause").addEventListener("click", togglePause);
+  document.getElementById("btnPauseHow").addEventListener("click", function () { show("ovHow"); });
+  document.getElementById("btnQuit").addEventListener("click", function () { persist(); paused = false; g = null; hideAll(); refreshTitle(); show("ovTitle"); });
+  document.getElementById("btnAgain").addEventListener("click", function () { newRun({ daily: daily }); });
+  document.getElementById("btnMenu").addEventListener("click", function () { g = null; hideAll(); refreshTitle(); show("ovTitle"); });
+  document.getElementById("btnEndless").addEventListener("click", function () {
+    if (E.continueEndless(g)) { hide("ovOver"); armed = null; openReward(); }
+  });
+  document.getElementById("btnCopy").addEventListener("click", function () {
+    var txt = E.shareText(g) + "\nplay: kqmigqkqri.itch.io/clackdown";
+    var b = document.getElementById("btnCopy");
+    try { navigator.clipboard.writeText(txt); b.textContent = "COPIED"; } catch (e) { b.textContent = "COPY FAILED"; }
+    setTimeout(function () { b.textContent = "COPY RESULT"; }, 1400);
+  });
+  document.getElementById("btnResume").addEventListener("click", function () {
+    var loaded = E.load(store.get("clack.run", null));
+    if (!loaded) { newRun({}); return; }
+    audio(); hideAll(); g = loaded; daily = false; paused = false; speed = 1; tool = "play"; selType = "basic";
+    parts = []; texts = []; rings = []; chainFx = {}; armed = null;
+    if (g.phase === "reward") openReward();
+  });
+
+  // ---------- loop ----------
+  var acc = 0, last = performance.now();
+  function frame(now) {
+    var dt = Math.min(0.1, (now - last) / 1000); last = now;
+    if (g && !paused && !g.over && g.phase === "wave") {
+      acc += dt * speed;
+      var guard = 0;
+      while (acc >= E.TICK && guard++ < 16) {
+        acc -= E.TICK;
+        var inp = {};
+        if (pendingKnock) { inp.knock = pendingKnock; pendingKnock = null; }
+        E.step(g, inp);
+        drain();
+        if (g.phase !== "wave") break;
+      }
+    } else {
+      acc = 0;
+      // between waves you can still knock dominoes to practise, and fallen ones keep resetting
+      if (g && !paused && !g.over && g.phase === "build") {
+        var inp2 = {};
+        if (pendingKnock) { inp2.knock = pendingKnock; pendingKnock = null; }
+        E.step(g, inp2); drain();
+      } else pendingKnock = null;
+    }
+    if (g && g.phase === "reward" && armed !== "reward") { armed = "reward"; persist(); setTimeout(function () { if (g && g.phase === "reward" && document.getElementById("ovReward").hidden) openReward(); }, 900); }
+    if (g && g.over && armed !== "over") { armed = "over"; setTimeout(function () { if (g && g.over) openOver(); }, 1300); }
+    if (g && g.phase === "wave") armed = null;
+    draw(now / 1000, dt);
+    requestAnimationFrame(frame);
+  }
+
+  // hooks for automated capture and checks (a hidden tab stops requestAnimationFrame)
+  window.CLACK_APP = {
+    setup: function (seed, opts) { hideAll(); g = E.newGame(seed >>> 0, opts || {}); paused = false; speed = 1; parts = []; texts = []; rings = []; chainFx = {}; armed = null; return g; },
+    state: function () { return g; },
+    tick: function (n, knockAt) {
+      for (var i = 0; i < (n || 1); i++) {
+        if (!g || g.over) break;
+        var inp = {};
+        if (i === 0 && knockAt) inp.knock = knockAt;
+        E.step(g, inp); drain();
+        if (g.phase === "reward" || g.over) break;
+      }
+      draw(performance.now() / 1000, 1 / 60);
+      return g ? { phase: g.phase, wave: g.wave, lives: g.lives, gold: g.gold, mons: g.mons.length, score: g.score, best: g.bestChain } : null;
+    },
+    draw: function () { draw(performance.now() / 1000, 1 / 60); },
+    // the capture script drives the clock itself, so it stops the normal loop from stepping the game
+    setPaused: function (v) { paused = !!v; },
+    fx: function (n) { for (var i = 0; i < n; i++) draw(performance.now() / 1000, 1 / 60); },
+    openReward: function () { openReward(); },
+    openOver: function () { openOver(); },
+    overlay: function (id) { hideAll(); if (id) show(id); }
+  };
+
+  fit();
+  refreshTitle();
+  requestAnimationFrame(frame);
+})();
+</script>

@@ -1,0 +1,1101 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TUBECLERK</title>
+<style>
+  :root{ --wood:#1b1611; --wood2:#241d16; --paper:#efe6cf; --paper2:#e2d6b8; --ink:#2b2117; --dim:#8c7c63;
+         --brass:#d8a948; --brass2:#a87a26; --green:#3f7d4f; --red:#b8402f; --blue:#2f5f8f; --violet:#7a4f8f; --orange:#b5651d;
+         --line:rgba(216,169,72,.28); }
+  *{box-sizing:border-box}
+  [hidden]{display:none!important}
+  html,body{height:100%;margin:0;overflow:hidden;background:#100d0a}
+  body{font-family:Georgia,"Times New Roman",serif;color:var(--paper)}
+  #stage{position:absolute;left:0;top:0;width:1200px;height:760px;transform-origin:0 0;
+         background:radial-gradient(ellipse at 50% 0%,#2c241b 0%,#18130e 70%);overflow:hidden}
+  button{font-family:inherit;cursor:pointer}
+  .mono,textarea,pre,.hl,.gutter,.ed{font-family:Consolas,"Menlo","DejaVu Sans Mono","Courier New",monospace}
+  /* the coloured copy and the real text box must use the very same letters, or the caret drifts */
+  .hl,.ed{font-size:13px;letter-spacing:0;font-weight:normal}
+
+  /* ---------- shared bits ---------- */
+  .btn{background:linear-gradient(180deg,#3a2e20,#251d14);color:var(--paper);border:1px solid var(--line);border-radius:6px;
+       padding:7px 12px;font-size:13px;letter-spacing:1px}
+  .btn:hover{border-color:var(--brass)}
+  .btn:disabled{opacity:.35;cursor:default}
+  .btn.brass{background:linear-gradient(180deg,#e7bf62,#b8862d);color:#2a1c08;border-color:#f3d792;font-weight:bold}
+  .btn.buy{background:linear-gradient(180deg,#8bc06b,#3f7d33);color:#0f2208;border-color:#c7f0b4;font-weight:bold}
+  .btn.on{background:linear-gradient(180deg,#5a4526,#3a2c18);border-color:var(--brass)}
+  .ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(10,8,6,.86);z-index:20}
+  .card{background:var(--paper);color:var(--ink);border-radius:6px;padding:22px 26px;box-shadow:0 18px 60px rgba(0,0,0,.6);
+        max-height:94%;overflow:auto;border:1px solid #c9b88f}
+  .card h2{margin:0 0 6px;font-size:24px;letter-spacing:2px;color:#3b2a14}
+  .card p{line-height:1.5;font-size:14px;margin:8px 0}
+  .card .btn{color:var(--paper)}
+  .sub{color:#7a6a50;font-size:13px}
+  .medal{display:inline-block;width:22px;text-align:center;font-weight:bold}
+  .m-on{color:#b8862d}.m-off{color:#c9b88f}
+
+  /* ---------- title ---------- */
+  #title .card{width:560px;text-align:center}
+  #title h1{margin:4px 0 0;font-size:56px;letter-spacing:8px;color:#2b2117;font-weight:normal}
+  #title .tag{font-style:italic;color:#6d5c42;margin:6px 0 18px}
+  #title .btn{display:block;width:100%;margin:8px 0;padding:11px;font-size:15px}
+  #title .slip{font-family:Consolas,monospace;font-size:12px;color:#7a6a50;margin-top:12px}
+
+  /* ---------- ticket list ---------- */
+  #list{position:absolute;inset:0;padding:22px 30px}
+  #list header{display:flex;align-items:baseline;gap:18px;margin-bottom:14px}
+  #list header h2{margin:0;font-size:26px;letter-spacing:3px;color:var(--brass);font-weight:normal}
+  #list .grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+  .tk{background:var(--paper);color:var(--ink);border-radius:4px;padding:10px 11px;min-height:104px;cursor:pointer;
+      border:1px solid #c9b88f;position:relative;box-shadow:0 3px 0 #9c8a63}
+  .tk:hover{transform:translateY(-1px);border-color:var(--brass2)}
+  .tk .no{font-size:11px;color:#8c7c63;letter-spacing:1px}
+  .tk .nm{font-size:14px;font-weight:bold;margin:2px 0 6px;line-height:1.2}
+  .tk .st{font-family:Consolas,monospace;font-size:11px;color:#6d5c42}
+  .tk.locked{background:#3a3226;color:#8c7c63;border-color:#4a3f30;box-shadow:none;cursor:default}
+  .tk.locked:hover{transform:none}
+  .tk .stamp{position:absolute;right:8px;top:8px;font-size:10px;color:var(--green);border:1px solid var(--green);padding:1px 4px;transform:rotate(6deg)}
+
+  /* ---------- the bureau ---------- */
+  #desk{position:absolute;inset:0}
+  #bar{position:absolute;left:0;right:0;top:0;height:58px;display:flex;align-items:center;gap:12px;padding:0 14px;
+       background:#120e0a;border-bottom:1px solid var(--line)}
+  #bar .tt{font-size:20px;color:var(--brass);letter-spacing:1px}
+  #bar .tn{font-size:11px;color:var(--dim);letter-spacing:2px}
+  #bar .brief{flex:1;font-size:13px;color:#d9ceb4;line-height:1.35;font-style:italic;max-height:52px;overflow:hidden}
+  #left{position:absolute;left:10px;top:68px;width:250px;bottom:62px;display:flex;flex-direction:column;gap:8px}
+  #center{position:absolute;left:270px;top:68px;right:210px;bottom:62px;display:flex;gap:8px}
+  #right{position:absolute;right:10px;top:68px;width:190px;bottom:62px;display:flex;flex-direction:column;gap:8px}
+  #controls{position:absolute;left:0;right:0;bottom:0;height:54px;display:flex;align-items:center;gap:8px;padding:0 12px;
+            background:#120e0a;border-top:1px solid var(--line)}
+  #status{flex:1;font-size:13px;color:#d9ceb4;font-family:Consolas,monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #status.bad{color:#ff8f7a}#status.good{color:#9ed67f}
+  .panel{background:rgba(239,230,207,.06);border:1px solid var(--line);border-radius:5px;padding:8px}
+  .panel h3{margin:0 0 6px;font-size:11px;letter-spacing:2px;color:var(--brass);font-weight:normal}
+
+  .trays{display:flex;gap:6px;flex:1;min-height:0}
+  .tray{flex:1;display:flex;flex-direction:column;min-width:0}
+  .tray h4{margin:0 0 4px;font-size:11px;letter-spacing:1px;color:var(--brass);text-align:center;font-weight:normal}
+  .tray .col{flex:1;overflow:hidden;background:rgba(0,0,0,.25);border-radius:3px;padding:3px}
+  .slip{font-family:Consolas,monospace;font-size:12px;background:var(--paper);color:var(--ink);border-radius:2px;margin:0 0 2px;
+        padding:1px 4px;text-align:right;line-height:15px;height:17px}
+  .slip.done{opacity:.35}
+  .slip.next{outline:2px solid var(--brass)}
+  .slip.ok{background:#cfe6bf}
+  .slip.bad{background:#f2b4a8}
+  .slip.want{background:transparent;color:#8c7c63;border:1px dashed #5a4c38}
+
+  .deskbox{flex:1;display:flex;flex-direction:column;min-width:0;background:rgba(0,0,0,.18);border:1px solid var(--line);border-radius:5px}
+  .deskhead{display:flex;justify-content:space-between;align-items:baseline;padding:5px 8px;font-size:12px;letter-spacing:1px;color:var(--brass)}
+  .deskhead .cap{font-family:Consolas,monospace;font-size:11px;color:var(--dim)}
+  .editor{position:relative;flex:1;min-height:0;background:var(--paper);margin:0 6px;border-radius:3px;overflow:hidden}
+  .gutter{position:absolute;left:0;top:0;bottom:0;width:30px;background:var(--paper2);color:#9c8a63;font-family:Consolas,monospace;
+          font-size:13px;line-height:18px;padding-top:6px;padding-bottom:80px;text-align:right;overflow:hidden}
+  .gutter div{padding-right:5px;height:18px}
+  .hl,.ed{position:absolute;left:30px;right:0;top:0;bottom:0;margin:0;padding:6px 8px;font-size:13px;line-height:18px;
+          white-space:pre;overflow:auto;tab-size:4}
+  .hl{color:var(--ink);pointer-events:none;overflow:hidden}
+  .hl div{height:18px;margin:0 -8px;padding:0 8px}
+  .hl div.cur{background:#f4d58a}
+  .hl div.err{background:#f6c6bc}
+  .ed{background:transparent;color:transparent;caret-color:#2b2117;border:0;outline:0;resize:none}
+  .ed::selection{background:rgba(216,169,72,.45)}
+  .k-op{color:var(--blue)}.k-num{color:var(--orange)}.k-lab{color:var(--green)}
+  .k-arg{color:var(--violet)}.k-com{color:#9c8a63}.k-bad{color:var(--red);text-decoration:underline wavy}
+  .errs{font-family:Consolas,monospace;font-size:11px;color:#ffb3a3;padding:3px 8px;max-height:34px;overflow:auto}
+  .spikebox{display:flex;align-items:flex-end;gap:6px;padding:6px 8px;min-height:72px}
+  .spike{flex:1;display:flex;flex-direction:column-reverse;gap:2px;min-height:60px;border-bottom:3px solid var(--brass2);position:relative}
+  .spike .slip{width:100%}
+  .spike .slip.top{outline:2px solid var(--brass)}
+  .dstate{width:84px;font-family:Consolas,monospace;font-size:11px;color:var(--dim);line-height:1.3}
+  .dstate b{display:block;font-size:12px;letter-spacing:1px}
+  .st-ready b{color:#9ed67f}.st-wait b{color:#e8c66a}.st-halt b{color:#9c8a63}.st-error b{color:#ff8f7a}.st-idle b{color:#6d5c42}
+
+  .ledger{display:grid;grid-template-columns:repeat(4,1fr);gap:3px}
+  .cell{font-family:Consolas,monospace;font-size:11px;background:rgba(239,230,207,.1);border-radius:2px;padding:3px 2px;text-align:center}
+  .cell i{display:block;font-style:normal;font-size:9px;color:var(--dim)}
+  .cell.touched{background:rgba(216,169,72,.3)}
+  .tubes{display:flex;flex-direction:column;gap:4px}
+  .tube{display:flex;align-items:center;gap:6px;font-family:Consolas,monospace;font-size:12px}
+  .tube .pipe{flex:1;height:20px;border-radius:10px;background:rgba(0,0,0,.35);border:1px solid #5a4c38;position:relative}
+  .tube .pipe span{position:absolute;right:3px;top:1px;background:var(--paper);color:var(--ink);border-radius:8px;padding:0 6px;font-size:12px;line-height:16px}
+  .tube .pipe span.pend{left:3px;right:auto;opacity:.55}
+  .metrics div{display:flex;justify-content:space-between;font-family:Consolas,monospace;font-size:13px;margin:3px 0}
+  .metrics b{color:var(--brass)}
+  .metrics .par{color:var(--dim);font-size:11px}
+
+  #handbook .card{width:820px}
+  #handbook table{width:100%;border-collapse:collapse;font-size:13px}
+  #handbook td{color:var(--ink);padding:3px 6px;border-bottom:1px solid #d6c7a2;vertical-align:top}
+  #handbook td.op{font-family:Consolas,monospace;font-weight:bold;color:var(--blue);white-space:nowrap}
+  #handbook .cols{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  #result .card{width:520px}
+  #result table{width:100%;border-collapse:collapse;font-family:Consolas,monospace;font-size:14px;margin:10px 0}
+  #result td{color:var(--ink);padding:5px 6px;border-bottom:1px solid #d6c7a2}
+  #result td.r{text-align:right}
+  #result .stamp{display:inline-block;border:3px solid var(--green);color:var(--green);padding:4px 12px;font-size:22px;letter-spacing:3px;transform:rotate(-4deg);margin:4px 0 8px}
+  #result .stamp.bad{border-color:var(--red);color:var(--red)}
+  #paste .card{width:560px}
+  #paste textarea{width:100%;height:260px;font-size:12px}
+</style>
+
+<div id="stage">
+  <!-- ======================= TITLE ======================= -->
+  <div class="ov" id="title">
+    <div class="card">
+      <div class="sub">THE BUREAU OF PNEUMATIC CLERKS &middot; EST. 1923</div>
+      <h1>TUBECLERK</h1>
+      <div class="tag">A programming puzzle on a stack machine made of paper.<br>The last slip on the spike is the first slip off.</div>
+      <button class="btn brass" id="btnStart">REPORT FOR WORK</button>
+      <button class="btn" id="btnHand1">THE CLERK'S HANDBOOK</button>
+      <button class="btn buy" id="btnBuyTitle">GET THE FULL GAME &mdash; 30 TICKETS, 90 MEDALS</button>
+      <div class="slip" id="titleFoot"></div>
+    </div>
+  </div>
+
+  <!-- ======================= TICKET LIST ======================= -->
+  <div id="list" hidden>
+    <header>
+      <h2>TICKETS</h2>
+      <span class="sub" id="tally" style="color:#d9ceb4"></span>
+      <span style="flex:1"></span>
+      <button class="btn" id="btnHand2">HANDBOOK</button>
+      <button class="btn" id="btnListBack">TITLE</button>
+    </header>
+    <div class="grid" id="grid"></div>
+    <div style="margin-top:14px;text-align:center"><button class="btn buy" id="btnBuyList">THE OTHER 22 TICKETS ARE IN THE FULL GAME</button></div>
+  </div>
+
+  <!-- ======================= THE DESK ======================= -->
+  <div id="desk" hidden>
+    <div id="bar">
+      <button class="btn" id="btnTickets">&larr; TICKETS</button>
+      <div><div class="tn" id="tNo"></div><div class="tt" id="tName"></div></div>
+      <div class="brief" id="tBrief"></div>
+      
+      <button class="btn" id="btnHand3">HANDBOOK</button>
+    </div>
+    <div id="left">
+      <div class="panel" style="flex:1;display:flex;flex-direction:column;min-height:0">
+        <h3>TRAYS &middot; VISIBLE TEST</h3>
+        <div class="trays" id="trays"></div>
+      </div>
+    </div>
+    <div id="center"></div>
+    <div id="right">
+      <div class="panel metrics">
+        <h3>THIS SOLUTION</h3>
+        <div><span>ticks</span><b id="mCycle">0</b></div>
+        <div><span>instructions</span><b id="mSize">0</b></div>
+        <div class="par" id="mPar"></div>
+        <div class="par" id="mBest"></div>
+      </div>
+      <div class="panel"><h3>TUBES</h3><div class="tubes" id="tubes"></div></div>
+      <div class="panel" style="flex:1"><h3>LEDGER</h3><div class="ledger" id="ledger"></div></div>
+    </div>
+    <div id="controls">
+      <button class="btn" id="cReset" title="Back to tick 0 (Esc)">&#9198; RESET</button>
+      <button class="btn" id="cBack" title="One tick back (Shift+F10)">&#9664; BACK</button>
+      <button class="btn" id="cStep" title="One tick forward (F10)">STEP &#9654;|</button>
+      <button class="btn" id="cRun" title="Run (F5)">&#9654; RUN</button>
+      <button class="btn" id="cFast" title="Run fast (F6)">&#9193; FAST</button>
+      <button class="btn" id="cStop" title="Pause">&#9632; PAUSE</button>
+      <div id="status" class="mono"></div>
+      <button class="btn brass" id="cInspect" title="Run every test, hidden ones too (F9)">FILE IT &#10003;</button>
+    </div>
+  </div>
+
+  <!-- ======================= OVERLAYS ======================= -->
+  <div class="ov" id="handbook" hidden>
+    <div class="card">
+      <h2>THE CLERK'S HANDBOOK</h2>
+      <div class="cols">
+        <div>
+          <p><b>The spike.</b> Every desk keeps its figures on a spike: a stack of paper slips. You can only ever touch the top. It holds 10 slips. Each slip holds a whole number from -9999 to 9999.</p>
+          <p><b>The clock.</b> Every desk does one instruction per tick, all at the same time. A program that runs off its last line starts again from the top.</p>
+          <p><b>Trays.</b> Slips arrive in trays A and B and must be filed, in order, in trays X and Y. A wrong slip stops the run at once.</p>
+          <p><b>Tubes.</b> Four pneumatic tubes connect every desk. A tube holds one slip. A slip sent on one tick can be taken out on the next. SEND waits while a tube is full; RECV waits while it is empty.</p>
+          <p><b>The ledger.</b> Sixteen shared cells, 0 to 15, readable and writable by every desk.</p>
+          <p><b>Filing.</b> FILE IT runs your desks against the visible test and three hidden ones. Your score is the average number of ticks, how many instructions you used, and how many desks. Beat the bureau's PAR to earn its medals.</p>
+          <p><b>Writing.</b> One instruction per line. <span class="mono">name:</span> marks a label. Anything after <span class="mono">#</span> or <span class="mono">;</span> is a comment.</p>
+          <p class="sub">Keys: F10 step &middot; Shift+F10 back &middot; F5 run &middot; F6 fast &middot; F9 file it &middot; Esc reset</p>
+        </div>
+        <div><table id="opTable"></table></div>
+      </div>
+      <p style="text-align:right;margin-top:12px"><button class="btn brass" id="btnHandClose">BACK TO WORK</button></p>
+    </div>
+  </div>
+
+  <div class="ov" id="result" hidden>
+    <div class="card">
+      <div id="rStamp" class="stamp">FILED</div>
+      <h2 id="rHead"></h2>
+      <div id="rBody"></div>
+      <p style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+        <button class="btn" id="btnResStay">KEEP WORKING</button>
+        <button class="btn brass" id="btnResNext">NEXT TICKET &rarr;</button>
+      </p>
+    </div>
+  </div>
+
+  
+</div>
+
+<script>window.TUBE_EDITION = "demo";</script>
+<script>
+// TUBECLERK - the machine.  Assembler, virtual machine, and the thirty tickets.
+// No drawing and no DOM here: this file is the whole of the rules, and runs the same in node and in the page.
+(function (root) {
+  "use strict";
+
+  var LIMIT = 9999;          // a slip holds four digits and a sign
+  var SPIKE = 10;            // slips per spike (stack depth)
+  var LEDGER = 16;           // shared ledger cells
+  var TUBES = 4;             // pneumatic tubes between desks
+  var MAX_LINES = 40;        // instructions per desk unless a ticket says otherwise
+  var CYCLE_LIMIT = 20000;   // a run that takes longer than this has gone wrong
+  var HIDDEN = 3;            // hidden test sets on top of the visible one
+
+  // ---------- the instruction set ----------
+  // arg: "num" literal, "label", "in" tray A|B, "out" tray X|Y, "tube" 0-3, "cell" 0-15
+  var OPS = {
+    PUSH: { arg: "num",   doc: "Put a number on the spike." },
+    DUP:  {               doc: "Copy the top slip." },
+    DROP: {               doc: "Throw the top slip away." },
+    SWAP: {               doc: "Swap the top two slips." },
+    OVER: {               doc: "Copy the second slip onto the top.  a b -> a b a" },
+    ROT:  {               doc: "Pull the third slip to the top.  a b c -> b c a" },
+    ADD:  {               doc: "a b -> a+b" },
+    SUB:  {               doc: "a b -> a-b" },
+    MUL:  {               doc: "a b -> a*b" },
+    DIV:  {               doc: "a b -> a/b, rounded toward zero" },
+    MOD:  {               doc: "a b -> remainder of a/b" },
+    NEG:  {               doc: "a -> -a" },
+    EQ:   {               doc: "a b -> 1 if a = b, else 0" },
+    LT:   {               doc: "a b -> 1 if a < b, else 0" },
+    GT:   {               doc: "a b -> 1 if a > b, else 0" },
+    JMP:  { arg: "label", doc: "Jump to a label." },
+    JZ:   { arg: "label", doc: "Take the top slip; jump if it is zero." },
+    JNZ:  { arg: "label", doc: "Take the top slip; jump if it is not zero." },
+    JNEG: { arg: "label", doc: "Take the top slip; jump if it is below zero." },
+    IN:   { arg: "in",    doc: "Take the next slip from tray A or B.  Waits if the tray is empty." },
+    OUT:  { arg: "out",   doc: "Take the top slip and file it in tray X or Y." },
+    SEND: { arg: "tube",  doc: "Take the top slip and put it in a tube (0-3).  Waits while the tube is full." },
+    RECV: { arg: "tube",  doc: "Take a slip out of a tube.  Waits while the tube is empty." },
+    LOAD: { arg: "cell",  doc: "Copy ledger cell n onto the spike." },
+    STORE:{ arg: "cell",  doc: "Take the top slip and write it into ledger cell n." },
+    LDX:  {               doc: "addr -> ledger[addr]" },
+    STX:  {               doc: "value addr -> (writes value into ledger[addr])" },
+    NOP:  {               doc: "Do nothing for one tick." },
+    HALT: {               doc: "This desk stops for good." }
+  };
+  var OP_ORDER = ["PUSH", "DUP", "DROP", "SWAP", "OVER", "ROT", "ADD", "SUB", "MUL", "DIV", "MOD", "NEG",
+    "EQ", "LT", "GT", "JMP", "JZ", "JNZ", "JNEG", "IN", "OUT", "SEND", "RECV", "LOAD", "STORE", "LDX", "STX", "NOP", "HALT"];
+
+  // ---------- seeded random, for the test sets ----------
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      var t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function rngFor(seed) {
+    var f = mulberry32(seed >>> 0);
+    var r = function () { return f(); };
+    r.int = function (lo, hi) { return lo + Math.floor(f() * (hi - lo + 1)); };
+    r.pick = function (a) { return a[Math.floor(f() * a.length)]; };
+    return r;
+  }
+  function clamp(v) { return v > LIMIT ? LIMIT : (v < -LIMIT ? -LIMIT : v); }
+  function idiv(a, b) { var q = a / b; return q < 0 ? Math.ceil(q) : Math.floor(q); }
+
+  // ---------- the assembler ----------
+  function assemble(src, opts) {
+    opts = opts || {};
+    var disabled = opts.disabled || [];
+    var trays = opts.trays || ["A", "B", "X", "Y"];
+    var maxLines = opts.lines || MAX_LINES;
+    var lines = String(src || "").replace(/\r/g, "").split("\n");
+    var code = [], errors = [], labels = {}, pendingLabels = [], fixups = [];
+    for (var ln = 0; ln < lines.length; ln++) {
+      var text = lines[ln];
+      var cut = text.search(/[#;]/);
+      if (cut >= 0) text = text.slice(0, cut);
+      text = text.trim();
+      if (!text) continue;
+      // one or more labels at the front of the line
+      var m;
+      while ((m = /^([A-Za-z_][A-Za-z0-9_]*)\s*:/.exec(text))) {
+        var name = m[1].toLowerCase();
+        if (labels[name] != null || pendingLabels.indexOf(name) >= 0) errors.push({ line: ln, msg: "The label '" + m[1] + "' is used twice." });
+        else pendingLabels.push(name);
+        text = text.slice(m[0].length).trim();
+      }
+      if (!text) continue;
+      var parts = text.split(/[\s,]+/);
+      var opName = parts[0].toUpperCase();
+      var spec = OPS[opName];
+      if (!spec) { errors.push({ line: ln, msg: "'" + parts[0] + "' is not an instruction." }); continue; }
+      if (disabled.indexOf(opName) >= 0) { errors.push({ line: ln, msg: opName + " has not been issued for this ticket." }); continue; }
+      var want = spec.arg ? 1 : 0;
+      if (parts.length - 1 !== want) {
+        errors.push({ line: ln, msg: opName + (want ? " needs one argument." : " takes no argument.") });
+        continue;
+      }
+      var arg = null, raw = parts[1];
+      if (spec.arg === "num") {
+        if (!/^[-+]?\d+$/.test(raw)) { errors.push({ line: ln, msg: "'" + raw + "' is not a whole number." }); continue; }
+        arg = parseInt(raw, 10);
+        if (arg > LIMIT || arg < -LIMIT) { errors.push({ line: ln, msg: "Slips only hold -9999 to 9999." }); continue; }
+      } else if (spec.arg === "label") {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw)) { errors.push({ line: ln, msg: "'" + raw + "' is not a label name." }); continue; }
+        arg = raw.toLowerCase();
+        fixups.push({ at: code.length, name: arg, line: ln, raw: raw });
+      } else if (spec.arg === "in" || spec.arg === "out") {
+        var t = raw.toUpperCase();
+        var ok = spec.arg === "in" ? (t === "A" || t === "B") : (t === "X" || t === "Y");
+        if (!ok) { errors.push({ line: ln, msg: opName + " works with tray " + (spec.arg === "in" ? "A or B" : "X or Y") + "." }); continue; }
+        if (trays.indexOf(t) < 0) { errors.push({ line: ln, msg: "Tray " + t + " does not reach this desk." }); continue; }
+        arg = t;
+      } else if (spec.arg === "tube" || spec.arg === "cell") {
+        var hi = spec.arg === "tube" ? TUBES - 1 : LEDGER - 1;
+        if (!/^\d+$/.test(raw) || parseInt(raw, 10) > hi) { errors.push({ line: ln, msg: (spec.arg === "tube" ? "Tubes" : "Ledger cells") + " are numbered 0 to " + hi + "." }); continue; }
+        arg = parseInt(raw, 10);
+      }
+      while (pendingLabels.length) labels[pendingLabels.shift()] = code.length;
+      code.push({ op: opName, arg: arg, line: ln });
+    }
+    // labels after the last instruction point back to the top, because programs wrap around
+    while (pendingLabels.length) labels[pendingLabels.shift()] = code.length;
+    for (var i = 0; i < fixups.length; i++) {
+      var f = fixups[i];
+      if (labels[f.name] == null) errors.push({ line: f.line, msg: "There is no label called '" + f.raw + "'." });
+      else code[f.at].arg = labels[f.name] >= code.length ? 0 : labels[f.name];
+    }
+    if (code.length > maxLines) errors.push({ line: code[maxLines].line, msg: "This desk only has room for " + maxLines + " instructions." });
+    errors.sort(function (a, b) { return a.line - b.line; });
+    return { code: code, errors: errors, labels: labels, size: code.length };
+  }
+
+  // ---------- the machine ----------
+  function deskTrays(puzzle, d) {
+    var spec = (puzzle.desks && puzzle.desks[d]) || {};
+    return spec.trays || ["A", "B", "X", "Y"];
+  }
+  function deskLines(puzzle, d) {
+    var spec = (puzzle.desks && puzzle.desks[d]) || {};
+    return spec.lines || MAX_LINES;
+  }
+  function assembleAll(puzzle, sources) {
+    var out = [], errs = 0;
+    for (var d = 0; d < puzzle.deskCount; d++) {
+      var a = assemble(sources[d] || "", { disabled: puzzle.disabled, trays: deskTrays(puzzle, d), lines: deskLines(puzzle, d) });
+      errs += a.errors.length;
+      out.push(a);
+    }
+    return { desks: out, errors: errs };
+  }
+
+  function makeMachine(puzzle, programs, test) {
+    var vm = {
+      cycle: 0, desks: [], tubes: [], ledger: [], inPos: { A: 0, B: 0 }, got: { X: [], Y: [] },
+      test: test, done: false, ok: false, why: "", lastOut: -1, quiet: false
+    };
+    for (var d = 0; d < programs.length; d++) {
+      vm.desks.push({ code: programs[d].code, pc: 0, spike: [], state: programs[d].code.length ? "ready" : "idle", note: "", waits: 0 });
+    }
+    for (var t = 0; t < TUBES; t++) vm.tubes.push({ slot: null, pending: null, taken: false });
+    for (var c = 0; c < LEDGER; c++) vm.ledger.push(0);
+    if (expectedCount(test) === 0) { vm.done = true; vm.ok = true; }
+    return vm;
+  }
+  function expectedCount(test) { return (test.out.X || []).length + (test.out.Y || []).length; }
+
+  function fail(vm, why) { if (!vm.done) { vm.done = true; vm.ok = false; vm.why = why; } }
+  function deskFail(vm, desk, i, why) {
+    desk.state = "error"; desk.note = why;
+    fail(vm, "Desk " + (i + 1) + ", line " + (desk.code[desk.pc].line + 1) + ": " + why);
+  }
+
+  // one tick of the bureau clock: every desk does one thing, then the tubes settle
+  function tick(vm) {
+    if (vm.done) return vm;
+    vm.cycle++;
+    var progressed = false;
+    var fullAtStart = [];
+    for (var t = 0; t < TUBES; t++) { fullAtStart.push(vm.tubes[t].slot !== null); vm.tubes[t].taken = false; }
+
+    for (var i = 0; i < vm.desks.length && !vm.done; i++) {
+      var desk = vm.desks[i];
+      if (desk.state === "idle" || desk.state === "halt" || desk.state === "error") continue;
+      var ins = desk.code[desk.pc];
+      var s = desk.spike, next = desk.pc + 1, wait = null, a, b, c;
+      var need = function (n) { if (s.length < n) { deskFail(vm, desk, i, "The spike is empty."); return false; } return true; };
+      var room = function (n) { if (s.length + n > SPIKE) { deskFail(vm, desk, i, "The spike only holds " + SPIKE + " slips."); return false; } return true; };
+
+      switch (ins.op) {
+        case "PUSH": if (!room(1)) break; s.push(ins.arg); break;
+        case "DUP":  if (!need(1) || !room(1)) break; s.push(s[s.length - 1]); break;
+        case "DROP": if (!need(1)) break; s.pop(); break;
+        case "SWAP": if (!need(2)) break; a = s.pop(); b = s.pop(); s.push(a, b); break;
+        case "OVER": if (!need(2) || !room(1)) break; s.push(s[s.length - 2]); break;
+        case "ROT":  if (!need(3)) break; c = s.pop(); b = s.pop(); a = s.pop(); s.push(b, c, a); break;
+        case "ADD":  if (!need(2)) break; b = s.pop(); a = s.pop(); s.push(clamp(a + b)); break;
+        case "SUB":  if (!need(2)) break; b = s.pop(); a = s.pop(); s.push(clamp(a - b)); break;
+        case "MUL":  if (!need(2)) break; b = s.pop(); a = s.pop(); s.push(clamp(a * b)); break;
+        case "DIV":  if (!need(2)) break; b = s.pop(); a = s.pop();
+          if (b === 0) { s.push(a, b); deskFail(vm, desk, i, "Divided by zero."); break; }
+          s.push(idiv(a, b)); break;
+        case "MOD":  if (!need(2)) break; b = s.pop(); a = s.pop();
+          if (b === 0) { s.push(a, b); deskFail(vm, desk, i, "Divided by zero."); break; }
+          s.push(a - idiv(a, b) * b); break;
+        case "NEG":  if (!need(1)) break; s.push(clamp(-s.pop())); break;
+        case "EQ":   if (!need(2)) break; b = s.pop(); a = s.pop(); s.push(a === b ? 1 : 0); break;
+        case "LT":   if (!need(2)) break; b = s.pop(); a = s.pop(); s.push(a < b ? 1 : 0); break;
+        case "GT":   if (!need(2)) break; b = s.pop(); a = s.pop(); s.push(a > b ? 1 : 0); break;
+        case "JMP":  next = ins.arg; break;
+        case "JZ":   if (!need(1)) break; if (s.pop() === 0) next = ins.arg; break;
+        case "JNZ":  if (!need(1)) break; if (s.pop() !== 0) next = ins.arg; break;
+        case "JNEG": if (!need(1)) break; if (s.pop() < 0) next = ins.arg; break;
+        case "IN": {
+          var tray = vm.test.in[ins.arg] || [];
+          if (vm.inPos[ins.arg] >= tray.length) { wait = "Tray " + ins.arg + " is empty."; break; }
+          if (!room(1)) break;
+          s.push(tray[vm.inPos[ins.arg]++]);
+          break;
+        }
+        case "OUT": {
+          if (!need(1)) break;
+          var v = s.pop(), want = vm.test.out[ins.arg] || [], got = vm.got[ins.arg];
+          got.push(v);
+          if (got.length > want.length) { fail(vm, "Tray " + ins.arg + " received more slips than were wanted."); break; }
+          if (want[got.length - 1] !== v) {
+            fail(vm, "Tray " + ins.arg + ", slip " + got.length + ": expected " + want[got.length - 1] + ", got " + v + ".");
+            break;
+          }
+          vm.lastOut = vm.cycle;
+          break;
+        }
+        case "SEND": {
+          var tb = vm.tubes[ins.arg];
+          // decided by how the tube stood at the start of the tick, so desk order cannot matter
+          if (fullAtStart[ins.arg] || tb.pending !== null) { wait = "Tube " + ins.arg + " is full."; break; }
+          if (!need(1)) break;
+          tb.pending = s.pop();
+          break;
+        }
+        case "RECV": {
+          var tr = vm.tubes[ins.arg];
+          if (!fullAtStart[ins.arg] || tr.taken) { wait = "Tube " + ins.arg + " is empty."; break; }
+          if (!room(1)) break;
+          s.push(tr.slot); tr.taken = true;
+          break;
+        }
+        case "LOAD":  if (!room(1)) break; s.push(vm.ledger[ins.arg]); break;
+        case "STORE": if (!need(1)) break; vm.ledger[ins.arg] = s.pop(); break;
+        case "LDX": {
+          if (!need(1)) break;
+          a = s.pop();
+          if (a < 0 || a >= LEDGER) { s.push(a); deskFail(vm, desk, i, "There is no ledger cell " + a + "."); break; }
+          s.push(vm.ledger[a]); break;
+        }
+        case "STX": {
+          if (!need(2)) break;
+          a = s.pop(); b = s.pop();
+          if (a < 0 || a >= LEDGER) { s.push(b, a); deskFail(vm, desk, i, "There is no ledger cell " + a + "."); break; }
+          vm.ledger[a] = b; break;
+        }
+        case "NOP": break;
+        case "HALT": desk.state = "halt"; desk.note = "Halted."; progressed = true; continue;
+      }
+      if (desk.state === "error") continue;
+      if (wait) { desk.state = "wait"; desk.note = wait; desk.waits++; continue; }
+      desk.state = "ready"; desk.note = "";
+      desk.pc = next >= desk.code.length ? 0 : next;    // a program runs off its end and starts again
+      progressed = true;
+    }
+    // the tubes settle: what was taken is gone, what was sent arrives
+    for (t = 0; t < TUBES; t++) {
+      var tube = vm.tubes[t];
+      if (tube.taken) tube.slot = null;
+      if (tube.pending !== null && tube.slot === null) { tube.slot = tube.pending; tube.pending = null; }
+    }
+    if (vm.done) return vm;
+    if (vm.got.X.length === (vm.test.out.X || []).length && vm.got.Y.length === (vm.test.out.Y || []).length) {
+      vm.done = true; vm.ok = true; return vm;
+    }
+    if (!progressed) { vm.quiet = true; fail(vm, quietReason(vm)); return vm; }
+    if (vm.cycle >= CYCLE_LIMIT) fail(vm, "Still working after " + CYCLE_LIMIT + " ticks. The office closes.");
+    return vm;
+  }
+  function quietReason(vm) {
+    var notes = [];
+    for (var i = 0; i < vm.desks.length; i++) {
+      var d = vm.desks[i];
+      if (d.state === "wait") notes.push("desk " + (i + 1) + ": " + d.note.toLowerCase());
+    }
+    return "The office has gone quiet with work unfinished" + (notes.length ? " (" + notes.join("; ") + ")" : "") + ".";
+  }
+
+  function runTest(puzzle, programs, test, limit) {
+    var vm = makeMachine(puzzle, programs, test);
+    var cap = limit || CYCLE_LIMIT;
+    while (!vm.done && vm.cycle < cap) tick(vm);
+    if (!vm.done) fail(vm, "Still working after " + cap + " ticks.");
+    return vm;
+  }
+
+  // the full inspection: the visible test and the hidden ones, scored
+  function testsFor(puzzle) {
+    var out = [];
+    for (var k = 0; k <= HIDDEN; k++) out.push(puzzle.gen(rngFor(puzzle.seed * 7919 + k * 104729 + 13)));
+    return out;
+  }
+  function inspect(puzzle, sources) {
+    var asm = assembleAll(puzzle, sources);
+    if (asm.errors) return { ok: false, stage: "assemble", asm: asm };
+    var programs = asm.desks;
+    var tests = testsFor(puzzle), cycles = 0, results = [];
+    for (var k = 0; k < tests.length; k++) {
+      var vm = runTest(puzzle, programs, tests[k]);
+      results.push({ ok: vm.ok, cycles: vm.cycle, why: vm.why, hidden: k > 0 });
+      if (!vm.ok) return { ok: false, stage: "run", failedTest: k, why: vm.why, results: results, asm: asm };
+      cycles += vm.cycle;
+    }
+    var size = 0, desks = 0;
+    for (var d = 0; d < programs.length; d++) { size += programs[d].size; if (programs[d].size) desks++; }
+    return { ok: true, cycles: Math.ceil(cycles / tests.length), size: size, desks: desks, results: results, asm: asm };
+  }
+
+  // ---------- rewind support: the whole machine fits in a small copy ----------
+  function snapshot(vm) {
+    return {
+      cycle: vm.cycle, done: vm.done, ok: vm.ok, why: vm.why, lastOut: vm.lastOut, quiet: vm.quiet,
+      desks: vm.desks.map(function (d) { return { pc: d.pc, spike: d.spike.slice(), state: d.state, note: d.note, waits: d.waits }; }),
+      tubes: vm.tubes.map(function (t) { return { slot: t.slot, pending: t.pending, taken: t.taken }; }),
+      ledger: vm.ledger.slice(), inPos: { A: vm.inPos.A, B: vm.inPos.B },
+      got: { X: vm.got.X.slice(), Y: vm.got.Y.slice() }
+    };
+  }
+  function restore(vm, s) {
+    vm.cycle = s.cycle; vm.done = s.done; vm.ok = s.ok; vm.why = s.why; vm.lastOut = s.lastOut; vm.quiet = s.quiet;
+    for (var i = 0; i < vm.desks.length; i++) {
+      var d = vm.desks[i], o = s.desks[i];
+      d.pc = o.pc; d.spike = o.spike.slice(); d.state = o.state; d.note = o.note; d.waits = o.waits;
+    }
+    for (var t = 0; t < vm.tubes.length; t++) { vm.tubes[t].slot = s.tubes[t].slot; vm.tubes[t].pending = s.tubes[t].pending; vm.tubes[t].taken = s.tubes[t].taken; }
+    vm.ledger = s.ledger.slice(); vm.inPos = { A: s.inPos.A, B: s.inPos.B };
+    vm.got = { X: s.got.X.slice(), Y: s.got.Y.slice() };
+    return vm;
+  }
+
+  // ---------- the tickets ----------
+  function seq(r, n, lo, hi) { var a = []; for (var i = 0; i < n; i++) a.push(r.int(lo, hi)); return a; }
+  function isPrime(n) { if (n < 2) return false; for (var d = 2; d * d <= n; d++) if (n % d === 0) return false; return true; }
+  function gcd(a, b) { while (b) { var t = a % b; a = b; b = t; } return a; }
+  function fib(n) { var a = 1, b = 1; for (var i = 2; i < n; i++) { var t = a + b; a = b; b = t; } return n <= 2 ? 1 : b; }
+  function collatz(n) { var s = 0; while (n !== 1) { n = n % 2 ? 3 * n + 1 : n / 2; s++; } return s; }
+
+  var PUZZLES = [
+    { id: "copy", name: "First Day", deskCount: 1, demo: true,
+      brief: "Every slip that arrives in tray A goes, unchanged, into tray X.",
+      gen: function (r) { var a = seq(r, 10, 1, 99); return { in: { A: a }, out: { X: a.slice() } }; } },
+    { id: "double", name: "Double Entry", deskCount: 1, demo: true,
+      brief: "File twice the value of every slip from A into X.",
+      gen: function (r) { var a = seq(r, 10, 1, 99); return { in: { A: a }, out: { X: a.map(function (v) { return 2 * v; }) } }; } },
+    { id: "sum", name: "Balancing", deskCount: 1, demo: true,
+      brief: "Slips arrive in A and B together. File A + B into X.",
+      gen: function (r) { var a = seq(r, 10, 1, 99), b = seq(r, 10, 1, 99);
+        return { in: { A: a, B: b }, out: { X: a.map(function (v, i) { return v + b[i]; }) } }; } },
+    { id: "diff", name: "Discrepancies", deskCount: 1, demo: true,
+      brief: "For each pair, file A - B into X and B - A into Y.",
+      gen: function (r) { var a = seq(r, 10, 1, 99), b = seq(r, 10, 1, 99);
+        return { in: { A: a, B: b }, out: { X: a.map(function (v, i) { return v - b[i]; }), Y: a.map(function (v, i) { return b[i] - v; }) } }; } },
+    { id: "max", name: "The Larger Figure", deskCount: 1, demo: true,
+      brief: "For each pair from A and B, file whichever is larger into X.",
+      gen: function (r) { var a = seq(r, 10, 1, 99), b = seq(r, 10, 1, 99);
+        return { in: { A: a, B: b }, out: { X: a.map(function (v, i) { return Math.max(v, b[i]); }) } }; } },
+    { id: "sign", name: "Sign Here", deskCount: 1, demo: true,
+      brief: "File -1 for a negative slip, 0 for zero, 1 for a positive one.",
+      gen: function (r) { var a = seq(r, 12, -50, 50); a[r.int(0, 3)] = 0; a[r.int(4, 7)] = 0; a[r.int(8, 11)] = 0;
+        return { in: { A: a }, out: { X: a.map(function (v) { return v < 0 ? -1 : (v > 0 ? 1 : 0); }) } }; } },
+    { id: "countdown", name: "Countdown", deskCount: 1, demo: true,
+      brief: "For each slip n from A, file n, n-1, ... down to 1 into X.",
+      gen: function (r) { var a = seq(r, 5, 1, 6), x = [];
+        a.forEach(function (n) { for (var k = n; k >= 1; k--) x.push(k); }); return { in: { A: a }, out: { X: x } }; } },
+    { id: "running", name: "Running Total", deskCount: 1, demo: true,
+      brief: "File the running total of everything that has come in from A.",
+      gen: function (r) { var a = seq(r, 10, 1, 50), t = 0; return { in: { A: a }, out: { X: a.map(function (v) { t += v; return t; }) } }; } },
+    
+  ];
+  // PAR: the designer's own best [cycles, size], measured from solutions.js
+  var PAR = { copy: [20, 2], double: [40, 4], sum: [40, 4], diff: [90, 9], max: [86, 9], sign: [75, 11], countdown: [113, 8], running: [50, 6] };
+  for (var pi = 0; pi < PUZZLES.length; pi++) {
+    var P = PUZZLES[pi];
+    P.index = pi;
+    P.seed = 9001 + pi * 31;
+    P.disabled = P.disabled || [];
+    P.par = { cycles: PAR[P.id][0], size: PAR[P.id][1] };
+    P.ins = []; P.outs = [];
+    var sample = P.gen(rngFor(1));
+    ["A", "B"].forEach(function (t) { if (sample.in[t]) P.ins.push(t); });
+    ["X", "Y"].forEach(function (t) { if (sample.out[t]) P.outs.push(t); });
+  }
+  function puzzle(id) { for (var i = 0; i < PUZZLES.length; i++) if (PUZZLES[i].id === id) return PUZZLES[i]; return null; }
+
+  var api = {
+    LIMIT: LIMIT, SPIKE: SPIKE, LEDGER: LEDGER, TUBES: TUBES, MAX_LINES: MAX_LINES, CYCLE_LIMIT: CYCLE_LIMIT, HIDDEN: HIDDEN,
+    OPS: OPS, OP_ORDER: OP_ORDER, PUZZLES: PUZZLES, puzzle: puzzle,
+    assemble: assemble, assembleAll: assembleAll, makeMachine: makeMachine, tick: tick, runTest: runTest,
+    testsFor: testsFor, inspect: inspect, snapshot: snapshot, restore: restore, rngFor: rngFor,
+    deskTrays: deskTrays, deskLines: deskLines
+  };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.TUBE = api;
+})(typeof window !== "undefined" ? window : this);
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var T = window.TUBE;
+  var DEMO = window.TUBE_EDITION === "demo";
+  var STORE = "https://kqmigqkqri.itch.io/tubeclerk";
+  var TOTAL_TICKETS = 30;
+  var stage = document.getElementById("stage");
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+  // ---------- fitting the 1200x760 office into any window ----------
+  function fit() {
+    var k = Math.min(window.innerWidth / 1200, window.innerHeight / 760);
+    stage.style.transform = "scale(" + k + ")";
+    stage.style.left = Math.max(0, (window.innerWidth - 1200 * k) / 2) + "px";
+    stage.style.top = Math.max(0, (window.innerHeight - 760 * k) / 2) + "px";
+  }
+  window.addEventListener("resize", fit);
+
+  // ---------- saving ----------
+  var KEY = DEMO ? "tube.demo.v1" : "tube.v1";
+  var save = (function () {
+    var d = null;
+    try { d = JSON.parse(localStorage.getItem(KEY) || "null"); } catch (e) {}
+    return d || { code: {}, best: {}, seenHand: false };
+  })();
+  function persist() { try { localStorage.setItem(KEY, JSON.stringify(save)); } catch (e) {} }
+
+  // ---------- sound: a typewriter and a desk bell, all synthesised ----------
+  var AC = null, sfxOn = true;
+  function audio() {
+    if (AC) { if (AC.state === "suspended") AC.resume(); return AC; }
+    var C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return null;
+    AC = new C(); return AC;
+  }
+  function click(f, dur, vol) {
+    if (!sfxOn || !audio()) return;
+    var now = AC.currentTime, o = AC.createOscillator(), g = AC.createGain();
+    o.type = "square"; o.frequency.setValueAtTime(f, now); o.frequency.exponentialRampToValueAtTime(f * 0.5, now + dur);
+    g.gain.setValueAtTime(vol, now); g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    o.connect(g); g.connect(AC.destination); o.start(now); o.stop(now + dur + 0.02);
+  }
+  function bell() {
+    if (!sfxOn || !audio()) return;
+    [1318, 1760, 2637].forEach(function (f, i) {
+      var now = AC.currentTime, o = AC.createOscillator(), g = AC.createGain();
+      o.type = "sine"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.12 / (i + 1), now + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 1.4);
+      o.connect(g); g.connect(AC.destination); o.start(now); o.stop(now + 1.5);
+    });
+  }
+  function buzz() { click(110, 0.25, 0.1); }
+
+  // ---------- state ----------
+  var P = null;              // the open ticket
+  var sources = [];          // text in each desk
+  var asm = null;            // assembled desks
+  var vm = null, history = [], mode = "edit";   // edit | paused | run | fast | done
+  var testIdx = 0, tests = null;
+  var lastTick = 0;
+
+  function unlockedCount() {
+    var solved = 0;
+    for (var i = 0; i < T.PUZZLES.length; i++) if (save.best[T.PUZZLES[i].id]) solved = i + 1;
+    return Math.min(T.PUZZLES.length, Math.max(3, solved + 2));
+  }
+  function medals(p) {
+    var b = save.best[p.id];
+    if (!b) return [false, false, false];
+    return [true, b.cycles <= p.par.cycles, b.size <= p.par.size];
+  }
+  function medalHtml(m) {
+    return '<span class="medal ' + (m[0] ? "m-on" : "m-off") + '" title="Filed">&#10003;</span>' +
+      '<span class="medal ' + (m[1] ? "m-on" : "m-off") + '" title="Ticks at or under PAR">&#9201;</span>' +
+      '<span class="medal ' + (m[2] ? "m-on" : "m-off") + '" title="Instructions at or under PAR">&#9998;</span>';
+  }
+
+  // ---------- screens ----------
+  function show(id) {
+    ["title", "list", "desk"].forEach(function (s) { $(s).hidden = s !== id; });
+    if (id === "list") drawList();
+  }
+  function drawList() {
+    var g = $("grid"), html = "", unlocked = unlockedCount(), got = 0, filed = 0;
+    for (var i = 0; i < TOTAL_TICKETS; i++) {
+      var p = T.PUZZLES[i];
+      if (!p) {
+        html += '<div class="tk locked"><div class="no">TICKET ' + (i + 1) + '</div><div class="nm">In the full game</div></div>';
+        continue;
+      }
+      var m = medals(p), b = save.best[p.id];
+      got += (m[0] ? 1 : 0) + (m[1] ? 1 : 0) + (m[2] ? 1 : 0);
+      if (b) filed++;
+      if (i >= unlocked) {
+        html += '<div class="tk locked"><div class="no">TICKET ' + (i + 1) + '</div><div class="nm">Locked</div><div class="st">file an earlier ticket</div></div>';
+        continue;
+      }
+      html += '<div class="tk" data-id="' + p.id + '">' + (b ? '<span class="stamp">FILED</span>' : "") +
+        '<div class="no">TICKET ' + (i + 1) + '</div><div class="nm">' + esc(p.name) + '</div>' +
+        '<div>' + medalHtml(m) + '</div>' +
+        '<div class="st">' + (b ? b.cycles + " ticks / " + b.size + " ins" : "par " + p.par.cycles + " / " + p.par.size) + '</div></div>';
+    }
+    g.innerHTML = html;
+    $("tally").textContent = "Filed " + filed + " / " + TOTAL_TICKETS + "   ·   Medals " + got + " / " + (TOTAL_TICKETS * 3);
+    Array.prototype.forEach.call(g.querySelectorAll(".tk[data-id]"), function (el) {
+      el.addEventListener("click", function () { audio(); open(el.getAttribute("data-id")); });
+    });
+  }
+
+  // ---------- the editor ----------
+  function highlight(line) {
+    var cut = line.search(/[#;]/), code = cut >= 0 ? line.slice(0, cut) : line, com = cut >= 0 ? line.slice(cut) : "";
+    var out = "", m;
+    var rest = code;
+    while ((m = /^(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)/.exec(rest))) {
+      out += esc(m[1]) + '<span class="k-lab">' + esc(m[2] + m[3]) + "</span>";
+      rest = rest.slice(m[0].length);
+    }
+    var tm = /^(\s*)(\S+)(.*)$/.exec(rest);
+    if (tm) {
+      var op = tm[2].toUpperCase();
+      out += esc(tm[1]) + '<span class="' + (T.OPS[op] ? "k-op" : "k-bad") + '">' + esc(tm[2]) + "</span>";
+      out += esc(tm[3]).replace(/(-?\d+)|([A-Za-z_][A-Za-z0-9_]*)/g, function (all, num, word) {
+        if (num) return '<span class="k-num">' + num + "</span>";
+        var spec = T.OPS[op] && T.OPS[op].arg;
+        return '<span class="' + (spec === "label" ? "k-lab" : "k-arg") + '">' + word + "</span>";
+      });
+    } else out += esc(rest);
+    if (com) out += '<span class="k-com">' + esc(com) + "</span>";
+    return out || " ";
+  }
+  function buildDesks() {
+    var c = $("center"); c.innerHTML = "";
+    for (var d = 0; d < P.deskCount; d++) {
+      var trays = T.deskTrays(P, d).filter(function (t) { return P.ins.indexOf(t) >= 0 || P.outs.indexOf(t) >= 0; });
+      var box = document.createElement("div");
+      box.className = "deskbox";
+      box.innerHTML =
+        '<div class="deskhead"><span>DESK ' + (d + 1) + '</span><span class="cap" id="cap' + d + '"></span></div>' +
+        '<div class="editor"><div class="gutter" id="gut' + d + '"></div><div class="hl" id="hl' + d + '"></div>' +
+        '<textarea class="ed" id="ed' + d + '" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea></div>' +
+        '<div class="errs" id="err' + d + '"></div>' +
+        '<div class="spikebox"><div class="spike" id="spk' + d + '"></div><div class="dstate" id="dst' + d + '"></div></div>' +
+        '<div class="cap" style="padding:0 8px 6px;font-family:Consolas,monospace;font-size:10px;color:#8c7c63">trays: ' +
+        (trays.length ? trays.join(", ") : "none") + "</div>";
+      c.appendChild(box);
+      (function (d) {
+        var ed = $("ed" + d);
+        ed.value = sources[d] || "";
+        ed.addEventListener("input", function () {
+          sources[d] = ed.value; save.code[P.id] = sources.slice(); persist();
+          if (mode !== "edit") toEdit();
+          paintEditor(d); reassemble();
+          click(1400 + Math.random() * 300, 0.02, 0.03);
+        });
+        ed.addEventListener("scroll", function () { $("hl" + d).scrollTop = ed.scrollTop; $("hl" + d).scrollLeft = ed.scrollLeft; $("gut" + d).scrollTop = ed.scrollTop; });
+        ed.addEventListener("keydown", function (e) {
+          if (e.key === "Tab") { e.preventDefault(); var s = ed.selectionStart; ed.value = ed.value.slice(0, s) + "  " + ed.value.slice(ed.selectionEnd); ed.selectionStart = ed.selectionEnd = s + 2; ed.dispatchEvent(new Event("input")); }
+        });
+      })(d);
+    }
+  }
+  function paintEditor(d) {
+    var ed = $("ed" + d), lines = ed.value.split("\n");
+    var errLines = {}, curLine = -1;
+    if (asm) asm.desks[d].errors.forEach(function (e) { errLines[e.line] = 1; });
+    if (vm && vm.desks[d] && vm.desks[d].code.length && vm.desks[d].state !== "idle") curLine = vm.desks[d].code[vm.desks[d].pc].line;
+    var html = "", gut = "";
+    for (var i = 0; i < lines.length; i++) {
+      var cls = errLines[i] ? "err" : (i === curLine && mode !== "edit" ? "cur" : "");
+      html += '<div' + (cls ? ' class="' + cls + '"' : "") + ">" + highlight(lines[i]) + "</div>";
+      gut += "<div>" + (i + 1) + "</div>";
+    }
+    $("hl" + d).innerHTML = html + "<div></div>";
+    $("gut" + d).innerHTML = gut;
+    if (curLine >= 0 && mode !== "edit" && mode !== "fast") {
+      var top = curLine * 18, view = ed.clientHeight;
+      if (top < ed.scrollTop || top > ed.scrollTop + view - 30) ed.scrollTop = Math.max(0, top - view / 2);
+    }
+    // all three layers move together, every time - the scroll event comes too late to rely on
+    $("hl" + d).scrollTop = ed.scrollTop; $("hl" + d).scrollLeft = ed.scrollLeft;
+    $("gut" + d).scrollTop = ed.scrollTop;
+  }
+  function reassemble() {
+    asm = T.assembleAll(P, sources);
+    var size = 0;
+    for (var d = 0; d < P.deskCount; d++) {
+      var a = asm.desks[d];
+      size += a.size;
+      $("cap" + d).textContent = a.size + " / " + T.deskLines(P, d);
+      $("err" + d).innerHTML = a.errors.map(function (e) { return "line " + (e.line + 1) + ": " + esc(e.msg); }).join("<br>");
+      paintEditor(d);
+    }
+    $("mSize").textContent = size;
+    $("cInspect").disabled = asm.errors > 0;
+    if (asm.errors) setStatus(asm.errors + (asm.errors === 1 ? " mistake" : " mistakes") + " to fix before the desks can run.", "bad");
+    else if (mode === "edit") setStatus("Ready. STEP or RUN to watch the visible test, FILE IT to be scored.", "");
+  }
+
+  // ---------- running ----------
+  function setStatus(s, cls) { var el = $("status"); el.textContent = s; el.className = "mono " + (cls || ""); }
+  function ensureMachine() {
+    if (vm) return true;
+    if (!asm || asm.errors) return false;
+    tests = tests || T.testsFor(P);
+    vm = T.makeMachine(P, asm.desks, tests[testIdx]);
+    history = [];
+    return true;
+  }
+  function toEdit() { mode = "edit"; vm = null; history = []; drawMachine(); reassemble(); }
+  function stepOnce() {
+    if (!ensureMachine() || vm.done) return false;
+    history.push(T.snapshot(vm));
+    if (history.length > 8000) history.shift();
+    T.tick(vm);
+    return true;
+  }
+  function finishCheck() {
+    if (!vm || !vm.done) return;
+    if (vm.ok) {
+      mode = "done";
+      setStatus("The visible test came out right in " + vm.cycle + " ticks. Filing against the hidden tests...", "good");
+      setTimeout(inspect, 350);
+    } else {
+      mode = "paused";
+      setStatus(vm.why, "bad"); buzz();
+    }
+  }
+  function drawMachine() {
+    // trays
+    var tr = "", t = (tests || T.testsFor(P))[testIdx];
+    var cols = P.ins.concat(P.outs);
+    cols.forEach(function (name) {
+      var isIn = name === "A" || name === "B", list = isIn ? t.in[name] : t.out[name], html = "";
+      var pos = vm ? (isIn ? vm.inPos[name] : vm.got[name].length) : 0;
+      var start = Math.max(0, pos - 6);
+      for (var i = start; i < list.length && i < start + 34; i++) {
+        var cls = "slip";
+        if (isIn) { if (i < pos) cls += " done"; else if (i === pos) cls += " next"; }
+        else if (vm && i < vm.got[name].length) cls += vm.got[name][i] === list[i] ? " ok" : " bad";
+        else cls += " want";
+        var shown = (!isIn && vm && i < vm.got[name].length) ? vm.got[name][i] : list[i];
+        tr += "";
+        html += '<div class="' + cls + '">' + shown + "</div>";
+      }
+      tr += '<div class="tray"><h4>' + (isIn ? "IN " : "OUT ") + name + '</h4><div class="col">' + html + "</div></div>";
+    });
+    $("trays").innerHTML = tr;
+    // desks
+    for (var d = 0; d < P.deskCount; d++) {
+      var desk = vm ? vm.desks[d] : null, spk = $("spk" + d), dst = $("dst" + d);
+      var sh = "";
+      if (desk) for (var k = 0; k < desk.spike.length; k++) sh += '<div class="slip' + (k === desk.spike.length - 1 ? " top" : "") + '">' + desk.spike[k] + "</div>";
+      spk.innerHTML = sh;
+      var st = desk ? desk.state : ((asm && asm.desks[d] && asm.desks[d].size) ? "ready" : "idle");
+      var label = { ready: "WORKING", wait: "WAITING", halt: "HALTED", error: "ERROR", idle: "EMPTY" }[st];
+      dst.className = "dstate st-" + st;
+      dst.innerHTML = "<b>" + label + "</b>" + (desk ? esc(desk.note || ("spike " + desk.spike.length + "/" + T.SPIKE)) : "");
+      paintEditor(d);
+    }
+    // tubes and ledger
+    var th = "";
+    for (var i2 = 0; i2 < T.TUBES; i2++) {
+      var tb = vm ? vm.tubes[i2] : { slot: null, pending: null };
+      th += '<div class="tube"><span>' + i2 + '</span><div class="pipe">' +
+        (tb.pending !== null ? '<span class="pend">' + tb.pending + "</span>" : "") +
+        (tb.slot !== null ? "<span>" + tb.slot + "</span>" : "") + "</div></div>";
+    }
+    $("tubes").innerHTML = th;
+    var lh = "";
+    for (var c = 0; c < T.LEDGER; c++) {
+      var v = vm ? vm.ledger[c] : 0;
+      lh += '<div class="cell' + (v !== 0 ? " touched" : "") + '"><i>' + c + "</i>" + v + "</div>";
+    }
+    $("ledger").innerHTML = lh;
+    $("mCycle").textContent = vm ? vm.cycle : 0;
+    ["cRun", "cFast"].forEach(function (id) { $(id).classList.toggle("on", mode === (id === "cRun" ? "run" : "fast")); });
+    $("cBack").disabled = !history.length;
+  }
+
+  function act(what) {
+    audio();
+    if (what === "reset") { toEdit(); setStatus("Back to tick 0.", ""); return; }
+    if (what === "back") {
+      if (!history.length) return;
+      T.restore(vm, history.pop()); mode = "paused";
+      setStatus("Tick " + vm.cycle + ".", ""); drawMachine(); return;
+    }
+    if (what === "stop") { if (mode === "run" || mode === "fast") { mode = "paused"; setStatus("Paused at tick " + vm.cycle + ".", ""); drawMachine(); } return; }
+    if (!ensureMachine()) { reassemble(); return; }
+    if (what === "step") {
+      mode = "paused";
+      if (stepOnce()) click(900, 0.03, 0.05);
+      setStatus("Tick " + vm.cycle + ".", ""); drawMachine(); finishCheck(); return;
+    }
+    if (what === "run" || what === "fast") { if (vm.done) return; mode = what; drawMachine(); }
+  }
+  var lastW = 0, lastH = 0;
+  function loop(now) {
+    // an itch frame or a pane can change size without telling anyone
+    if (window.innerWidth !== lastW || window.innerHeight !== lastH) { lastW = window.innerWidth; lastH = window.innerHeight; fit(); }
+    if (P && (mode === "run" || mode === "fast")) {
+      if (mode === "fast") {
+        for (var i = 0; i < 60 && !vm.done; i++) stepOnce();
+        drawMachine(); finishCheck();
+      } else if (now - lastTick > 110) {
+        lastTick = now;
+        stepOnce(); click(760, 0.02, 0.03);
+        drawMachine(); finishCheck();
+      }
+    }
+    requestAnimationFrame(loop);
+  }
+
+  // ---------- filing: the full inspection ----------
+  function inspect() {
+    if (!asm || asm.errors) return;
+    var r = T.inspect(P, sources);
+    var stamp = $("rStamp"), body = $("rBody");
+    if (!r.ok) {
+      stamp.className = "stamp bad"; stamp.textContent = "RETURNED";
+      $("rHead").textContent = r.failedTest === 0 ? "The visible test failed." : "A hidden test failed.";
+      body.innerHTML = '<p class="mono">' + esc(r.why) + '</p>' +
+        (r.failedTest > 0 ? '<p>Hidden test ' + r.failedTest + ' of ' + T.HIDDEN + ' sent slips your desks were not ready for. A solution has to work for any slips the ticket could send, not just the ones you can see.</p>' : "");
+      $("btnResNext").hidden = true;
+      buzz();
+      $("result").hidden = false;
+      mode = "paused";
+      return;
+    }
+    var prev = save.best[P.id], improved = [];
+    var best = prev ? { cycles: Math.min(prev.cycles, r.cycles), size: Math.min(prev.size, r.size), desks: Math.min(prev.desks, r.desks) } : { cycles: r.cycles, size: r.size, desks: r.desks };
+    if (!prev) improved.push("first filing");
+    else { if (r.cycles < prev.cycles) improved.push("new best ticks"); if (r.size < prev.size) improved.push("new best size"); }
+    save.best[P.id] = best; persist();
+    var m = medals(P);
+    stamp.className = "stamp"; stamp.textContent = "FILED";
+    $("rHead").textContent = P.name;
+    function row(name, mine, par, bestv) {
+      var star = mine < par ? ' <span style="color:#b8862d">&#9733; beat par</span>' : (mine === par ? ' <span style="color:#b8862d">&#9733; at par</span>' : "");
+      return "<tr><td>" + name + '</td><td class="r"><b>' + mine + '</b></td><td class="r sub">par ' + par + '</td><td class="r sub">best ' + bestv + "</td><td>" + star + "</td></tr>";
+    }
+    body.innerHTML = "<table>" +
+      row("ticks (average of 4 tests)", r.cycles, P.par.cycles, best.cycles) +
+      row("instructions", r.size, P.par.size, best.size) +
+      "<tr><td>desks used</td><td class=\"r\"><b>" + r.desks + "</b></td><td></td><td class=\"r sub\">best " + best.desks + "</td><td></td></tr></table>" +
+      "<p>Medals for this ticket: " + medalHtml(m) + (improved.length ? "  &nbsp;<i>" + improved.join(", ") + "</i>" : "") + "</p>" +
+      '<p class="sub">PAR is the bureau designer\'s own best. Beating it is entirely possible.</p>';
+    var nextP = T.PUZZLES[P.index + 1];
+    $("btnResNext").hidden = !nextP;
+    $("result").hidden = false;
+    bell();
+    mode = "done";
+    setStatus("Filed: " + r.cycles + " ticks, " + r.size + " instructions, " + r.desks + (r.desks === 1 ? " desk." : " desks."), "good");
+  }
+
+  // ---------- opening a ticket ----------
+  function open(id) {
+    P = T.puzzle(id);
+    if (!P) return;
+    var saved = save.code[id];
+    sources = [];
+    for (var d = 0; d < P.deskCount; d++) sources.push(saved && saved[d] != null ? saved[d] : (d === 0 ? "# " + P.name + "\n" : ""));
+    tests = T.testsFor(P); testIdx = 0;
+    $("tNo").textContent = "TICKET " + (P.index + 1) + (P.disabled.length ? "  ·  no " + P.disabled.join(", ") : "");
+    $("tName").textContent = P.name;
+    $("tBrief").textContent = P.brief;
+    var b = save.best[id];
+    $("mPar").textContent = "par: " + P.par.cycles + " ticks, " + P.par.size + " instructions";
+    $("mBest").textContent = b ? "your best: " + b.cycles + " ticks, " + b.size + " instructions" : "not filed yet";
+    show("desk");
+    buildDesks();
+    mode = "edit"; vm = null; history = [];
+    reassemble(); drawMachine();
+    setTimeout(function () { var e = $("ed0"); if (e) { e.focus(); e.selectionStart = e.selectionEnd = e.value.length; } }, 30);
+  }
+
+  // ---------- the handbook ----------
+  (function () {
+    var rows = "";
+    T.OP_ORDER.forEach(function (op) {
+      var spec = T.OPS[op], arg = { num: " n", label: " label", in: " A|B", out: " X|Y", tube: " 0-3", cell: " 0-15" }[spec.arg] || "";
+      rows += '<tr><td class="op">' + op + arg + "</td><td>" + esc(spec.doc) + "</td></tr>";
+    });
+    $("opTable").innerHTML = rows;
+  })();
+  function hand(on) { $("handbook").hidden = !on; if (on) { save.seenHand = true; persist(); } }
+
+  // ---------- wiring ----------
+  function bind(id, fn) { var el = $(id); if (el) el.addEventListener("click", function (e) { audio(); fn(e); }); }
+  bind("btnStart", function () { show("list"); if (!save.seenHand) hand(true); });
+  ["btnHand1", "btnHand2", "btnHand3"].forEach(function (id) { bind(id, function () { hand(true); }); });
+  bind("btnHandClose", function () { hand(false); });
+  bind("btnListBack", function () { show("title"); });
+  bind("btnTickets", function () { toEdit(); show("list"); });
+  bind("cReset", function () { act("reset"); });
+  bind("cBack", function () { act("back"); });
+  bind("cStep", function () { act("step"); });
+  bind("cRun", function () { act("run"); });
+  bind("cFast", function () { act("fast"); });
+  bind("cStop", function () { act("stop"); });
+  bind("cInspect", function () { if (mode === "run" || mode === "fast") mode = "paused"; inspect(); });
+  bind("btnResStay", function () { $("result").hidden = true; });
+  bind("btnResNext", function () { $("result").hidden = true; var n = T.PUZZLES[P.index + 1]; if (n) open(n.id); });
+  
+  bind("btnBuyTitle", function () { window.open(STORE, "_blank"); });
+  bind("btnBuyList", function () { window.open(STORE, "_blank"); });
+  
+  
+  window.addEventListener("keydown", function (e) {
+    if ($("desk").hidden) return;
+    if (e.key === "F10") { e.preventDefault(); act(e.shiftKey ? "back" : "step"); }
+    else if (e.key === "F5") { e.preventDefault(); act("run"); }
+    else if (e.key === "F6") { e.preventDefault(); act("fast"); }
+    else if (e.key === "F9") { e.preventDefault(); inspect(); }
+    else if (e.key === "Escape") { if (!$("handbook").hidden) hand(false); else if (!$("result").hidden) $("result").hidden = true; else act("reset"); }
+  });
+
+  // hooks for the capture script and the checks
+  window.TUBE_APP = {
+    open: open, show: show, act: act, inspect: inspect,
+    setCode: function (list) { for (var d = 0; d < P.deskCount; d++) { sources[d] = list[d] || ""; var e = $("ed" + d); if (e) e.value = sources[d]; } save.code[P.id] = sources.slice(); toEdit(); },
+    steps: function (n) { for (var i = 0; i < n; i++) if (!stepOnce()) break; mode = "paused"; drawMachine(); if (vm) setStatus("Tick " + vm.cycle + ".", ""); return vm ? { cycle: vm.cycle, done: vm.done, ok: vm.ok, why: vm.why } : null; },
+    state: function () { return { P: P && P.id, mode: mode, vm: vm, sources: sources.slice(), errors: asm ? asm.errors : null }; },
+    save: function () { return save; },
+    hand: hand
+  };
+
+  if (!DEMO) ["btnBuyTitle", "btnBuyList"].forEach(function (id) { var el = $(id); if (el) el.hidden = true; });
+  (function () {
+    var filed = 0; for (var k in save.best) filed++;
+    $("titleFoot").textContent = filed ? "Tickets filed: " + filed + " / " + TOTAL_TICKETS : (DEMO ? "Free demo: the first 8 tickets." : "30 tickets. 90 medals.");
+  })();
+  fit();
+  requestAnimationFrame(loop);
+})();
+</script>

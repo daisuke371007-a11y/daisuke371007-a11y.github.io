@@ -1,0 +1,1281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GLOWSILK</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #070a18; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; outline: none; cursor: crosshair; }
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0"></canvas>
+<script>window.GLOWSILK_EDITION = "demo";</script>
+<script>
+// content.js — GLOWSILK: the insects, the gardens, the molts.
+(function (root) {
+  "use strict";
+  // flight: drift (wanders), zig (darts about), lamp (circles the nearest light), straight (crosses fast), swarm (drifts in clouds)
+  // mass: how hard it hits; pull: how hard it struggles; value: food when wrapped
+  var BUGS = [
+    { id: "GNAT", name: "Gnat", r: 3, speed: 38, mass: 0.15, pull: 0.5, value: 1, flight: "swarm", col: "#b9c4a8", fact: "Gnats dance in clouds at dusk. One is barely a snack; a cloud is supper." },
+    { id: "MOSQUITO", name: "Mosquito", r: 4, speed: 62, mass: 0.25, pull: 0.7, value: 2, flight: "zig", col: "#a7a08c", fact: "Only the females bite. Spiders are not consulted." },
+    { id: "FLY", name: "House Fly", r: 5, speed: 105, mass: 0.5, pull: 1.0, value: 3, flight: "zig", col: "#6f7a86", fact: "A fly can change course in the blink of an eye. Silk doesn't care how fast you turn." },
+    { id: "FIREFLY", name: "Firefly", r: 5, speed: 34, mass: 0.4, pull: 0.8, value: 5, flight: "drift", col: "#f6f08a", glow: "#fff47a", fact: "Fireflies flash to find each other. In your web, they light it for everyone." },
+    { id: "MOTH", name: "Miller Moth", r: 7, speed: 58, mass: 0.9, pull: 1.2, value: 6, flight: "lamp", col: "#c9b38f", fact: "Moths keep their backs to the brightest light. Under a porch lamp, that means flying in circles." },
+    { id: "CRANEFLY", name: "Crane Fly", r: 9, speed: 30, mass: 0.6, pull: 0.6, value: 8, flight: "drift", col: "#b8a77a", legs: true, fact: "All legs and no plan. Harmless, clumsy, and a fine meal." },
+    { id: "LACEWING", name: "Green Lacewing", r: 7, speed: 40, mass: 0.5, pull: 0.9, value: 9, flight: "drift", col: "#a8e0a0", fact: "Its eggs hang on silk threads of their own. Professional respect." },
+    { id: "CICADA", name: "Cicada", r: 10, speed: 70, mass: 2.0, pull: 2.6, value: 16, flight: "straight", col: "#8c9a5a", fact: "Some cicadas spend seventeen years underground for one loud summer above. Make it count." },
+    { id: "JUNEBUG", name: "June Beetle", r: 9, speed: 95, mass: 2.4, pull: 2.4, value: 14, flight: "straight", col: "#8a5a2a", heavy: true, fact: "June beetles fly like they were thrown. Weak silk just snaps." },
+    { id: "WASP", name: "Paper Wasp", r: 8, speed: 120, mass: 1.6, pull: 3.2, value: 20, flight: "zig", col: "#e3b23c", stripes: true, cutter: true, fact: "Wasps fight back, and their jaws cut silk. Only sticky, strong silk holds one." },
+    { id: "DRAGONFLY", name: "Dragonfly", r: 11, speed: 175, mass: 2.2, pull: 2.8, value: 24, flight: "straight", col: "#4fb7c9", fact: "One of the best hunters in the garden: it catches nearly everything it chases. Tonight, the hunted." },
+    { id: "LUNA", name: "Luna Moth", r: 14, speed: 48, mass: 2.6, pull: 2.2, value: 40, flight: "lamp", col: "#bff0c8", glow: "#d8ffe0", rare: true, fact: "Luna moths have no mouth and live a single week. Pale green, and worth the wait." },
+    { id: "STAG", name: "Stag Beetle", r: 13, speed: 80, mass: 6.5, pull: 4.5, value: 55, flight: "straight", col: "#5a3a26", heavy: true, fact: "Those jaws are for wrestling other stags. Silk is a different fight." },
+    { id: "ATLAS", name: "Atlas Moth", r: 22, speed: 40, mass: 7, pull: 5, value: 160, flight: "lamp", col: "#c8743a", glow: "#ffcf9a", rare: true, boss: true, fact: "One of the largest moths in the world, with wings nearly as wide as a dinner plate. The great catch." }
+  ];
+  var BUG = {}; BUGS.forEach(function (b) { BUG[b.id] = b; });
+
+  // gardens: anchors (x, y, group: anchors in one group are joined by branches the spider can walk),
+  // lights (x, y, r), the home anchor, how many bugs a night brings and which, the goal to open the next garden
+  var GARDENS = [
+    { id: "PORCH", name: "Summer Porch", sky: ["#0e1430", "#2a2650"], night: 100, rate: 1.1, goal: 150,
+      lights: [{ x: 905, y: 300, r: 260, kind: "lamp" }],
+      anchors: [
+        { x: 120, y: 160, g: "eave" }, { x: 330, y: 160, g: "eave" }, { x: 540, y: 160, g: "eave" }, { x: 760, y: 160, g: "eave" }, { x: 980, y: 160, g: "eave" },
+        { x: 905, y: 262, g: "lamp" }, { x: 870, y: 320, g: "lamp" }, { x: 942, y: 320, g: "lamp" },
+        { x: 1160, y: 230, g: "post" }, { x: 1160, y: 420, g: "post" }, { x: 1160, y: 610, g: "post" },
+        { x: 200, y: 560, g: "rose" }, { x: 290, y: 470, g: "rose" }, { x: 380, y: 540, g: "rose" },
+        { x: 560, y: 640, g: "rail" }, { x: 720, y: 640, g: "rail" }, { x: 880, y: 640, g: "rail" }, { x: 1040, y: 640, g: "rail" }
+      ], home: 3,
+      mix: { GNAT: 30, MOSQUITO: 18, FLY: 16, FIREFLY: 12, MOTH: 18, CRANEFLY: 6, LUNA: 1.2 } },
+    
+  ];
+
+  // molts: food cost of level 1 and growth per level
+  var MOLTS = [
+    { id: "SILK", name: "Silk Gland", desc: "+25% silk to spin each night.", max: 10, base: 12, grow: 1.7 },
+    { id: "REGEN", name: "Spinnerets", desc: "Silk refills 30% faster.", max: 8, base: 15, grow: 1.75 },
+    { id: "STRONG", name: "Tough Silk", desc: "Strands are 35% stronger: heavier bugs stick instead of snapping them.", max: 10, base: 18, grow: 1.7 },
+    { id: "STICKY", name: "Sticky Silk", desc: "Caught bugs take 35% longer to struggle free.", max: 8, base: 15, grow: 1.75 },
+    { id: "LEGS", name: "Quick Legs", desc: "The spider runs 25% faster.", max: 6, base: 20, grow: 1.9 },
+    { id: "WRAP", name: "Deft Wrap", desc: "Wrapping takes 20% less time.", max: 5, base: 25, grow: 1.9 },
+    { id: "REACH", name: "Long Throw", desc: "Strands can be 20% longer.", max: 5, base: 30, grow: 2.0 },
+    { id: "GLOW", name: "Glow Silk", desc: "Your web glows, and drifting bugs come to it.", max: 4, base: 60, grow: 2.3 },
+    { id: "BROOD", name: "Spiderlings", desc: "A spiderling wraps catches on its own. +1 per level.", max: 3, base: 120, grow: 2.6 },
+    { id: "NIGHT", name: "Long Nights", desc: "Each night lasts 15 seconds longer.", max: 4, base: 80, grow: 2.2 }
+  ];
+  var MOLT = {}; MOLTS.forEach(function (m) { MOLT[m.id] = m; });
+
+  var api = { BUGS: BUGS, BUG: BUG, GARDENS: GARDENS, MOLTS: MOLTS, MOLT: MOLT };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.CONTENT = api;
+})(this);
+
+</script>
+<script>
+// web.js — GLOWSILK: silk that sags and snaps, insects that fly by their own habits, a spider that walks the web.
+// Pure logic: the page, the balance runs and the tests all drive it the same way.
+(function (root) {
+  "use strict";
+  var node = typeof module !== "undefined" && module.exports;
+  var C = node ? require("./content.js") : root.CONTENT;
+  var WW = 1280, WH = 800, SEG = 18, GRAV = 260, ITER = 10;
+
+  function rng(seed) {
+    var a = seed >>> 0;
+    return function () { a = (a + 0x6D2B79F5) >>> 0; var t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+  function dist(ax, ay, bx, by) { return Math.sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by)); }
+
+  // --- the player's save ---
+  function newGame(opts) {
+    opts = opts || {};
+    return { v: 1, demo: !!opts.demo, garden: 0, open: 1, food: 0, total: 0, molts: {}, journal: {}, nights: 0, best: {}, webs: {}, seed: opts.seed || 1 };
+  }
+  function lv(g, id) { return g.molts[id] || 0; }
+  function moltCost(g, id) { var m = C.MOLT[id], l = lv(g, id); return l >= m.max ? Infinity : Math.round(m.base * Math.pow(m.grow, l)); }
+  function canMolt(g, id) { return lv(g, id) < C.MOLT[id].max && g.food >= moltCost(g, id); }
+  function molt(g, id) { if (!canMolt(g, id)) return false; g.food -= moltCost(g, id); g.molts[id] = lv(g, id) + 1; return true; }
+  function stats(g) {
+    return { silkMax: 2400 * Math.pow(1.25, lv(g, "SILK")), regen: 30 * Math.pow(1.3, lv(g, "REGEN")), strength: 70 * Math.pow(1.35, lv(g, "STRONG")),
+      stick: Math.pow(1.35, lv(g, "STICKY")), speed: 130 * Math.pow(1.25, lv(g, "LEGS")), wrap: 1.1 * Math.pow(0.8, lv(g, "WRAP")),
+      reach: 500 * Math.pow(1.2, lv(g, "REACH")), glow: lv(g, "GLOW"), brood: lv(g, "BROOD"), extra: 15 * lv(g, "NIGHT") };
+  }
+  function gardens(g) { return C.GARDENS.length; }
+
+  // --- a night in a garden ---
+  function startNight(g, seed) {
+    var gd = C.GARDENS[g.garden], s = stats(g);
+    var w = { g: g, gd: gd, s: s, pts: [], segs: [], bugs: [], time: 0, len: gd.night + s.extra, silk: s.silkMax, food: 0, caught: [], escaped: 0, snapped: 0,
+      events: [], rng: rng((seed || (g.seed * 7919 + g.nights * 104729 + g.garden)) >>> 0), spawnT: 0, over: false, lings: [], cocoons: [] };
+    // anchors are pinned points; anchors of one group are joined by branches the spider can walk
+    gd.anchors.forEach(function (a, i) { w.pts.push({ x: a.x, y: a.y, px: a.x, py: a.y, pin: true, anchor: i, dead: false }); });
+    w.branch = [];
+    gd.anchors.forEach(function (a, i) { gd.anchors.forEach(function (b, j) { if (j > i && a.g === b.g) w.branch.push([i, j]); }); });
+    // yesterday's web, if any
+    var saved = g.webs[gd.id];
+    if (saved) {
+      saved.pts.forEach(function (p) { w.pts.push({ x: p[0], y: p[1], px: p[0], py: p[1], pin: false, anchor: -1, dead: false }); });
+      saved.segs.forEach(function (sg) { w.segs.push({ a: sg[0], b: sg[1], rest: sg[2], hp: s.strength, dead: false }); });
+    }
+    w.spider = { at: gd.home, path: [], seg: -1, t: 0, x: gd.anchors[gd.home].x, y: gd.anchors[gd.home].y, state: "idle", target: null, wrapT: 0 };
+    for (var k = 0; k < s.brood; k++) w.lings.push({ at: gd.home, path: [], x: w.spider.x, y: w.spider.y, state: "idle", target: null, wrapT: 0, ling: true });
+    return w;
+  }
+  function liveSegs(w) { return w.segs.filter(function (s) { return !s.dead; }); }
+
+  // where would a strand attach near (x, y)? an anchor or knot, or a point along a strand
+  function attachAt(w, x, y, rad) {
+    rad = rad || 16;
+    var best = null, bd = rad;
+    w.pts.forEach(function (p, i) { if (p.dead) return; var d = dist(p.x, p.y, x, y); var r2 = p.pin ? rad + 6 : rad; if (d < Math.min(bd + (p.pin ? 6 : 0), r2) && (!best || d < bd)) { bd = d; best = { pt: i, x: p.x, y: p.y }; } });
+    if (best && w.pts[best.pt].pin) return best;
+    var bs = null, bsd = rad * 0.8;
+    w.segs.forEach(function (s, i) {
+      if (s.dead) return;
+      var a = w.pts[s.a], b = w.pts[s.b], dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy;
+      if (!L2) return;
+      var t = Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / L2)), px = a.x + dx * t, py = a.y + dy * t, d = dist(px, py, x, y);
+      if (d < bsd) { bsd = d; bs = { seg: i, t: t, x: px, y: py }; }
+    });
+    if (best && (!bs || bd <= bsd + 4)) return best;
+    return bs || best;
+  }
+  // a knot on a strand: split the segment there
+  function splitSeg(w, si, t) {
+    var s = w.segs[si], a = w.pts[s.a], b = w.pts[s.b];
+    if (t < 0.08) return s.a;
+    if (t > 0.92) return s.b;
+    var x = a.x + (b.x - a.x) * t, y = a.y + (b.y - a.y) * t;
+    var pi = w.pts.length;
+    w.pts.push({ x: x, y: y, px: x, py: y, pin: false, anchor: -1, dead: false });
+    var nb = { a: pi, b: s.b, rest: s.rest * (1 - t), hp: s.hp, dead: false };
+    s.b = pi; s.rest *= t;
+    var ni = w.segs.length;
+    w.segs.push(nb);
+    // bugs and cocoons stuck on it move to the right half
+    w.bugs.forEach(function (bg) { if (bg.stuck && bg.stuck.seg === si) { if (bg.stuck.t > t) { bg.stuck.seg = ni; bg.stuck.t = (bg.stuck.t - t) / (1 - t); } else bg.stuck.t = bg.stuck.t / t; } });
+    w.cocoons.forEach(function (c) { if (c.seg === si) { if (c.t > t) { c.seg = ni; c.t = (c.t - t) / (1 - t); } else c.t = c.t / t; } });
+    return pi;
+  }
+  function resolve(w, at) { return at.pt !== undefined ? at.pt : splitSeg(w, at.seg, at.t); }
+  function strandCost(ax, ay, bx, by) { return dist(ax, ay, bx, by); }
+  // spin a strand between two attach points. returns null or the reason it can't be done
+  function strand(w, A, B) {
+    if (!A || !B) return "a strand needs a knot or another strand at both ends";
+    var L = dist(A.x, A.y, B.x, B.y);
+    if (L < 14) return "too short";
+    if (L > w.s.reach) return "too long - the silk won't reach";
+    if (A.pt !== undefined && A.pt === B.pt) return "too short";
+    if (w.silk < L) return "not enough silk";
+    var pa = resolve(w, A), pb = resolve(w, B);
+    if (pa === pb) return "too short";
+    var P1 = w.pts[pa], P2 = w.pts[pb], n = Math.max(1, Math.round(L / SEG)), prev = pa;
+    for (var i = 1; i <= n; i++) {
+      var id;
+      if (i === n) id = pb;
+      else { var x = P1.x + (P2.x - P1.x) * i / n, y = P1.y + (P2.y - P1.y) * i / n; id = w.pts.length; w.pts.push({ x: x, y: y, px: x, py: y, pin: false, anchor: -1, dead: false }); }
+      w.segs.push({ a: prev, b: id, rest: L / n * 0.985, hp: w.s.strength, dead: false });
+      prev = id;
+    }
+    w.silk -= L;
+    w.events.push({ e: "spun", L: L });
+    return null;
+  }
+
+  // --- the capture spiral: rings around a hub, joining its spokes ---
+  function spokes(w, hub) {
+    var adj = adjacency(w), out = [];
+    (adj[hub] || []).forEach(function (e) {
+      var line = [hub], cur = e.to, prev = hub, guard = 0;
+      while (guard++ < 200) {
+        line.push(cur);
+        if (w.pts[cur].pin) break;
+        // follow the strand straight on through knots where the spiral crosses it
+        var P = w.pts[prev], Q = w.pts[cur], dir = Math.atan2(Q.y - P.y, Q.x - P.x), nxt = null, bestA = 0.6;
+        (adj[cur] || []).forEach(function (f) {
+          if (f.to === prev || line.indexOf(f.to) >= 0) return;
+          var R = w.pts[f.to], da = Math.abs(Math.atan2(Math.sin(Math.atan2(R.y - Q.y, R.x - Q.x) - dir), Math.cos(Math.atan2(R.y - Q.y, R.x - Q.x) - dir)));
+          if (da < bestA) { bestA = da; nxt = f.to; }
+        });
+        if (nxt === null) break;
+        prev = cur; cur = nxt;
+      }
+      out.push(line);
+    });
+    var H = w.pts[hub];
+    out.forEach(function (l) { var e = w.pts[l[l.length - 1]]; l.ang = Math.atan2(e.y - H.y, e.x - H.x); });
+    out.sort(function (a, b) { return a.ang - b.ang; });
+    return out;
+  }
+  function pointAtRadius(w, line, r) {
+    var H = w.pts[line[0]];
+    for (var i = 0; i + 1 < line.length; i++) {
+      var a = w.pts[line[i]], b = w.pts[line[i + 1]], da = dist(a.x, a.y, H.x, H.y), db = dist(b.x, b.y, H.x, H.y);
+      if (da <= r && db >= r) {
+        var t = db > da ? (r - da) / (db - da) : 0, si = segBetween(w, line[i], line[i + 1]);
+        if (si < 0) return null;
+        var s = w.segs[si], tt = s.a === line[i] ? t : 1 - t;
+        return { seg: si, t: tt, x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+      }
+    }
+    return null;
+  }
+  function segBetween(w, p, q) { for (var i = 0; i < w.segs.length; i++) { var s = w.segs[i]; if (!s.dead && ((s.a === p && s.b === q) || (s.a === q && s.b === p))) return i; } return -1; }
+  // knots where strands already cross the spokes, from before this spiral began
+  function junctions(w, hub) {
+    var deg = {}, out = [];
+    w.segs.forEach(function (s) { if (!s.dead) { deg[s.a] = (deg[s.a] || 0) + 1; deg[s.b] = (deg[s.b] || 0) + 1; } });
+    w.pts.forEach(function (p, i) { if (i !== hub && !p.pin && !p.dead && deg[i] >= 3) out.push(p); });
+    return out;
+  }
+  function spiral(w, hub, gap) {
+    gap = gap || 22;
+    var sp = spokes(w, hub);
+    if (sp.length < 3) return "a spiral needs at least three strands leaving this knot";
+    var old = junctions(w, hub), made = 0, r = 26, maxR = Math.max.apply(null, sp.map(function (l) { var H = w.pts[hub], e = w.pts[l[l.length - 1]]; return dist(H.x, H.y, e.x, e.y); }));
+    while (r < maxR && w.silk > 30) {
+      for (var i = 0; i < sp.length; i++) {
+        var j = (i + 1) % sp.length, da = sp[j].ang - sp[i].ang;
+        if (da < 0) da += Math.PI * 2;
+        if (da > Math.PI * 0.95) continue;
+        var A = pointAtRadius(w, sp[i], r), B = pointAtRadius(w, sp[j], r + gap / sp.length);
+        if (!A || !B) continue;
+        // a ring already crosses here (an earlier spiral): leave it be
+        if (old.some(function (p) { return dist(p.x, p.y, A.x, A.y) < gap * 0.45; })) continue;
+        if (strand(w, A, B)) continue;
+        made++;
+        // splitting changed the spokes: refresh them
+        sp = spokes(w, hub);
+        if (sp.length < 3) return made ? null : "the spokes broke";
+      }
+      r += gap;
+    }
+    w.events.push({ e: "spiral", n: made });
+    return made ? null : "no room for a spiral here";
+  }
+
+  // --- the graph the spider walks: strands, and branches between anchors of one group ---
+  function adjacency(w) {
+    var adj = {};
+    function add(a, b, L) { (adj[a] = adj[a] || []).push({ to: b, L: L }); (adj[b] = adj[b] || []).push({ to: a, L: L }); }
+    w.segs.forEach(function (s) { if (!s.dead) { var a = w.pts[s.a], b = w.pts[s.b]; add(s.a, s.b, dist(a.x, a.y, b.x, b.y)); } });
+    return adj;
+  }
+  function walkGraph(w) {
+    var adj = adjacency(w);
+    w.branch.forEach(function (br) { var a = w.pts[br[0]], b = w.pts[br[1]], L = dist(a.x, a.y, b.x, b.y) * 1.2; (adj[br[0]] = adj[br[0]] || []).push({ to: br[1], L: L }); (adj[br[1]] = adj[br[1]] || []).push({ to: br[0], L: L }); });
+    return adj;
+  }
+  // every knot a walker standing at `from` can get to
+  function reachable(w, from) {
+    var adj = walkGraph(w), seen = {}, st = [from];
+    seen[from] = 1;
+    while (st.length) { var u = st.pop(); (adj[u] || []).forEach(function (e) { if (!seen[e.to]) { seen[e.to] = 1; st.push(e.to); } }); }
+    return seen;
+  }
+  function route(w, from, goals) {
+    var adj = walkGraph(w), d = {}, prev = {}, seen = {}, q = [from];
+    d[from] = 0;
+    while (q.length) {
+      var bi = 0; for (var i = 1; i < q.length; i++) if (d[q[i]] < d[q[bi]]) bi = i;
+      var u = q.splice(bi, 1)[0];
+      if (seen[u]) continue; seen[u] = 1;
+      if (goals.indexOf(u) >= 0) { var path = [u]; while (prev[path[0]] !== undefined) path.unshift(prev[path[0]]); return path; }
+      (adj[u] || []).forEach(function (e) { var nd = d[u] + e.L; if (d[e.to] === undefined || nd < d[e.to]) { d[e.to] = nd; prev[e.to] = u; q.push(e.to); } });
+    }
+    return null;
+  }
+
+  // --- bugs ---
+  function pick(w) {
+    var mix = w.gd.mix, tot = 0, k;
+    for (k in mix) tot += mix[k];
+    var r = w.rng() * tot;
+    for (k in mix) { r -= mix[k]; if (r <= 0) return k; }
+    return k;
+  }
+  function spawn(w, id, x, y) {
+    var b = C.BUG[id], r = w.rng, side = r() < 0.5 ? -1 : 1;
+    if (x === undefined) { x = side < 0 ? -30 : WW + 30; y = 80 + r() * (WH - 240); }
+    var bug = { id: id, def: b, x: x, y: y, vx: -side * b.speed, vy: (r() - 0.5) * 30, age: 0, life: 18 + r() * 14, stuck: null, esc: 0, phase: r() * 6.28, dead: false, flap: r() * 6 };
+    if (b.flight === "straight") { var ty = 100 + r() * (WH - 260); var dx = -side * (WW + 60), dy = ty - y; var L = Math.sqrt(dx * dx + dy * dy); bug.vx = dx / L * b.speed; bug.vy = dy / L * b.speed; bug.life = 40; }
+    if (b.flight === "lamp") { var L0 = nearestLight(w, x, y); bug.light = L0; bug.orbit = 40 + r() * 70; bug.spin = r() < 0.5 ? 1 : -1; }
+    w.bugs.push(bug);
+    return bug;
+  }
+  function nearestLight(w, x, y) { var best = null, bd = 1e9; w.gd.lights.forEach(function (l) { var d = dist(l.x, l.y, x, y); if (d < bd) { bd = d; best = l; } }); return best; }
+  function moveBug(w, b, dt) {
+    var d = b.def, r = w.rng;
+    b.age += dt; b.flap += dt * 30;
+    var leaving = b.age > b.life;
+    if (d.flight === "lamp" && b.light && !leaving) {
+      var L = b.light, ang = Math.atan2(b.y - L.y, b.x - L.x) + b.spin * 1.4 * dt * (d.speed / 60), tx = L.x + Math.cos(ang) * b.orbit, ty = L.y + Math.sin(ang) * b.orbit * 0.7;
+      var ax = tx - b.x, ay = ty - b.y, al = Math.sqrt(ax * ax + ay * ay) || 1;
+      b.vx += (ax / al * d.speed - b.vx) * Math.min(1, dt * 2.2); b.vy += (ay / al * d.speed - b.vy) * Math.min(1, dt * 2.2);
+      b.vx += (r() - 0.5) * 120 * dt; b.vy += (r() - 0.5) * 120 * dt;
+    } else if (d.flight === "zig") {
+      b.phase -= dt;
+      if (b.phase <= 0) { b.phase = 0.3 + r() * 0.6; var a = r() * 6.28; b.vx = Math.cos(a) * d.speed + (leaving ? (b.x < WW / 2 ? -1 : 1) * d.speed : 0); b.vy = Math.sin(a) * d.speed * 0.7; }
+    } else if (d.flight === "drift" || d.flight === "swarm") {
+      b.phase += dt * (d.flight === "swarm" ? 4 : 1.3);
+      b.vy += Math.sin(b.phase) * 40 * dt; b.vx += Math.cos(b.phase * 0.7) * 20 * dt;
+      var sp = Math.sqrt(b.vx * b.vx + b.vy * b.vy) || 1;
+      b.vx *= d.speed / sp; b.vy *= d.speed / sp;
+      // glowing silk lures drifting bugs
+      if (w.s.glow && !leaving) {
+        var t = nearestWebPoint(w, b.x, b.y, 140 + 40 * w.s.glow);
+        if (t) { b.vx += (t.x - b.x) * 0.25 * w.s.glow * dt; b.vy += (t.y - b.y) * 0.25 * w.s.glow * dt; }
+      }
+    }
+    if (leaving && d.flight !== "straight") { b.vx += (b.x < WW / 2 ? -1 : 1) * 80 * dt; b.vy -= 20 * dt; }
+    // stay in the sky
+    if (b.y < 40 && b.vy < 0) b.vy *= -0.5;
+    if (b.y > WH - 110 && b.vy > 0) b.vy -= 160 * dt;
+    b.x += b.vx * dt; b.y += b.vy * dt;
+    if (b.x < -80 || b.x > WW + 80 || b.y < -80 || b.y > WH + 40) { if (b.age > 2) b.dead = true; }
+  }
+  function nearestWebPoint(w, x, y, rad) {
+    var best = null, bd = rad;
+    for (var i = 0; i < w.pts.length; i++) { var p = w.pts[i]; if (p.dead || p.pin) continue; var d = Math.abs(p.x - x) + Math.abs(p.y - y); if (d < bd) { bd = d; best = p; } }
+    return best;
+  }
+  // a flying bug meets a strand: it sticks, or the strand snaps and the bug flies on slower
+  function collide(w, b) {
+    var d = b.def, speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy), impact = d.mass * speed;
+    for (var i = 0; i < w.segs.length; i++) {
+      var s = w.segs[i];
+      if (s.dead) continue;
+      var A = w.pts[s.a], B = w.pts[s.b], dx = B.x - A.x, dy = B.y - A.y, L2 = dx * dx + dy * dy;
+      if (!L2) continue;
+      if (b.x < Math.min(A.x, B.x) - d.r - 2 || b.x > Math.max(A.x, B.x) + d.r + 2 || b.y < Math.min(A.y, B.y) - d.r - 2 || b.y > Math.max(A.y, B.y) + d.r + 2) continue;
+      var t = Math.max(0, Math.min(1, ((b.x - A.x) * dx + (b.y - A.y) * dy) / L2)), px = A.x + dx * t, py = A.y + dy * t;
+      if (dist(px, py, b.x, b.y) > d.r) continue;
+      if (b.hitSeg === i) continue;
+      var hold = s.hp * (d.cutter ? 0.7 : 1);
+      if (impact > hold) {
+        breakSeg(w, i);
+        w.snapped++;
+        var keep = Math.max(0.25, 1 - hold / impact);
+        b.vx *= keep; b.vy *= keep; b.hitSeg = i;
+        w.events.push({ e: "snap", x: px, y: py, bug: b.id });
+        return;
+      }
+      b.stuck = { seg: i, t: t }; b.esc = 0; b.vx = b.vy = 0;
+      // the hit shakes the web
+      A.px -= (b.vx || 0) * 0; var push = Math.min(14, impact * 0.08);
+      var nx = -dy, ny = dx, nl = Math.sqrt(nx * nx + ny * ny) || 1;
+      if (!A.pin) { A.x += nx / nl * push * (1 - t) * 0.5; A.y += ny / nl * push * (1 - t) * 0.5; }
+      if (!B.pin) { B.x += nx / nl * push * t * 0.5; B.y += ny / nl * push * t * 0.5; }
+      w.events.push({ e: "stuck", x: px, y: py, bug: b.id });
+      return;
+    }
+  }
+  function breakSeg(w, i) {
+    var s = w.segs[i];
+    s.dead = true;
+    w.bugs.forEach(function (b) { if (b.stuck && b.stuck.seg === i) { b.stuck = null; b.life = 0; b.age = 1; w.escaped++; } });
+    w.cocoons.forEach(function (c) { if (c.seg === i) c.dead = true; });
+    w.events.push({ e: "break", x: (w.pts[s.a].x + w.pts[s.b].x) / 2, y: (w.pts[s.a].y + w.pts[s.b].y) / 2 });
+  }
+  function stuckPos(w, b) { var s = w.segs[b.stuck.seg], A = w.pts[s.a], B = w.pts[s.b]; return { x: A.x + (B.x - A.x) * b.stuck.t, y: A.y + (B.y - A.y) * b.stuck.t }; }
+
+  // --- the spider (and spiderlings) ---
+  function order(w, bug, walker) {
+    walker = walker || w.spider;
+    if (!bug || !bug.stuck || bug.claimed && bug.claimed !== walker) return "nothing to catch there";
+    var s = w.segs[bug.stuck.seg], path = route(w, walker.at, [s.a, s.b]);
+    if (!path) return "the spider can't reach it - join it to the web";
+    if (walker.target && walker.target !== bug) walker.target.claimed = null;
+    walker.path = path; walker.target = bug; walker.state = "moving"; bug.claimed = walker;
+    return null;
+  }
+  function moveWalker(w, k, dt) {
+    var speed = w.s.speed * (k.ling ? 0.8 : 1);
+    if (k.state === "wrapping") {
+      k.wrapT += dt;
+      var bug = k.target;
+      if (!bug || bug.dead || !bug.stuck) { k.state = "idle"; k.target = null; return; }
+      var p = stuckPos(w, bug); k.x = p.x; k.y = p.y;
+      if (k.wrapT >= w.s.wrap) {
+        bug.dead = true; w.food += bug.def.value; w.caught.push(bug.id);
+        w.cocoons.push({ seg: bug.stuck.seg, t: bug.stuck.t, r: bug.def.r, id: bug.id });
+        w.events.push({ e: "wrapped", x: p.x, y: p.y, bug: bug.id, value: bug.def.value });
+        k.state = "idle"; k.target = null;
+      }
+      return;
+    }
+    if (k.state !== "moving") { var hp = w.pts[k.at]; if (hp && !hp.dead) { k.x = hp.x; k.y = hp.y; } return; }
+    var tgt = k.target;
+    if (!tgt || tgt.dead || !tgt.stuck) { k.state = "idle"; k.target = null; k.path = []; return; }
+    var step = speed * dt;
+    while (step > 0) {
+      var goal;
+      if (k.path.length > 1) goal = w.pts[k.path[1]];
+      else goal = stuckPos(w, tgt);
+      var dx = goal.x - k.x, dy = goal.y - k.y, L = Math.sqrt(dx * dx + dy * dy);
+      if (L <= step) {
+        k.x = goal.x; k.y = goal.y; step -= L;
+        if (k.path.length > 1) { k.path.shift(); k.at = k.path[0]; }
+        else { k.state = "wrapping"; k.wrapT = 0; w.events.push({ e: "wrapping", bug: tgt.id }); return; }
+      } else { k.x += dx / L * step; k.y += dy / L * step; step = 0; }
+    }
+  }
+  // a walker whose knot fell drops home on a dragline
+  function rescue(w, k) {
+    var p = w.pts[k.at];
+    if (p && !p.dead) return;
+    k.at = w.gd.home; k.path = []; if (k.target) k.target.claimed = null; k.target = null; k.state = "idle";
+    k.x = w.gd.anchors[w.gd.home].x; k.y = w.gd.anchors[w.gd.home].y;
+    w.events.push({ e: "dropped" });
+  }
+
+  // --- one step of the night ---
+  function step(w, dt) {
+    if (w.over) return;
+    w.time += dt;
+    w.silk = Math.min(w.s.silkMax, w.silk + w.s.regen * dt);
+    // physics
+    var weights = {};
+    w.bugs.forEach(function (b) { if (b.stuck) { var s = w.segs[b.stuck.seg]; weights[s.a] = (weights[s.a] || 0) + b.def.mass * (1 - b.stuck.t); weights[s.b] = (weights[s.b] || 0) + b.def.mass * b.stuck.t; } });
+    w.cocoons.forEach(function (c) { if (c.dead) return; var s = w.segs[c.seg]; if (!s || s.dead) { c.dead = true; return; } var m = c.r / 10; weights[s.a] = (weights[s.a] || 0) + m * (1 - c.t); weights[s.b] = (weights[s.b] || 0) + m * c.t; });
+    for (var i = 0; i < w.pts.length; i++) {
+      var p = w.pts[i];
+      if (p.pin || p.dead) continue;
+      var vx = (p.x - p.px) * 0.985, vy = (p.y - p.py) * 0.985;
+      p.px = p.x; p.py = p.y;
+      p.x += vx; p.y += vy + (GRAV + (weights[i] || 0) * 60) * dt * dt;
+    }
+    for (var it = 0; it < ITER; it++) {
+      for (var k = 0; k < w.segs.length; k++) {
+        var s = w.segs[k];
+        if (s.dead) continue;
+        var a = w.pts[s.a], b = w.pts[s.b], dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 0.001;
+        var diff = (d - s.rest) / d, ma = a.pin ? 0 : 1, mb = b.pin ? 0 : 1, m = ma + mb;
+        if (!m) continue;
+        a.x += dx * diff * ma / m; a.y += dy * diff * ma / m;
+        b.x -= dx * diff * mb / m; b.y -= dy * diff * mb / m;
+      }
+    }
+    // overstretched strands snap; knots with nothing left fall away
+    var used = {};
+    for (k = 0; k < w.segs.length; k++) {
+      s = w.segs[k];
+      if (s.dead) continue;
+      var A = w.pts[s.a], B = w.pts[s.b];
+      if (dist(A.x, A.y, B.x, B.y) > s.rest * 2.2 + 10) { breakSeg(w, k); continue; }
+      used[s.a] = used[s.b] = 1;
+    }
+    w.pts.forEach(function (p, i2) { if (!p.pin && !p.dead && (!used[i2] || p.y > WH + 50)) p.dead = true; });
+    // bugs arrive
+    w.spawnT += dt * w.gd.rate * (1 + 0.12 * w.s.glow);
+    while (w.spawnT >= 1 && w.time < w.len - 4) {
+      w.spawnT -= 1;
+      var id = pick(w);
+      if (C.BUG[id].flight === "swarm") { var x0 = w.rng() < 0.5 ? -20 : WW + 20, y0 = 120 + w.rng() * 400; for (var n = 0; n < 5; n++) spawn(w, id, x0 + (w.rng() - 0.5) * 50, y0 + (w.rng() - 0.5) * 50); }
+      else spawn(w, id);
+    }
+    // bugs fly, hit, struggle
+    w.bugs.forEach(function (b) {
+      if (b.dead) return;
+      if (b.stuck) {
+        var sg = w.segs[b.stuck.seg];
+        if (!sg || sg.dead) { b.stuck = null; return; }
+        if (b.claimed && b.claimed.state === "wrapping") return;
+        b.esc += dt * Math.sqrt(b.def.pull) / (7 * w.s.stick);
+        b.flap += dt * 50;
+        // the struggle shakes the strand
+        var P = w.pts[sg.a];
+        if (!P.pin) { P.x += (w.rng() - 0.5) * b.def.pull * 1.5; }
+        if (b.esc >= 1) {
+          b.stuck = null; b.age = b.life; b.vy = -40; b.vx = (w.rng() - 0.5) * 80; w.escaped++;
+          if (b.claimed) { b.claimed.target = null; b.claimed.state = "idle"; b.claimed = null; }
+          sg.hp *= 0.7;
+          w.events.push({ e: "escaped", bug: b.id });
+        }
+        return;
+      }
+      moveBug(w, b, dt);
+      if (b.age > 0.2) collide(w, b);
+      if (b.hitSeg !== undefined && w.rng() < dt * 4) b.hitSeg = undefined;
+    });
+    w.bugs = w.bugs.filter(function (b) { return !b.dead; });
+    w.cocoons = w.cocoons.filter(function (c) { return !c.dead; });
+    // walkers
+    [w.spider].concat(w.lings).forEach(function (k2) { rescue(w, k2); moveWalker(w, k2, dt); });
+    // idle walkers (the spider too, unless told to hold) go for the nearest catch they can reach
+    w.huntT = (w.huntT || 0) - dt;
+    if (w.huntT <= 0) {
+      w.huntT = 0.2;
+      (w.noHunt ? [] : [w.spider]).concat(w.lings).forEach(function (l) {
+        if (l.state !== "idle") return;
+        var cands = [], seen = null;
+        w.bugs.forEach(function (b) { if (b.stuck && !b.claimed) { var p = stuckPos(w, b); cands.push({ b: b, d: dist(p.x, p.y, l.x, l.y) }); } });
+        if (!cands.length) return;
+        cands.sort(function (a, b) { return a.d - b.d; });
+        seen = reachable(w, l.at);
+        for (var c = 0; c < cands.length; c++) { var sg = w.segs[cands[c].b.stuck.seg]; if ((seen[sg.a] || seen[sg.b]) && !order(w, cands[c].b, l)) break; }
+      });
+    }
+    if (w.time >= w.len) end(w);
+  }
+  function end(w) {
+    w.over = true;
+    var g = w.g;
+    // the web stays for tomorrow; cocoons are eaten at dawn
+    var keep = {}, map = {}, pts = [], segs = [];
+    w.segs.forEach(function (s) { if (!s.dead) { keep[s.a] = keep[s.b] = 1; } });
+    w.pts.forEach(function (p, i) { if (p.pin) map[i] = i; });
+    var n = w.gd.anchors.length;
+    w.pts.forEach(function (p, i) { if (!p.pin && keep[i] && !p.dead) { map[i] = n + pts.length; pts.push([Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10]); } });
+    w.segs.forEach(function (s) { if (!s.dead && map[s.a] !== undefined && map[s.b] !== undefined) segs.push([map[s.a], map[s.b], Math.round(s.rest * 100) / 100]); });
+    g.webs[w.gd.id] = { pts: pts, segs: segs };
+    g.food += w.food; g.total += w.food; g.nights++;
+    var fresh = [];
+    w.caught.forEach(function (id) { if (!g.journal[id]) { g.journal[id] = 0; fresh.push(id); } g.journal[id]++; });
+    var prevBest = g.best[w.gd.id] || 0;
+    g.best[w.gd.id] = Math.max(prevBest, w.food);
+    var opened = false;
+    if (w.food >= w.gd.goal && g.open === g.garden + 1 && g.garden + 1 < C.GARDENS.length) { g.open++; opened = true; }
+    var done = w.food >= w.gd.goal && g.garden === C.GARDENS.length - 1 && !g.won;
+    if (done) g.won = true;
+    w.summary = { food: w.food, caught: w.caught.length, escaped: w.escaped, snapped: w.snapped, fresh: fresh, opened: opened, won: done, best: prevBest < w.food };
+    w.events.push({ e: "dawn" });
+  }
+  function clearWeb(g, gid) { delete g.webs[gid]; }
+
+  function save(g) { return JSON.stringify(g); }
+  function load(s) { var g = JSON.parse(s); if (!g || g.v !== 1) throw new Error("not a GLOWSILK save"); return g; }
+
+  var api = { WW: WW, WH: WH, rng: rng, newGame: newGame, lv: lv, moltCost: moltCost, canMolt: canMolt, molt: molt, stats: stats, gardens: gardens,
+    startNight: startNight, attachAt: attachAt, strand: strand, spiral: spiral, spokes: spokes, route: route, reachable: reachable, order: order, step: step, end: end, spawn: spawn,
+    stuckPos: stuckPos, liveSegs: liveSegs, clearWeb: clearWeb, save: save, load: load, breakSeg: breakSeg };
+  if (node) module.exports = api;
+  else root.WEB = api;
+})(this);
+
+</script>
+<script>
+// bot.js — spins an orb web near the light, catches what sticks, molts between nights.
+// Used to tune the nights and to prove every garden's goal can be reached.
+//   node bot.js [nights]  -> food per night, garden by garden
+(function (root) {
+"use strict";
+var node = typeof module !== "undefined" && module.exports;
+var W = node ? require("./web.js") : root.WEB, C = node ? require("./content.js") : root.CONTENT;
+
+// frame strands and spokes from a hub near the light, then a capture spiral
+function weave(w) {
+  var gd = w.gd, L = gd.lights[0], hx = L.x + (L.x < 640 ? 150 : -150), hy = L.y + 120;
+  // the anchors within reach of the hub, in different directions
+  var anchors = gd.anchors.map(function (a, i) { return { i: i, x: a.x, y: a.y, d: Math.hypot(a.x - hx, a.y - hy), ang: Math.atan2(a.y - hy, a.x - hx) }; })
+    .filter(function (a) { return a.d < w.s.reach * 0.95 && a.d > 60; }).sort(function (a, b) { return a.d - b.d; });
+  if (anchors.length < 2) return false;
+  // first a bridge line between two anchors on opposite sides of the hub
+  var best = null;
+  anchors.forEach(function (a) { anchors.forEach(function (b) { if (a.i >= b.i) return; var da = Math.abs(Math.atan2(Math.sin(a.ang - b.ang), Math.cos(a.ang - b.ang))); var L2 = Math.hypot(a.x - b.x, a.y - b.y); if (da > 2.4 && L2 < w.s.reach && (!best || da > best.da)) best = { a: a, b: b, da: da }; }); });
+  if (!best) return false;
+  W.strand(w, { pt: best.a.i, x: best.a.x, y: best.a.y }, { pt: best.b.i, x: best.b.x, y: best.b.y });
+  for (var k = 0; k < 60; k++) W.step(w, 1 / 60);
+  var H = W.attachAt(w, hx, hy, 80) || W.attachAt(w, hx, hy, 220);
+  if (!H) return false;
+  var hub = H.pt !== undefined ? H.pt : null;
+  // spokes from the hub to every other anchor in reach
+  var used = [best.a.i, best.b.i];
+  anchors.forEach(function (a) {
+    if (used.indexOf(a.i) >= 0) return;
+    if (used.some(function (u) { var b = anchors.filter(function (x) { return x.i === u; })[0]; return b && Math.abs(Math.atan2(Math.sin(a.ang - b.ang), Math.cos(a.ang - b.ang))) < 0.35; })) return;
+    var start = hub !== null ? { pt: hub, x: w.pts[hub].x, y: w.pts[hub].y } : W.attachAt(w, hx, hy, 80);
+    if (!start) return;
+    if (!W.strand(w, start, { pt: a.i, x: a.x, y: a.y })) { used.push(a.i); if (hub === null) hub = nearestKnot(w, hx, hy); }
+  });
+  for (k = 0; k < 60; k++) W.step(w, 1 / 60);
+  if (hub === null) hub = nearestKnot(w, hx, hy);
+  // make sure the spider's home is joined to the web
+  if (hub !== null && !W.route(w, gd.home, [hub])) {
+    var h = gd.anchors[gd.home], P = w.pts[hub];
+    W.strand(w, { pt: gd.home, x: h.x, y: h.y }, { pt: hub, x: P.x, y: P.y });
+  }
+  if (hub !== null) W.spiral(w, hub, 24);
+  return true;
+}
+function nearestKnot(w, x, y) { var b = null, bd = 1e9; w.pts.forEach(function (p, i) { if (p.dead) return; var d = Math.hypot(p.x - x, p.y - y); if (d < bd) { bd = d; b = i; } }); return b; }
+
+// catch: send the spider to the stuck bug closest to it
+function tend(w) {
+  if (w.spider.state !== "idle") return;
+  // the best catch for the walk, among those the spider can reach
+  var seen = null, c = [];
+  w.bugs.forEach(function (b) { if (b.stuck && !b.claimed) { var p = W.stuckPos(w, b); c.push({ b: b, d: Math.hypot(p.x - w.spider.x, p.y - w.spider.y) / Math.max(1, b.def.value) }); } });
+  if (!c.length) return;
+  c.sort(function (a, b) { return a.d - b.d; });
+  seen = W.reachable(w, w.spider.at);
+  for (var i = 0; i < c.length; i++) { var s = w.segs[c[i].b.stuck.seg]; if ((seen[s.a] || seen[s.b]) && !W.order(w, c[i].b)) return; }
+}
+var PREF = ["STRONG", "SILK", "STICKY", "LEGS", "REGEN", "WRAP", "BROOD", "GLOW", "REACH", "NIGHT"];
+function shop(g) {
+  for (var guard = 0; guard < 50; guard++) {
+    var opts = PREF.filter(function (id) { return W.canMolt(g, id); });
+    if (!opts.length) return;
+    opts.sort(function (a, b) { return W.moltCost(g, a) - W.moltCost(g, b); });
+    W.molt(g, opts[0]);
+  }
+}
+function night(g, rebuild) {
+  var w = W.startNight(g);
+  var seen = W.reachable(w, w.gd.home), joined = W.liveSegs(w).filter(function (s) { return seen[s.a] || seen[s.b]; }).length;
+  if (rebuild || joined < 60) { W.clearWeb(g, w.gd.id); w = W.startNight(g); weave(w); }
+  while (!w.over) { tend(w); W.step(w, 1 / 30); w.events.length = 0; }
+  return w;
+}
+function play(maxNights, seed) {
+  var g = W.newGame({ seed: seed || 5 }), log = [];
+  for (var n = 0; n < (maxNights || 80); n++) {
+    var gi = g.garden, w = night(g, n % 3 === 0);
+    log.push({ night: n + 1, garden: C.GARDENS[gi].id, food: w.food, caught: w.summary.caught, escaped: w.summary.escaped, snapped: w.summary.snapped, segs: W.liveSegs(w).length });
+    if (w.summary.opened) { g.garden = g.open - 1; }
+    if (g.won) break;
+    shop(g);
+  }
+  return { g: g, log: log };
+}
+var api = { weave: weave, tend: tend, shop: shop, night: night, play: play };
+if (node) module.exports = api; else root.BOT = api;
+if (node && require.main === module) {
+  var r = play(+(process.argv[2] || 80), +(process.argv[3] || 5));
+  r.log.forEach(function (l) { console.log(JSON.stringify(l)); });
+  console.log("won", !!r.g.won, "nights", r.g.nights, "molts", JSON.stringify(r.g.molts));
+}
+})(this);
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var C = window.CONTENT, WEB = window.WEB;
+  var ED = window.GLOWSILK_EDITION || "full", DEMO = ED === "demo";
+  var STORE_URL = "https://kqmigqkqri.itch.io/glowsilk";
+  var W = 1280, H = 800;
+  var SANS = "'Segoe UI', system-ui, -apple-system, sans-serif", SERIF = "Georgia, 'Times New Roman', serif";
+  var COL = { text: "#eef0ff", dim: "#9ea6cf", gold: "#ffd98a", silk: "#e8eeff", good: "#9fe3a8", bad: "#ff8a8a", panel: "rgba(14,18,40,0.92)", line: "#3a4280" };
+  var cv = document.getElementById("c"), cx = cv.getContext("2d"), scale = 1, dpr = 1;
+
+  // ---------------- saving ----------------
+  var KEY = DEMO ? "glowsilk.demo.v1" : "glowsilk.v1", SKEY = KEY + ".settings";
+  var settings = { sound: true, music: true, seenHelp: false };
+  try { var ss = localStorage.getItem(SKEY); if (ss) { var so = JSON.parse(ss); for (var k0 in so) settings[k0] = so[k0]; } } catch (e) {}
+  function saveSettings() { try { localStorage.setItem(SKEY, JSON.stringify(settings)); } catch (e) {} }
+  var g = null;
+  try { var raw = localStorage.getItem(KEY); if (raw) g = WEB.load(raw); } catch (e) { g = null; }
+  var hasSave = !!g;
+  if (!g) g = WEB.newGame({ demo: DEMO, seed: (Date.now() % 100000) + 1 });
+  function persist() { try { localStorage.setItem(KEY, WEB.save(g)); hasSave = true; } catch (e) {} }
+
+  // ---------------- sound: plucked silk, crickets, a music box ----------------
+  var ac = null, master = null;
+  function audio() { try { if (!ac) { ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = 0.8; master.connect(ac.destination); } if (ac.state === "suspended") ac.resume(); return ac; } catch (e) { return null; } }
+  function tone(f, d, type, vol, delay, slide) {
+    if (!settings.sound) return; var a = audio(); if (!a) return;
+    var t0 = a.currentTime + (delay || 0), o = a.createOscillator(), gn = a.createGain();
+    o.type = type || "sine"; o.frequency.setValueAtTime(f, t0); if (slide) o.frequency.exponentialRampToValueAtTime(slide, t0 + d);
+    gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol || 0.04, t0 + 0.005); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+    o.connect(gn); gn.connect(master); o.start(t0); o.stop(t0 + d + 0.03);
+  }
+  // a strand plucks a note: longer silk, lower note (on a pentatonic scale)
+  var PENTA = [0, 2, 4, 7, 9];
+  function pluck(len) {
+    var steps = Math.max(0, Math.min(14, Math.round(14 - len / 32))), n = PENTA[steps % 5] + 12 * Math.floor(steps / 5), f = 196 * Math.pow(2, n / 12);
+    tone(f, 0.9, "triangle", 0.045); tone(f * 2, 0.4, "sine", 0.02);
+  }
+  var hitT = 0;
+  function sfx(k, x) {
+    if (k === "stuck") { if (hitT > 0) return; hitT = 0.06; tone(900 + Math.random() * 300, 0.12, "sine", 0.03, 0, 500); }
+    else if (k === "snap") { tone(180, 0.25, "sawtooth", 0.03, 0, 60); tone(1400, 0.05, "square", 0.02); }
+    else if (k === "wrapped") { tone(523, 0.12, "triangle", 0.04); tone(784, 0.18, "triangle", 0.04, 0.07); tone(1046, 0.25, "triangle", 0.035, 0.14); }
+    else if (k === "escaped") tone(330, 0.2, "sawtooth", 0.02, 0, 520);
+    else if (k === "bad") tone(140, 0.12, "square", 0.03);
+    else if (k === "ui") tone(1200, 0.04, "sine", 0.03);
+    else if (k === "dawn") [392, 494, 587, 784].forEach(function (f, i) { tone(f, 0.6, "triangle", 0.045, i * 0.12); });
+    else if (k === "molt") { tone(660, 0.08, "triangle", 0.05); tone(990, 0.16, "triangle", 0.05, 0.06); }
+  }
+  var music = { next: 0, i: 0 }, crick = 0;
+  function ambient() {
+    if (!ac || ac.state !== "running") return;
+    if (settings.music) {
+      var spb = 0.55;
+      if (music.next < ac.currentTime) music.next = ac.currentTime + 0.05;
+      while (music.next < ac.currentTime + 0.3) {
+        var bar = Math.floor(music.i / 8) % 4, root = [0, 5, 3, 7][bar], n = [0, 7, 12, 16, 19, 16, 12, 7][music.i % 8] + root;
+        if (music.i % 8 !== 7) bell(220 * Math.pow(2, n / 12), music.next, music.i % 8 === 0 ? 0.03 : 0.016);
+        music.i++; music.next += spb;
+      }
+    }
+    // crickets
+    if (settings.sound && screen === "night" && Math.random() < 0.02) { var f = 4200 + Math.random() * 600; for (var k = 0; k < 3; k++) tone(f, 0.04, "sine", 0.006, k * 0.07); }
+  }
+  function bell(f, t0, vol) {
+    var o = ac.createOscillator(), o2 = ac.createOscillator(), gn = ac.createGain();
+    o.type = "sine"; o.frequency.value = f; o2.type = "sine"; o2.frequency.value = f * 3.01;
+    gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol, t0 + 0.01); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.6);
+    o.connect(gn); o2.connect(gn); gn.connect(master); o.start(t0); o2.start(t0); o.stop(t0 + 1.7); o2.stop(t0 + 1.7);
+  }
+
+  // ---------------- drawing helpers ----------------
+  function rr(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
+  function text(s, x, y, size, col, align, weight, font) { cx.font = (weight || 600) + " " + size + "px " + (font || SANS); cx.fillStyle = col || COL.text; cx.textAlign = align || "left"; cx.textBaseline = "middle"; cx.fillText(s, x, y); }
+  function tw(s, size, weight, font) { cx.font = (weight || 600) + " " + size + "px " + (font || SANS); return cx.measureText(s).width; }
+  function wrap(s, x, y, maxW, size, col, lh, weight, align) {
+    var lines = [];
+    String(s).split("\n").forEach(function (p) { var ws = p.split(" "), line = ""; ws.forEach(function (w) { var t = line ? line + " " + w : w; if (tw(t, size, weight) > maxW && line) { lines.push(line); line = w; } else line = t; }); lines.push(line); });
+    lines.forEach(function (l, i) { text(l, x, y + i * lh, size, col, align, weight); });
+    return y + lines.length * lh;
+  }
+  var buttons = [], mouse = { x: -1, y: -1, down: false, right: false };
+  function hot(x, y, w, h) { return mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h; }
+  function button(x, y, w, h, label, fn, o) {
+    o = o || {};
+    var on = hot(x, y, w, h) && !o.disabled;
+    rr(x, y, w, h, h / 2);
+    cx.fillStyle = o.disabled ? "rgba(30,34,60,0.8)" : o.primary ? (on ? "#ffe6a8" : COL.gold) : o.active ? "rgba(90,100,170,0.95)" : on ? "rgba(60,68,120,0.95)" : "rgba(34,40,80,0.9)"; cx.fill();
+    cx.strokeStyle = o.primary ? "#fff1c8" : o.active ? "#c8d0ff" : "rgba(140,150,220,0.5)"; cx.lineWidth = 1.2; cx.stroke();
+    text(label, x + w / 2, y + h / 2 + 1, o.size || 14, o.disabled ? "#666c94" : o.primary ? "#2a1e08" : COL.text, "center", 700);
+    if (!o.disabled && fn) buttons.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+  function glow(x, y, r, col, a) {
+    var gr = cx.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, col.replace("A", a)); gr.addColorStop(1, col.replace("A", 0));
+    cx.fillStyle = gr; cx.beginPath(); cx.arc(x, y, r, 0, 7); cx.fill();
+  }
+
+  // ---------------- the gardens, painted by code ----------------
+  var stars = [];
+  for (var si = 0; si < 140; si++) stars.push({ x: Math.random() * W, y: Math.random() * 520, r: Math.random() * 1.3 + 0.3, p: Math.random() * 6 });
+  var t0 = performance.now();
+  function now() { return (performance.now() - t0) / 1000; }
+  function drawSky(gd) {
+    var gr = cx.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, gd.sky[0]); gr.addColorStop(1, gd.sky[1]);
+    cx.fillStyle = gr; cx.fillRect(0, 0, W, H);
+    var t = now();
+    stars.forEach(function (s) { cx.fillStyle = "rgba(230,235,255," + (0.35 + 0.35 * Math.sin(t * 1.3 + s.p)) + ")"; cx.fillRect(s.x, s.y, s.r, s.r); });
+    var moon = gd.id === "POND" ? { x: 1010, y: 150, r: 46 } : { x: 1100, y: 90, r: 26 };
+    glow(moon.x, moon.y, moon.r * 4, "rgba(220,230,255,A)", 0.18);
+    cx.beginPath(); cx.arc(moon.x, moon.y, moon.r, 0, 7); cx.fillStyle = "#eef2ff"; cx.fill();
+    cx.beginPath(); cx.arc(moon.x - moon.r * 0.3, moon.y - moon.r * 0.2, moon.r * 0.18, 0, 7); cx.fillStyle = "rgba(180,190,220,0.4)"; cx.fill();
+  }
+  function sil(col) { cx.fillStyle = col; cx.strokeStyle = col; }
+  function branch(x1, y1, x2, y2, w1, w2) {
+    var ang = Math.atan2(y2 - y1, x2 - x1), nx = -Math.sin(ang), ny = Math.cos(ang);
+    cx.beginPath(); cx.moveTo(x1 + nx * w1, y1 + ny * w1); cx.lineTo(x2 + nx * w2, y2 + ny * w2); cx.lineTo(x2 - nx * w2, y2 - ny * w2); cx.lineTo(x1 - nx * w1, y1 - ny * w1); cx.closePath(); cx.fill();
+  }
+  function drawScene(gd, lightsOn) {
+    drawSky(gd);
+    var dark = "#05070f", mid = "#0b1022";
+    if (gd.id === "PORCH") {
+      sil(mid); cx.fillRect(0, 0, 1060, 150);                               // the porch roof
+      sil(dark); cx.fillRect(0, 146, 1060, 18);                              // the eave beam
+      for (var x = 40; x < 1060; x += 70) cx.fillRect(x, 150, 4, 12);
+      sil("#0a0e1e"); cx.fillRect(1148, 170, 24, 560);                       // the post
+      cx.fillRect(500, 650, 640, 10); for (x = 520; x < 1140; x += 40) cx.fillRect(x, 640, 8, 120);   // the rail
+      // rose bush
+      sil(dark); [[200, 600, 90], [290, 520, 70], [380, 580, 80], [150, 650, 70], [300, 640, 90]].forEach(function (b) { cx.beginPath(); cx.arc(b[0], b[1], b[2], 0, 7); cx.fill(); });
+      [[230, 545], [300, 495], [355, 560], [190, 590]].forEach(function (r) { cx.beginPath(); cx.arc(r[0], r[1], 7, 0, 7); cx.fillStyle = "#3a1428"; cx.fill(); });
+      // the lamp
+      sil("#0a0d1a"); cx.fillRect(902, 162, 6, 100);
+      cx.beginPath(); cx.moveTo(870, 262); cx.lineTo(940, 262); cx.lineTo(950, 320); cx.lineTo(860, 320); cx.closePath(); cx.fill();
+      if (lightsOn) { cx.beginPath(); cx.moveTo(876, 268); cx.lineTo(934, 268); cx.lineTo(941, 314); cx.lineTo(869, 314); cx.closePath(); cx.fillStyle = "#ffd98a"; cx.fill(); }
+    } else if (gd.id === "ORCHARD") {
+      sil(dark);
+      branch(60, 800, 150, 300, 40, 26); branch(150, 300, 90, 250, 14, 6); branch(150, 300, 210, 180, 16, 6); branch(150, 300, 330, 220, 14, 5); branch(150, 330, 250, 340, 10, 5); branch(140, 380, 140, 420, 10, 5);
+      branch(1200, 800, 1090, 300, 44, 26); branch(1090, 300, 950, 220, 16, 6); branch(1090, 300, 1070, 170, 14, 5); branch(1090, 300, 1190, 240, 14, 5); branch(1090, 330, 1040, 330, 10, 5); branch(1110, 400, 1150, 420, 10, 5);
+      [[120, 240, 70], [230, 200, 80], [300, 260, 60], [1000, 220, 70], [1090, 180, 80], [1170, 260, 60]].forEach(function (b) { cx.beginPath(); cx.arc(b[0], b[1], b[2], 0, 7); cx.fillStyle = "#070912"; cx.fill(); });
+      [[190, 230], [270, 250], [1050, 230], [1130, 210]].forEach(function (a) { cx.beginPath(); cx.arc(a[0], a[1], 8, 0, 7); cx.fillStyle = "#3a1012"; cx.fill(); });
+      sil("#090c18"); cx.fillRect(636, 200, 8, 560);
+      cx.fillRect(350, 650, 140, 110); cx.fillRect(440, 600, 90, 50); cx.fillRect(790, 640, 140, 120); cx.fillRect(870, 590, 80, 50);
+      sil("#0a0d1a"); cx.beginPath(); cx.moveTo(620, 215); cx.lineTo(660, 215); cx.lineTo(668, 265); cx.lineTo(612, 265); cx.closePath(); cx.fill();
+      if (lightsOn) { rr(620, 222, 40, 38, 4); cx.fillStyle = "#ffcf80"; cx.fill(); }
+    } else if (gd.id === "POND") {
+      // water with the moon in it
+      var wg = cx.createLinearGradient(0, 660, 0, H); wg.addColorStop(0, "#0b2230"); wg.addColorStop(1, "#06121a"); cx.fillStyle = wg; cx.fillRect(0, 650, W, 150);
+      for (var k = 0; k < 7; k++) { cx.fillStyle = "rgba(220,235,255," + (0.18 - k * 0.02) + ")"; cx.fillRect(950 + Math.sin(now() + k) * 6, 670 + k * 16, 120 - k * 10, 3); }
+      sil(dark);
+      gd.anchors.forEach(function (a, i) { if (i % 3 === 0) { cx.fillRect(a.x - 3, a.y - 20, 6, 680 - a.y + 20); cx.beginPath(); cx.ellipse(a.x, a.y - 24, 8, 26, 0, 0, 7); cx.fillStyle = "#1a1008"; cx.fill(); sil(dark); } });
+      [[300, 690], [560, 710], [760, 690]].forEach(function (l) { cx.beginPath(); cx.ellipse(l[0], l[1], 40, 10, 0, 0, 7); cx.fillStyle = "#0e2a1a"; cx.fill(); });
+      sil(dark); cx.beginPath(); cx.moveTo(0, 660); for (x = 0; x <= W; x += 20) cx.lineTo(x, 650 + Math.sin(x * 0.07) * 8); cx.lineTo(W, 680); cx.lineTo(0, 680); cx.closePath(); cx.fill();
+    } else if (gd.id === "GREENHOUSE") {
+      sil("rgba(140,170,190,0.06)"); cx.fillRect(100, 110, 1080, 560);
+      sil("#0a0e14"); cx.fillRect(80, 100, 1120, 16); cx.fillRect(84, 100, 16, 620); cx.fillRect(1180, 100, 16, 620);
+      for (x = 300; x < 1180; x += 220) cx.fillRect(x, 116, 5, 560);
+      cx.strokeStyle = "#0a0e14"; cx.lineWidth = 4; cx.beginPath(); cx.moveTo(100, 108); cx.lineTo(640, 40); cx.lineTo(1180, 108); cx.stroke();
+      [[330, 120, 182], [640, 100, 152], [950, 120, 182]].forEach(function (b) { cx.fillRect(b[0] - 1, b[1], 2, b[2] - b[1]); cx.beginPath(); cx.arc(b[0], b[2] + 6, 9, 0, 7); cx.fillStyle = lightsOn ? "#ffe4a0" : "#333"; cx.fill(); cx.fillStyle = "#0a0e14"; });
+      [[400, 640, 70], [520, 610, 60], [760, 610, 60], [880, 640, 70]].forEach(function (p) { cx.beginPath(); cx.moveTo(p[0] - p[2] / 2, p[1]); cx.lineTo(p[0] + p[2] / 2, p[1]); cx.lineTo(p[0] + p[2] / 3, p[1] + 60); cx.lineTo(p[0] - p[2] / 3, p[1] + 60); cx.closePath(); cx.fillStyle = "#1e120c"; cx.fill(); cx.beginPath(); cx.arc(p[0], p[1] - 20, p[2] * 0.5, 0, 7); cx.fillStyle = "#08100a"; cx.fill(); });
+    }
+    // grass
+    cx.fillStyle = "#04060c";
+    cx.beginPath(); cx.moveTo(0, H); for (x = 0; x <= W; x += 12) cx.lineTo(x, H - 30 - Math.abs(Math.sin(x * 0.13)) * 26 - (x % 36 === 0 ? 18 : 0)); cx.lineTo(W, H); cx.closePath(); cx.fill();
+  }
+  function drawLights(gd) {
+    cx.save(); cx.globalCompositeOperation = "lighter";
+    gd.lights.forEach(function (l) {
+      var flick = 1 + Math.sin(now() * 9 + l.x) * 0.03;
+      if (l.kind === "moon") glow(l.x, l.y, l.r, "rgba(170,200,255,A)", 0.12);
+      else { glow(l.x, l.y + 30, l.r * 1.3 * flick, "rgba(255,170,70,A)", 0.2); glow(l.x, l.y + 30, l.r * 0.5, "rgba(255,220,140,A)", 0.3); glow(l.x, l.y + 10, l.r * 0.18, "rgba(255,245,210,A)", 0.6); }
+    });
+    cx.restore();
+  }
+
+  // ---------------- the web ----------------
+  function drawWeb(w) {
+    var glowLv = w.s.glow;
+    cx.save(); cx.lineCap = "round";
+    cx.globalCompositeOperation = "lighter";
+    cx.beginPath();
+    w.segs.forEach(function (s) { if (s.dead) return; var a = w.pts[s.a], b = w.pts[s.b]; cx.moveTo(a.x, a.y); cx.lineTo(b.x, b.y); });
+    // a wide soft halo, then a tighter one: the silk glows
+    cx.strokeStyle = glowLv ? "rgba(110,200,255," + (0.06 + 0.025 * glowLv) + ")" : "rgba(170,190,255,0.06)"; cx.lineWidth = 8 + 1.5 * glowLv; cx.stroke();
+    cx.strokeStyle = glowLv ? "rgba(150,225,255," + (0.13 + 0.04 * glowLv) + ")" : "rgba(200,215,255,0.11)"; cx.lineWidth = 3 + glowLv * 0.4; cx.stroke();
+    cx.globalCompositeOperation = "source-over";
+    // silk catches the lamplight: brighter near the lights
+    w.segs.forEach(function (s) {
+      if (s.dead) return;
+      var a = w.pts[s.a], b = w.pts[s.b], mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, lit = 0;
+      w.gd.lights.forEach(function (l) { lit = Math.max(lit, 1 - Math.hypot(mx - l.x, my - l.y) / (l.r * 1.4)); });
+      var hurt = s.hp < w.s.strength * 0.75;
+      cx.strokeStyle = hurt ? "rgba(255,190,190,0.7)" : "rgba(" + Math.round(225 + 30 * lit) + "," + Math.round(232 + 10 * lit) + "," + Math.round(255 - 50 * lit) + "," + (0.55 + 0.4 * Math.max(0, lit)) + ")";
+      cx.lineWidth = 1.1;
+      cx.beginPath(); cx.moveTo(a.x, a.y); cx.lineTo(b.x, b.y); cx.stroke();
+    });
+    // dew
+    if (w.gd.id === "POND" || w.gd.id === "GREENHOUSE") w.pts.forEach(function (p, i) { if (!p.dead && !p.pin && i % 5 === 0) { cx.beginPath(); cx.arc(p.x, p.y + 1.5, 1.6, 0, 7); cx.fillStyle = "rgba(220,240,255,0.8)"; cx.fill(); } });
+    cx.restore();
+    // cocoons
+    w.cocoons.forEach(function (c) {
+      var s = w.segs[c.seg]; if (!s || s.dead) return;
+      var a = w.pts[s.a], b = w.pts[s.b], x = a.x + (b.x - a.x) * c.t, y = a.y + (b.y - a.y) * c.t, r = Math.max(4, c.r * 0.8);
+      cx.beginPath(); cx.ellipse(x, y + r * 0.4, r * 0.7, r * 1.1, 0, 0, 7); cx.fillStyle = "#e9ecf6"; cx.fill();
+      cx.strokeStyle = "rgba(160,170,200,0.7)"; cx.lineWidth = 0.8; for (var k = -2; k <= 2; k++) { cx.beginPath(); cx.moveTo(x - r * 0.6, y + r * 0.4 + k * r * 0.35); cx.lineTo(x + r * 0.6, y + r * 0.2 + k * r * 0.35); cx.stroke(); }
+    });
+  }
+  function drawKnots(w, near) {
+    w.gd.anchors.forEach(function (a, i) {
+      var p = w.pts[i], hi = near && near.pt === i;
+      cx.beginPath(); cx.arc(p.x, p.y, hi ? 7 : 4, 0, 7); cx.fillStyle = hi ? "#fff6c8" : "rgba(255,230,170,0.75)"; cx.fill();
+      if (i === w.gd.home) { cx.beginPath(); cx.arc(p.x, p.y, 10, 0, 7); cx.strokeStyle = "rgba(255,230,170,0.5)"; cx.lineWidth = 1.5; cx.stroke(); }
+    });
+  }
+
+  // ---------------- insects ----------------
+  function drawBug(b, x, y, t, stuck, big) {
+    var d = b.def, r = d.r, flap = Math.sin(b.flap) * (stuck ? 0.6 : 1), ang = stuck ? 0 : Math.atan2(b.vy, b.vx);
+    cx.save(); cx.translate(x, y); cx.scale(VIS * (big || 1), VIS * (big || 1));
+    if (d.glow) { cx.save(); cx.globalCompositeOperation = "lighter"; var pul = d.id === "FIREFLY" ? 0.5 + 0.5 * Math.sin(t * 4 + b.phase * 3) : 0.6; glow(0, 0, r * 5, hexA(d.glow), 0.5 * pul); cx.restore(); }
+    if (!stuck) cx.rotate(ang + Math.PI / 2 * (d.flight === "straight" || d.id === "DRAGONFLY" ? 1 : 0) * 0);
+    var col = d.col;
+    if (d.id === "DRAGONFLY") {
+      cx.rotate(stuck ? 0.3 : ang);
+      cx.fillStyle = "rgba(200,240,255,0.35)"; [-1, 1].forEach(function (s) { cx.beginPath(); cx.ellipse(-2, s * (6 + 3 * flap), 10, 3, s * 0.3, 0, 7); cx.fill(); cx.beginPath(); cx.ellipse(4, s * (6 + 3 * flap), 9, 3, -s * 0.3, 0, 7); cx.fill(); });
+      cx.fillStyle = col; cx.fillRect(-r * 1.6, -1.5, r * 2.2, 3); cx.beginPath(); cx.arc(r * 0.7, 0, 3.5, 0, 7); cx.fill();
+    } else if (d.id === "MOTH" || d.id === "LUNA" || d.id === "ATLAS") {
+      var span = r * (1 + 0.25 * flap);
+      cx.fillStyle = col; cx.globalAlpha = 0.9;
+      [-1, 1].forEach(function (s) { cx.beginPath(); cx.ellipse(s * span * 0.6, -r * 0.1, span * 0.65, r * 0.75, s * 0.4, 0, 7); cx.fill(); cx.beginPath(); cx.ellipse(s * span * 0.45, r * 0.55, span * 0.4, r * 0.5, -s * 0.3, 0, 7); cx.fill(); });
+      if (d.id === "LUNA") [-1, 1].forEach(function (s) { cx.beginPath(); cx.moveTo(s * r * 0.4, r * 0.8); cx.quadraticCurveTo(s * r * 0.7, r * 1.6, s * r * 0.3, r * 2.1); cx.lineWidth = 3; cx.strokeStyle = col; cx.stroke(); });
+      cx.globalAlpha = 1;
+      [-1, 1].forEach(function (s) { cx.beginPath(); cx.arc(s * span * 0.6, -r * 0.1, r * 0.18, 0, 7); cx.fillStyle = d.id === "ATLAS" ? "#fff2d0" : "rgba(60,50,40,0.5)"; cx.fill(); });
+      cx.fillStyle = "#3a2e22"; cx.beginPath(); cx.ellipse(0, 0, r * 0.18, r * 0.75, 0, 0, 7); cx.fill();
+    } else if (d.heavy || d.id === "CICADA") {
+      cx.rotate(stuck ? 0 : ang + Math.PI / 2);
+      if (!stuck) { cx.fillStyle = "rgba(220,220,240,0.3)"; [-1, 1].forEach(function (s) { cx.beginPath(); cx.ellipse(s * r * 0.7, -r * 0.1, r * 0.8, r * 0.35, s * (0.5 + flap * 0.3), 0, 7); cx.fill(); }); }
+      cx.fillStyle = col; cx.beginPath(); cx.ellipse(0, 0, r * 0.62, r * 0.85, 0, 0, 7); cx.fill();
+      cx.strokeStyle = "rgba(0,0,0,0.5)"; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(0, -r * 0.5); cx.lineTo(0, r * 0.85); cx.stroke();
+      cx.fillStyle = "#2a1a10"; cx.beginPath(); cx.arc(0, -r * 0.8, r * 0.3, 0, 7); cx.fill();
+      if (d.id === "STAG") { cx.strokeStyle = "#2a1a10"; cx.lineWidth = 2.5; [-1, 1].forEach(function (s) { cx.beginPath(); cx.moveTo(s * 2, -r); cx.quadraticCurveTo(s * r * 0.6, -r * 1.6, s * r * 0.1, -r * 1.9); cx.stroke(); }); }
+      cx.fillStyle = "rgba(255,255,255,0.25)"; cx.beginPath(); cx.ellipse(-r * 0.2, -r * 0.2, r * 0.15, r * 0.35, 0, 0, 7); cx.fill();
+    } else {
+      cx.rotate(stuck ? 0 : ang + Math.PI / 2);
+      cx.fillStyle = d.id === "LACEWING" ? "rgba(190,255,190,0.45)" : "rgba(220,230,255,0.4)";
+      [-1, 1].forEach(function (s) { cx.beginPath(); cx.ellipse(s * r * 0.75, 0, r * 0.8, r * 0.3, s * (0.4 + flap * 0.5), 0, 7); cx.fill(); });
+      cx.fillStyle = col; cx.beginPath(); cx.ellipse(0, r * 0.1, r * 0.4, r * 0.85, 0, 0, 7); cx.fill();
+      if (d.stripes) { cx.fillStyle = "#2a2010"; for (var k = 0; k < 3; k++) cx.fillRect(-r * 0.4, r * (0.05 + k * 0.28), r * 0.8, r * 0.12); }
+      if (d.id === "FIREFLY") { cx.beginPath(); cx.arc(0, r * 0.7, r * 0.42, 0, 7); cx.fillStyle = "#fffbb0"; cx.fill(); }
+      if (d.legs) { cx.strokeStyle = col; cx.lineWidth = 0.8; for (k = -1; k <= 1; k++) [-1, 1].forEach(function (s) { cx.beginPath(); cx.moveTo(0, k * 3); cx.lineTo(s * r * 1.6, k * r * 0.9 + 4); cx.stroke(); }); }
+      cx.fillStyle = "#1a1a22"; cx.beginPath(); cx.arc(0, -r * 0.75, r * 0.3, 0, 7); cx.fill();
+    }
+    cx.restore();
+  }
+  var VIS = 1.45; // bugs are drawn a bit larger than they hit
+  function hexA(hex) { var n = parseInt(hex.slice(1), 16); return "rgba(" + (n >> 16) + "," + ((n >> 8) & 255) + "," + (n & 255) + ",A)"; }
+  function drawBugs(w, t) {
+    w.bugs.forEach(function (b) {
+      if (b.stuck) {
+        var p = WEB.stuckPos(w, b);
+        drawBug(b, p.x + Math.sin(t * 30 + b.phase) * 0.8, p.y, t, true);
+        // how close it is to struggling free
+        if (!b.claimed || b.claimed.state !== "wrapping") {
+          cx.beginPath(); cx.arc(p.x, p.y, b.def.r * VIS + 5, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * b.esc); cx.strokeStyle = b.esc > 0.7 ? "#ff7a7a" : "rgba(255,220,150,0.8)"; cx.lineWidth = 2; cx.stroke();
+        }
+        if (hoverBug === b) { cx.beginPath(); cx.arc(p.x, p.y, b.def.r * VIS + 10, 0, 7); cx.strokeStyle = "#fff6c8"; cx.lineWidth = 1.5; cx.stroke(); }
+      } else drawBug(b, b.x, b.y, t, false);
+    });
+  }
+
+  // ---------------- the spider ----------------
+  function drawSpider(k, t, scale0) {
+    var s = (scale0 || 1) * (k.ling ? 0.6 : 1), x = k.x, y = k.y + 8 * s, moving = k.state === "moving", wrap = k.state === "wrapping";
+    cx.save(); cx.translate(x, y);
+    // dragline up to where it hangs from
+    cx.strokeStyle = "rgba(230,235,255,0.5)"; cx.lineWidth = 0.8; cx.beginPath(); cx.moveTo(0, -8 * s); cx.lineTo(0, -12 * s); cx.stroke();
+    cx.strokeStyle = "#1c1430"; cx.lineWidth = 2.2 * s; cx.lineCap = "round";
+    for (var i = 0; i < 4; i++) [-1, 1].forEach(function (sd) {
+      var ph = (moving ? Math.sin(t * 18 + i * 1.7 + (sd > 0 ? 1 : 0)) : wrap ? Math.sin(t * 25 + i) : Math.sin(t * 2 + i) * 0.2) * 0.35;
+      var a0 = (-0.9 + i * 0.6 + ph) * sd, kx = Math.cos(a0) * 11 * s * sd, ky = Math.sin(a0) * 8 * s - 4 * s;
+      cx.beginPath(); cx.moveTo(sd * 4 * s, (i - 1.5) * 2 * s); cx.lineTo(sd * Math.abs(kx), ky - 4 * s); cx.lineTo(sd * (Math.abs(kx) + 6 * s), ky + 8 * s); cx.stroke();
+    });
+    // body
+    var bodyG = cx.createRadialGradient(-3 * s, -4 * s, 1, 0, 0, 13 * s); bodyG.addColorStop(0, "#5a3f8a"); bodyG.addColorStop(1, "#22163c");
+    cx.beginPath(); cx.ellipse(0, 4 * s, 10 * s, 11 * s, 0, 0, 7); cx.fillStyle = bodyG; cx.fill();
+    cx.save(); cx.globalCompositeOperation = "lighter"; glow(0, 7 * s, 9 * s, "rgba(140,220,255,A)", 0.35 + 0.15 * Math.sin(t * 2)); cx.restore();
+    cx.beginPath(); cx.ellipse(0, 7 * s, 3 * s, 4 * s, 0, 0, 7); cx.fillStyle = "#9fe6ff"; cx.fill();
+    cx.beginPath(); cx.arc(0, -6 * s, 7.5 * s, 0, 7); cx.fillStyle = "#2c1f48"; cx.fill();
+    [-1, 1].forEach(function (sd) { cx.beginPath(); cx.arc(sd * 3.2 * s, -7 * s, 2.8 * s, 0, 7); cx.fillStyle = "#fff"; cx.fill(); cx.beginPath(); cx.arc(sd * 3.2 * s + 0.6 * s, -6.6 * s, 1.5 * s, 0, 7); cx.fillStyle = "#120c20"; cx.fill(); });
+    if (wrap) { cx.strokeStyle = "rgba(255,255,255,0.8)"; cx.lineWidth = 1; for (var q = 0; q < 3; q++) { cx.beginPath(); cx.arc(0, 18 * s, 6 + q * 3 + Math.sin(t * 20 + q) * 2, 0, 7); cx.stroke(); } }
+    cx.restore();
+  }
+
+  // ---------------- the night ----------------
+  var screen = "title", w = null, tool = "strand", dragFrom = null, hoverAt = null, hoverBug = null, pops = [], msg = null, paused = false, dawn = null, acc = 0;
+  function startNight() {
+    w = WEB.startNight(g); screen = "night"; tool = "strand"; pops = []; paused = false; dawn = null; acc = 0;
+    if (!settings.seenHelp) { helpOpen = true; helpPage = 0; }
+  }
+  function flash(s, col) { msg = { s: s, t: 0, col: col || COL.text }; }
+  function handle(e) {
+    if (e.e === "stuck") sfx("stuck");
+    else if (e.e === "snap" || e.e === "break") { if (e.e === "snap") sfx("snap"); }
+    else if (e.e === "wrapped") { sfx("wrapped"); pops.push({ x: e.x, y: e.y - 14, s: "+" + e.value, t: 0, col: COL.gold }); if (!g.journal[e.bug] && !newBugs[e.bug]) { newBugs[e.bug] = 1; flash("New in your journal: " + C.BUG[e.bug].name + "!", COL.gold); } }
+    else if (e.e === "escaped") sfx("escaped");
+    else if (e.e === "dropped") flash("The spider dropped home on a dragline.", COL.dim);
+    else if (e.e === "dawn") { sfx("dawn"); dawn = { t: 0, sum: w.summary }; persist(); }
+  }
+  var newBugs = {}, lostT = 3;
+  function updateNight(dt) {
+    if (paused || helpOpen || dawn) return;
+    acc += dt;
+    var n = 0;
+    while (acc >= 1 / 60 && n < 4) { WEB.step(w, 1 / 60); w.events.forEach(handle); w.events.length = 0; acc -= 1 / 60; n++; }
+    if (n >= 4) acc = 0;
+  }
+  function drawNight(dt) {
+    var t = now();
+    updateNight(dt);
+    hoverAt = null; hoverBug = null;
+    if (!dawn && !helpOpen) {
+      w.bugs.forEach(function (b) { if (b.stuck) { var p = WEB.stuckPos(w, b); if (Math.hypot(p.x - mouse.x, p.y - mouse.y) < b.def.r * VIS + 12) hoverBug = b; } });
+      if (!hoverBug && mouse.y > 64) hoverAt = WEB.attachAt(w, mouse.x, mouse.y, 18);
+    }
+    // catches the spider can't get to: say why, now and then
+    lostT -= dt;
+    if (lostT <= 0 && !dawn && !paused && !helpOpen) {
+      lostT = 5;
+      var stuck = w.bugs.filter(function (b) { return b.stuck; });
+      if (stuck.length >= 2) {
+        var seen = WEB.reachable(w, w.spider.at);
+        if (!stuck.some(function (b) { var sg = w.segs[b.stuck.seg]; return seen[sg.a] || seen[sg.b]; })) flash("The spider can't reach your web - spin a strand from its home (the ringed knot) to the web.", COL.gold);
+      }
+    }
+    drawScene(w.gd, true);
+    drawLights(w.gd);
+    drawWeb(w);
+    drawKnots(w, hoverAt);
+    drawBugs(w, t);
+    w.lings.forEach(function (l) { drawSpider(l, t); });
+    drawSpider(w.spider, t);
+    // the strand being drawn
+    if (dragFrom) {
+      var to = WEB.attachAt(w, mouse.x, mouse.y, 18), ex = to ? to.x : mouse.x, ey = to ? to.y : mouse.y, L = Math.hypot(ex - dragFrom.x, ey - dragFrom.y);
+      var ok = to && L <= w.s.reach && L <= w.silk && L >= 14;
+      // how far silk can be thrown from here
+      cx.beginPath(); cx.arc(dragFrom.x, dragFrom.y, w.s.reach, 0, 7); cx.strokeStyle = "rgba(200,220,255,0.12)"; cx.lineWidth = 1; cx.stroke();
+      cx.setLineDash([6, 5]); cx.strokeStyle = ok ? "rgba(200,255,210,0.9)" : "rgba(255,150,150,0.9)"; cx.lineWidth = 1.5;
+      cx.beginPath(); cx.moveTo(dragFrom.x, dragFrom.y); cx.lineTo(ex, ey); cx.stroke(); cx.setLineDash([]);
+      text(Math.round(L) + (L > w.s.reach ? " - too long" : L > w.silk ? " - not enough silk" : !to ? " - end on a knot or strand" : ""), ex + 12, ey - 12, 12, ok ? COL.good : COL.bad, "left", 700);
+    } else if (hoverAt && tool === "strand") { cx.beginPath(); cx.arc(hoverAt.x, hoverAt.y, 6, 0, 7); cx.strokeStyle = "#fff6c8"; cx.lineWidth = 1.5; cx.stroke(); }
+    if (tool === "spiral" && hoverAt) { cx.beginPath(); cx.arc(hoverAt.x, hoverAt.y, 26, 0, 7); cx.setLineDash([4, 4]); cx.strokeStyle = "rgba(200,230,255,0.8)"; cx.stroke(); cx.setLineDash([]); }
+    // pops
+    pops = pops.filter(function (p) { p.t += dt; return p.t < 1.2; });
+    pops.forEach(function (p) { cx.globalAlpha = Math.min(1, (1.2 - p.t) * 2); text(p.s, p.x, p.y - p.t * 30, 16, p.col, "center", 800); cx.globalAlpha = 1; });
+    drawHud();
+    drawMsg(dt);
+    if (helpOpen) drawHelp();
+    if (paused && !helpOpen) { cx.fillStyle = "rgba(5,8,20,0.6)"; cx.fillRect(0, 0, W, H); text("PAUSED", W / 2, 360, 40, COL.text, "center", 700, SERIF); button(W / 2 - 90, 410, 180, 46, "RESUME", function () { paused = false; }, { primary: true }); }
+    if (dawn) drawDawn(dt);
+  }
+  function drawHud() {
+    cx.fillStyle = "rgba(5,8,20,0.55)"; cx.fillRect(0, 0, W, 60);
+    text(w.gd.name, 20, 22, 18, COL.text, "left", 700, SERIF);
+    text("Night " + (g.nights + (w.over ? 0 : 1)), 20, 44, 12, COL.dim, "left", 700);
+    // the moon crossing the sky = time left
+    var f = Math.min(1, w.time / w.len), mx = 230 + f * 220;
+    cx.strokeStyle = "rgba(160,170,230,0.4)"; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(230, 40); cx.quadraticCurveTo(340, 6, 450, 40); cx.stroke();
+    var my = 40 - Math.sin(f * Math.PI) * 26 * 0.65 - 3;
+    cx.beginPath(); cx.arc(mx, my, 7, 0, 7); cx.fillStyle = "#eef2ff"; cx.fill();
+    text(Math.max(0, Math.ceil(w.len - w.time)) + "s to dawn", 340, 52, 11, COL.dim, "center", 700);
+    // food
+    text("FOOD", 500, 18, 11, COL.dim, "left", 800);
+    text(String(w.food), 500, 42, 24, COL.gold, "left", 800);
+    text("goal " + w.gd.goal, 508 + tw(String(w.food), 24, 800), 44, 12, w.food >= w.gd.goal ? COL.good : COL.dim, "left", 700);
+    // silk
+    text("SILK", 680, 18, 11, COL.dim, "left", 800);
+    rr(680, 30, 220, 14, 7); cx.fillStyle = "rgba(20,24,50,0.9)"; cx.fill();
+    rr(680, 30, Math.max(14, 220 * w.silk / w.s.silkMax), 14, 7); cx.fillStyle = "#cfe0ff"; cx.fill();
+    text(Math.floor(w.silk) + " / " + Math.round(w.s.silkMax), 790, 52, 10, COL.dim, "center", 700);
+    button(930, 12, 100, 36, "STRAND", function () { tool = "strand"; sfx("ui"); }, { active: tool === "strand", size: 13 });
+    button(1040, 12, 100, 36, "SPIRAL", function () { tool = "spiral"; sfx("ui"); }, { active: tool === "spiral", size: 13 });
+    button(1150, 12, 50, 36, "?", function () { helpOpen = true; helpPage = 0; }, { size: 15 });
+    button(1210, 12, 54, 36, "II", function () { paused = !paused; }, { size: 13 });
+    var hint = tool === "spiral" ? "Click a knot where three or more strands meet: the spider spins a sticky spiral around it." : "Drag from a glowing knot (or a strand) to another to spin silk. Click a caught bug to send the spider there first. Right-click a strand to cut it.";
+    text(hint, W / 2, H - 14, 12, "rgba(220,225,255,0.55)", "center", 600);
+  }
+  function drawMsg(dt) {
+    if (!msg) return; msg.t += dt; if (msg.t > (msg.s.length > 60 ? 5 : 3)) { msg = null; return; }
+    var a = Math.min(1, ((msg.s.length > 60 ? 5 : 3) - msg.t) * 2), ww = tw(msg.s, 15, 700) + 36;
+    cx.globalAlpha = a; rr(W / 2 - ww / 2, 74, ww, 32, 16); cx.fillStyle = "rgba(10,14,32,0.88)"; cx.fill(); text(msg.s, W / 2, 90, 15, msg.col, "center", 700); cx.globalAlpha = 1;
+  }
+
+  // ---------------- dawn: the haul and the molts ----------------
+  function drawDawn(dt) {
+    dawn.t += dt;
+    var a = Math.min(1, dawn.t * 2), s = dawn.sum;
+    cx.fillStyle = "rgba(255,190,140," + 0.18 * a + ")"; cx.fillRect(0, 0, W, H);
+    cx.fillStyle = "rgba(8,10,24," + 0.72 * a + ")"; cx.fillRect(0, 0, W, H);
+    cx.globalAlpha = a;
+    text("DAWN", W / 2, 70, 16, COL.dim, "center", 800);
+    text(s.food + " food", W / 2, 112, 44, COL.gold, "center", 700, SERIF);
+    text(s.caught + " caught  ·  " + s.escaped + " got away  ·  " + s.snapped + " strands snapped" + (s.best ? "  ·  best night here!" : ""), W / 2, 152, 15, COL.dim, "center", 700);
+    var gy = 184;
+    if (s.won && !DEMO) { text("The Old Greenhouse is fed. The Great Web is complete!", W / 2, gy, 18, COL.good, "center", 800); gy += 30; }
+    else if (s.won && DEMO) { text("Goal reached! You fed the porch spider well.", W / 2, gy, 18, COL.good, "center", 800); gy += 30; }
+    else if (s.opened) { text("A new garden is open: " + C.GARDENS[g.open - 1].name + "!", W / 2, gy, 18, COL.good, "center", 800); gy += 30; }
+    else if (!s.won && !(w.gd.goal <= (g.best[w.gd.id] || 0) && g.open > g.garden + 1)) { text("Goal for " + w.gd.name + ": " + w.gd.goal + " food in one night (best " + (g.best[w.gd.id] || 0) + ")", W / 2, gy, 14, COL.dim, "center", 600); gy += 26; }
+    if (s.fresh.length) { text("New in the journal: " + s.fresh.map(function (id) { return C.BUG[id].name; }).join(", "), W / 2, gy, 14, COL.gold, "center", 700); gy += 26; }
+    cx.globalAlpha = 1;
+    // molts
+    var x0 = 140, y0 = gy + 20;
+    text("MOLT", x0, y0, 14, COL.dim, "left", 800); text("You have " + g.food + " food", x0 + 1000, y0, 15, COL.gold, "right", 800);
+    C.MOLTS.forEach(function (m, i) {
+      var col = i % 2, row = Math.floor(i / 2), bx = x0 + col * 510, by = y0 + 24 + row * 66, l = WEB.lv(g, m.id), cost = WEB.moltCost(g, m.id), can = WEB.canMolt(g, m.id);
+      rr(bx, by, 490, 58, 12); cx.fillStyle = "rgba(24,30,64,0.9)"; cx.fill();
+      text(m.name, bx + 16, by + 18, 15, COL.text, "left", 700);
+      wrap(m.desc, bx + 16, by + 38, 300, 11, COL.dim, 13, 600);
+      for (var q = 0; q < m.max; q++) { cx.beginPath(); cx.arc(bx + 366 - (m.max - q) * 10, by + 18, 3.5, 0, 7); cx.fillStyle = q < l ? COL.gold : "rgba(120,130,190,0.4)"; cx.fill(); }
+      button(bx + 380, by + 12, 96, 34, l >= m.max ? "MAX" : cost + " food", function () { if (WEB.molt(g, m.id)) { sfx("molt"); persist(); } else sfx("bad"); }, { primary: can, disabled: !can, size: 13 });
+    });
+    var by2 = y0 + 24 + 5 * 66 + 12;
+    // gardens to choose
+    var gx = x0;
+    for (var gi = 0; gi < g.open; gi++) (function (gi) {
+      button(gx, by2, 190, 40, C.GARDENS[gi].name, function () { g.garden = gi; persist(); }, { active: g.garden === gi, size: 13 });
+      gx += 200;
+    })(gi);
+    button(x0 + 1000 - 330, by2 + 54, 160, 46, "NEW WEB", function () { WEB.clearWeb(g, C.GARDENS[g.garden].id); flash("The web is cleared for a fresh start.", COL.dim); persist(); }, { size: 13 });
+    button(x0 + 1000 - 160, by2 + 54, 160, 46, "NEXT NIGHT", function () { dawn = null; if (s.won && !DEMO) { screen = "won"; return; } if (DEMO && (s.won || (g.best.PORCH || 0) >= C.GARDENS[0].goal) && !g.sawDemoEnd) { g.sawDemoEnd = true; persist(); screen = "demoend"; return; } startNight(); }, { primary: true, size: 15 });
+    button(x0, by2 + 54, 160, 46, "JOURNAL", function () { journalFrom = "night"; screen = "journal"; }, { size: 13 });
+    text("Your web stays for tomorrow, broken strands and all.", x0 + 180, by2 + 77, 12, COL.dim, "left", 600);
+  }
+
+  // ---------------- journal ----------------
+  var journalFrom = "title";
+  function drawJournal() {
+    drawScene(C.GARDENS[0], false);
+    cx.fillStyle = "rgba(6,8,20,0.82)"; cx.fillRect(0, 0, W, H);
+    text("BUG JOURNAL", W / 2, 50, 30, COL.gold, "center", 700, SERIF);
+    var n = Object.keys(g.journal).length;
+    text(n + " of " + C.BUGS.length + " found", W / 2, 84, 14, COL.dim, "center", 700);
+    var t = now();
+    C.BUGS.forEach(function (d, i) {
+      var col = i % 4, row = Math.floor(i / 4), x = 70 + col * 290, y = 110 + row * 158, have = g.journal[d.id] !== undefined;
+      rr(x, y, 276, 146, 12); cx.fillStyle = "rgba(24,30,64,0.9)"; cx.fill();
+      if (have) {
+        drawBug({ def: d, flap: t * 8 + i, vx: 1, vy: 0, phase: i }, x + 48, y + 52, t, true, Math.max(1, Math.min(3.2, 13 / d.r)));
+        text(d.name, x + 96, y + 26, 15, COL.text, "left", 700);
+        text(d.value + " food · caught " + g.journal[d.id], x + 96, y + 46, 11, COL.gold, "left", 700);
+        wrap(d.fact, x + 14, y + 92, 250, 11, COL.dim, 14, 600);
+      } else {
+        cx.beginPath(); cx.arc(x + 50, y + 54, d.r + 4, 0, 7); cx.fillStyle = "rgba(10,12,30,0.9)"; cx.fill();
+        text("?", x + 50, y + 55, 18, "#55608f", "center", 800);
+        text("Not yet found", x + 96, y + 26, 15, "#6b74a8", "left", 700);
+      }
+    });
+    button(W / 2 - 80, H - 66, 160, 44, "BACK", function () { screen = journalFrom === "night" && w && w.over ? "night" : journalFrom; }, { primary: true });
+  }
+
+  // ---------------- help ----------------
+  var helpOpen = false, helpPage = 0;
+  var HELP = [
+    ["Spin", "Drag from one glowing knot to another to spin a strand of silk. You can start or end on any strand too - that's how a web grows. Silk refills slowly through the night."],
+    ["The orb web", "Spiders build a frame, then spokes out from a hub, then a sticky spiral. Make a knot where three or more strands meet, pick SPIRAL, and click it: the spider spins the spiral for you."],
+    ["Catch", "Bugs that hit your silk stick - unless they're heavy enough to snap it. A caught bug struggles: the ring around it fills. If the spider wraps it before the ring is full, it's food. The spider runs to the nearest catch on its own - click a bug to send it there first. It can only walk on silk and on the branch it lives on, so join your web to its home."],
+    ["Grow", "At dawn, spend food on molts: more silk, tougher and stickier silk, faster legs, spiderlings that wrap on their own. Reach a garden's goal in one night to open the next. Moths circle the lamp; beetles crash through weak silk; wasps chew it."]
+  ];
+  function drawHelp() {
+    cx.fillStyle = "rgba(5,8,20,0.75)"; cx.fillRect(0, 0, W, H);
+    var x = 280, y = 140, ww = 720, hh = 480, p = HELP[helpPage];
+    rr(x, y, ww, hh, 18); cx.fillStyle = COL.panel; cx.fill(); cx.strokeStyle = COL.line; cx.lineWidth = 1.5; cx.stroke();
+    text("HOW TO PLAY " + (helpPage + 1) + "/" + HELP.length, x + 30, y + 34, 12, COL.dim, "left", 800);
+    text(p[0], x + 30, y + 76, 32, COL.gold, "left", 700, SERIF);
+    wrap(p[1], x + 30, y + 130, ww - 60, 18, COL.text, 28, 600);
+    if (helpPage > 0) button(x + 30, y + hh - 66, 120, 42, "BACK", function () { helpPage--; }, {});
+    if (helpPage < HELP.length - 1) button(x + ww - 150, y + hh - 66, 120, 42, "NEXT", function () { helpPage++; }, { primary: true });
+    else button(x + ww - 150, y + hh - 66, 120, 42, "SPIN!", function () { helpOpen = false; settings.seenHelp = true; saveSettings(); }, { primary: true });
+    button(x + ww / 2 - 60, y + hh - 66, 120, 42, "CLOSE", function () { helpOpen = false; settings.seenHelp = true; saveSettings(); }, {});
+  }
+
+  // ---------------- title: a web spins itself in the porch light ----------------
+  var titleW = null, titleT = 0;
+  function makeTitleWeb() {
+    var tg = WEB.newGame({ seed: 77 }); tg.molts = { STRONG: 3, STICKY: 4, SILK: 4, GLOW: 2 };
+    titleW = WEB.startNight(tg, 4242); titleW.len = 1e9;
+    titleW.weaveQ = [];
+  }
+  function titleStep(dt) {
+    var tw2 = titleW;
+    tw2.silk = 1e9;
+    titleT += dt;
+    if (!tw2.woven) { window.BOT.weave(tw2); tw2.woven = true; }
+    for (var i = 0; i < 2; i++) { WEB.step(tw2, dt / 2); tw2.events.length = 0; }
+    // the spider tends its catches
+    if (tw2.spider.state === "idle") { var b = tw2.bugs.filter(function (x) { return x.stuck && !x.claimed; })[0]; if (b) WEB.order(tw2, b); }
+  }
+  function drawTitle(dt) {
+    if (!titleW) makeTitleWeb();
+    titleStep(dt);
+    var t = now();
+    drawScene(titleW.gd, true); drawLights(titleW.gd); drawWeb(titleW); drawBugs(titleW, t); drawSpider(titleW.spider, t);
+    var gr = cx.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, "rgba(5,7,18,0.55)"); gr.addColorStop(0.35, "rgba(5,7,18,0)"); gr.addColorStop(0.75, "rgba(5,7,18,0)"); gr.addColorStop(1, "rgba(5,7,18,0.7)");
+    cx.fillStyle = gr; cx.fillRect(0, 0, W, H);
+    logo(W / 2 - 140, 96);
+    text("Spin glowing silk. Catch the night.", W / 2 - 140, 158, 22, "#dfe6ff", "center", 600, SERIF);
+    text("FREE DEMO · the Summer Porch", W / 2 - 140, 190, 14, COL.gold, "center", 800);
+    var bx = W / 2 - 290, by = 600;
+    button(bx, by, 300, 56, hasSave ? "CONTINUE" : "START", function () { audio(); if (hasSave) { if (!settings.seenHelp) helpOpen = true; startNight(); } else startNight(); }, { primary: true, size: 19 });
+    button(bx, by + 66, 145, 40, "JOURNAL", function () { journalFrom = "title"; screen = "journal"; }, { size: 13 });
+    button(bx + 155, by + 66, 145, 40, settings.music ? "MUSIC ON" : "MUSIC OFF", function () { settings.music = !settings.music; saveSettings(); audio(); }, { size: 13 });
+    if (hasSave) button(bx, by + 114, 300, 30, confirmNew ? "Click again to start over" : "NEW GAME", function () { if (!confirmNew) { confirmNew = true; return; } g = WEB.newGame({ demo: DEMO, seed: (Date.now() % 100000) + 1 }); hasSave = false; confirmNew = false; persist(); startNight(); }, { size: 12 });
+    button(W - 300, H - 66, 270, 40, "GET THE FULL GAME", openStore, { size: 13 });
+  }
+  var confirmNew = false;
+  function logo(x, y) {
+    cx.save(); cx.globalCompositeOperation = "lighter";
+    glow(x, y, 260, "rgba(120,190,255,A)", 0.16);
+    cx.restore();
+    cx.font = "700 84px " + SERIF; cx.textAlign = "center"; cx.textBaseline = "middle";
+    cx.shadowColor = "rgba(160,220,255,0.9)"; cx.shadowBlur = 24; cx.fillStyle = "#f2f7ff"; cx.fillText("GLOWSILK", x, y); cx.shadowBlur = 0;
+    // a strand of silk under the word, with a dewdrop
+    cx.strokeStyle = "rgba(220,235,255,0.8)"; cx.lineWidth = 1.2; cx.beginPath(); cx.moveTo(x - 200, y + 44); cx.quadraticCurveTo(x, y + 60, x + 200, y + 44); cx.stroke();
+    cx.beginPath(); cx.arc(x + 60, y + 52, 3, 0, 7); cx.fillStyle = "#eaf6ff"; cx.fill();
+  }
+  
+  function openStore() { try { window.open(STORE_URL, "_blank", "noopener"); } catch (e) {} }
+  function drawDemoEnd() {
+    drawScene(C.GARDENS[0], true); drawLights(C.GARDENS[0]);
+    cx.fillStyle = "rgba(5,8,20,0.78)"; cx.fillRect(0, 0, W, H);
+    text("THE DEMO ENDS HERE", W / 2, 200, 38, COL.gold, "center", 700, SERIF);
+    var y = wrap("You fed well on the Summer Porch. The full game opens three more gardens - the Autumn Orchard with its beetles and wasps, the Moonlit Pond full of dragonflies, and the Old Greenhouse, where the Atlas Moth comes to the bulbs - with every molt and the whole bug journal.", W / 2, 270, 760, 18, COL.text, 28, 600, "center");
+    button(W / 2 - 160, y + 40, 320, 56, "GET THE FULL GAME", openStore, { primary: true, size: 18 });
+    button(W / 2 - 100, y + 110, 200, 42, "KEEP SPINNING", function () { startNight(); }, { size: 13 });
+  }
+  
+  function drawWon() {
+    drawScene(C.GARDENS[C.GARDENS.length - 1], true); drawLights(C.GARDENS[C.GARDENS.length - 1]);
+    cx.fillStyle = "rgba(5,8,20,0.7)"; cx.fillRect(0, 0, W, H);
+    text("THE GREAT WEB", W / 2, 220, 44, COL.gold, "center", 700, SERIF);
+    wrap("Four gardens fed, " + g.nights + (g.nights === 1 ? " night" : " nights") + " spun, " + Object.keys(g.journal).length + " of " + C.BUGS.length + " bugs in the journal. The greenhouse is yours. Keep spinning - there's always a bigger moth.", W / 2, 300, 700, 18, COL.text, 28, 600, "center");
+    button(W / 2 - 220, 440, 200, 48, "JOURNAL", function () { journalFrom = "won"; screen = "journal"; }, {});
+    button(W / 2 + 20, 440, 200, 48, "KEEP SPINNING", function () { startNight(); }, { primary: true });
+  }
+
+  // ---------------- main loop and input ----------------
+  var lastT = performance.now();
+  function frame(nowT) {
+    var dt = Math.min(0.05, (nowT - lastT) / 1000); lastT = nowT;
+    buttons = []; hitT -= dt;
+    cx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    ambient();
+    if (screen === "title") drawTitle(dt);
+    else if (screen === "night") drawNight(dt);
+    else if (screen === "journal") drawJournal();
+    else if (screen === "won") drawWon();
+    else if (screen === "demoend") drawDemoEnd();
+    requestAnimationFrame(frame);
+  }
+  function resize() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H); dpr = window.devicePixelRatio || 1;
+    cv.style.width = Math.floor(W * scale) + "px"; cv.style.height = Math.floor(H * scale) + "px";
+    cv.width = Math.floor(W * scale * dpr); cv.height = Math.floor(H * scale * dpr);
+  }
+  window.addEventListener("resize", resize); resize();
+  function local(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+  cv.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  cv.addEventListener("pointermove", function (e) { var m = local(e); mouse.x = m.x; mouse.y = m.y; });
+  cv.addEventListener("pointerdown", function (e) {
+    var m = local(e); mouse.x = m.x; mouse.y = m.y; mouse.down = true; cv.focus(); audio();
+    for (var i = buttons.length - 1; i >= 0; i--) { var b = buttons[i]; if (m.x >= b.x && m.x <= b.x + b.w && m.y >= b.y && m.y <= b.y + b.h) { sfx("ui"); b.fn(); return; } }
+    if (screen !== "night" || dawn || helpOpen || paused) return;
+    if (e.button === 2) { cutAt(m); return; }
+    // a caught bug: send the spider
+    var bug = null;
+    w.bugs.forEach(function (b) { if (b.stuck) { var p = WEB.stuckPos(w, b); if (Math.hypot(p.x - m.x, p.y - m.y) < b.def.r * VIS + 12) bug = b; } });
+    if (bug) { var err = WEB.order(w, bug); if (err) { flash(cap(err) + ".", COL.bad); sfx("bad"); } else sfx("ui"); return; }
+    var at = WEB.attachAt(w, m.x, m.y, 18);
+    if (tool === "spiral") {
+      if (!at) { flash("Click a knot where three or more strands meet.", COL.dim); return; }
+      var hub = at.pt !== undefined ? at.pt : null;
+      if (hub === null) { flash("Click right on a knot.", COL.dim); return; }
+      var r = WEB.spiral(w, hub, 22);
+      if (r) { flash(cap(r) + ".", COL.bad); sfx("bad"); } else { pluck(120); pluck(60); tool = "strand"; }
+      return;
+    }
+    if (at) dragFrom = at;
+  });
+  window.addEventListener("pointerup", function (e) {
+    mouse.down = false;
+    if (!dragFrom || screen !== "night") { dragFrom = null; return; }
+    var m = local(e), to = WEB.attachAt(w, m.x, m.y, 18), from = dragFrom;
+    dragFrom = null;
+    if (!to) { if (Math.hypot(m.x - from.x, m.y - from.y) > 20) { flash("End a strand on a knot or another strand.", COL.dim); sfx("bad"); } return; }
+    // the start may have moved with the web: find it again
+    var start = from.pt !== undefined ? { pt: from.pt, x: w.pts[from.pt].x, y: w.pts[from.pt].y } : WEB.attachAt(w, from.x, from.y, 18);
+    var L = Math.hypot(to.x - start.x, to.y - start.y), err = WEB.strand(w, start, to);
+    if (err) { if (err !== "too short") { flash(cap(err) + ".", COL.bad); sfx("bad"); } }
+    else pluck(L);
+  });
+  function cutAt(m) {
+    var at = WEB.attachAt(w, m.x, m.y, 14);
+    if (at && at.seg !== undefined) { WEB.breakSeg(w, at.seg); sfx("snap"); }
+  }
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+  window.addEventListener("keydown", function (e) {
+    var k = e.key.toLowerCase();
+    if (screen === "night") {
+      if (k === "escape" || k === "p") { if (helpOpen) helpOpen = false; else paused = !paused; }
+      else if (k === "s") tool = tool === "spiral" ? "strand" : "spiral";
+      else if ((k === " " || k === "enter") && dawn && dawn.t > 0.8) { dawn = null; startNight(); e.preventDefault(); }
+    }
+    if (screen === "journal" && k === "escape") screen = journalFrom === "night" ? "night" : journalFrom;
+  });
+  window.addEventListener("blur", function () { if (screen === "night" && !dawn) paused = true; });
+
+  // hooks for the screenshot tool and tests
+  window.GLOWSILK_APP = {
+    edition: ED, game: function () { return g; }, world: function () { return w; }, title: function () { return titleW; },
+    start: function () { startNight(); msg = null; }, screen: function (s) { if (s) screen = s; return screen; }, setGame: function (str) { g = WEB.load(str); hasSave = true; },
+    run: function (sec) { for (var t = 0; t < sec && !w.over; t += 1 / 60) { WEB.step(w, 1 / 60); w.events.forEach(function (e) { if (e.e === "dawn") dawn = { t: 0, sum: w.summary }; }); w.events.length = 0; } },
+    hover: function (x, y) { mouse.x = x; mouse.y = y; }, help: function (v) { helpOpen = v; }, settings: settings, tool: function (t) { tool = t; }, endNight: function () { WEB.end(w); dawn = { t: 1, sum: w.summary }; }
+  };
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1923 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REMELD</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0c1a14; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; outline: none; }
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0"></canvas>
+<script>window.REMELD_EDITION = "demo";</script>
+<script>
+// rummy.js — REMELD: tiles, melds, and how a hand scores.
+// Pure logic, shared by the page, the bot and the tests.
+(function (root) {
+  "use strict";
+
+  var COLORS = [
+    { key: "ruby", name: "Ruby", hex: "#d1423b", mark: "circle" },
+    { key: "sapphire", name: "Sapphire", hex: "#2c6bc9", mark: "triangle" },
+    { key: "amber", name: "Amber", hex: "#d98c12", mark: "square" },
+    { key: "onyx", name: "Onyx", hex: "#26252e", mark: "diamond" }
+  ];
+  var FINISHES = {
+    gold: { name: "Gold", desc: "+$2 when played" },
+    glass: { name: "Glass", desc: "x1.5 mult when played; 1 in 4 chance to shatter" },
+    marble: { name: "Marble", desc: "+25 chips when played" },
+    lucky: { name: "Lucky", desc: "1 in 3 chance of +10 mult when played" },
+    steel: { name: "Steel", desc: "x1.5 mult while it stays in your rack" },
+    ivory: { name: "Ivory", desc: "counts as every color" }
+  };
+
+  // meld types: base chips and mult at level 1, and what each level adds
+  var TYPES = {
+    TRIO: { name: "Trio", chips: 10, mult: 2, lc: 10, lm: 1, drink: "Gin Fizz" },
+    QUARTET: { name: "Quartet", chips: 30, mult: 4, lc: 20, lm: 2, drink: "Sidecar" },
+    RUN: { name: "Run", chips: 10, mult: 2, lc: 10, lm: 1, drink: "Highball" },
+    LONGRUN: { name: "Long Run", chips: 20, mult: 3, lc: 15, lm: 1, drink: "Old Fashioned" },
+    BIGRUN: { name: "Big Run", chips: 35, mult: 4, lc: 20, lm: 2, drink: "Manhattan" },
+    GRANDRUN: { name: "Grand Run", chips: 50, mult: 5, lc: 25, lm: 2, drink: "Sazerac" },
+    LADDER: { name: "Ladder", chips: 150, mult: 13, lc: 50, lm: 4, drink: "French 75" }
+  };
+  var TYPE_KEYS = Object.keys(TYPES);
+  var RUMMY_TILES = 7;
+  function isGroupType(t) { return t === "TRIO" || t === "QUARTET"; }
+  function runType(k) { return k === 3 ? "RUN" : k === 4 ? "LONGRUN" : k === 5 ? "BIGRUN" : k === 13 ? "LADDER" : "GRANDRUN"; }
+  function typeValue(type, levels) {
+    var T = TYPES[type], l = (levels && levels[type]) || 1;
+    return { chips: T.chips + T.lc * (l - 1), mult: T.mult + T.lm * (l - 1) };
+  }
+
+  // --- what a set of tiles makes ---
+  // rules: { minRun } ; returns { valid, type, color, number, values{id:n}, why }
+  function asRun(tiles, rules) {
+    var k = tiles.length, minRun = (rules && rules.minRun) || 3;
+    if (k < minRun || k > 13) return null;
+    var color = -1, nums = {}, lo = 99, hi = 0, real = 0;
+    for (var i = 0; i < k; i++) {
+      var t = tiles[i];
+      if (t.wild) continue;
+      if (t.fin !== "ivory") { if (color >= 0 && color !== t.c) return null; color = t.c; }
+      if (nums[t.n]) return null;
+      nums[t.n] = 1; real++;
+      lo = Math.min(lo, t.n); hi = Math.max(hi, t.n);
+    }
+    var start;
+    if (!real) start = 14 - k;
+    else {
+      if (hi - lo + 1 > k) return null;
+      start = Math.min(lo, 14 - k);
+      if (start + k - 1 < hi) return null;
+    }
+    // wilds take the missing numbers, lowest first
+    var values = {}, free = [];
+    for (var v = start; v < start + k; v++) if (!nums[v]) free.push(v);
+    tiles.forEach(function (t) { values[t.id] = t.wild ? free.shift() : t.n; });
+    return { valid: true, type: runType(k), color: color, number: 0, start: start, values: values };
+  }
+  function asGroup(tiles) {
+    var k = tiles.length;
+    if (k < 3 || k > 4) return null;
+    var num = 0, cols = {}, ivory = 0;
+    for (var i = 0; i < k; i++) {
+      var t = tiles[i];
+      if (t.wild) continue;
+      if (num && t.n !== num) return null;
+      num = t.n;
+      if (t.fin === "ivory") { ivory++; continue; }
+      if (cols[t.c]) return null;
+      cols[t.c] = 1;
+    }
+    var values = {};
+    tiles.forEach(function (t) { values[t.id] = num || 13; });
+    return { valid: true, type: k === 4 ? "QUARTET" : "TRIO", color: -1, number: num || 13, values: values };
+  }
+  function analyze(tiles, rules, levels) {
+    var r = asRun(tiles, rules), g = asGroup(tiles);
+    if (r && g) {
+      var vr = typeValue(r.type, levels), vg = typeValue(g.type, levels);
+      return vr.chips * vr.mult >= vg.chips * vg.mult ? r : g;
+    }
+    if (r || g) return r || g;
+    var why = tiles.length < 3 ? "a meld needs 3 tiles" : "not a run or a group";
+    if (tiles.length >= 3 && rules && rules.minRun > 3 && asRun(tiles, { minRun: 3 })) why = "runs must be " + rules.minRun + " long tonight";
+    return { valid: false, why: why };
+  }
+  // display order: runs by number, groups by color
+  function sortMeld(tiles, info) {
+    var copy = tiles.slice();
+    if (info && info.valid && info.values) copy.sort(function (a, b) { return info.values[a.id] - info.values[b.id] || a.c - b.c; });
+    else copy.sort(function (a, b) { return (a.wild ? 99 : a.n) - (b.wild ? 99 : b.n) || a.c - b.c; });
+    return copy;
+  }
+
+  // --- rearranged tiles ---
+  // a table tile counts as rearranged when the table tiles it now shares a meld with are not the ones it started with
+  function rearranged(startMelds, endMelds, placedIds) {
+    var placed = {}, startOf = {}, out = [];
+    placedIds.forEach(function (id) { placed[id] = 1; });
+    startMelds.forEach(function (m, i) { m.forEach(function (t) { startOf[t.id] = i; }); });
+    endMelds.forEach(function (m) {
+      var tableIds = m.filter(function (t) { return !placed[t.id] && startOf[t.id] !== undefined; }).map(function (t) { return t.id; });
+      tableIds.forEach(function (id) {
+        var orig = startMelds[startOf[id]].map(function (t) { return t.id; });
+        var same = orig.length === tableIds.length && orig.every(function (o) { return tableIds.indexOf(o) >= 0; });
+        if (!same) out.push(id);
+      });
+    });
+    return out;
+  }
+
+  // --- scoring a hand ---
+  // ctx: { melds:[[tiles]], startMelds:[[tiles]], placed:[tiles in play order], rack:[tiles left], levels, rules, regs:[{def,st}],
+  //        handNo, handsLeft, drawsUsed, rng, run }
+  // returns { chips, mult, total, steps:[...], money, broken:[ids], rummy, affected:[meld indexes], infos }
+  function scoreHand(ctx) {
+    var rules = ctx.rules || {}, levels = ctx.levels || {}, regs = ctx.regs || [], rng = ctx.rng || Math.random;
+    var placedIds = ctx.placed.map(function (t) { return t.id; }), placedSet = {};
+    placedIds.forEach(function (id) { placedSet[id] = 1; });
+    var moved = rearranged(ctx.startMelds, ctx.melds, placedIds), movedSet = {};
+    moved.forEach(function (id) { movedSet[id] = 1; });
+    var S = { chips: 0, mult: 0, steps: [], money: 0, broken: [] };
+    function add(src, eff, text, ref) {
+      if (eff.chips) S.chips += eff.chips;
+      if (eff.mult) S.mult += eff.mult;
+      if (eff.xmult) S.mult *= eff.xmult;
+      if (eff.money) S.money += eff.money;
+      S.steps.push({ src: src, chips: eff.chips || 0, mult: eff.mult || 0, xmult: eff.xmult || 0, money: eff.money || 0, text: text, ref: ref, after: { chips: S.chips, mult: S.mult } });
+    }
+    var infos = ctx.melds.map(function (m) { return analyze(m, rules, levels); });
+    var affected = [];
+    ctx.melds.forEach(function (m, i) {
+      if (m.some(function (t) { return placedSet[t.id] || movedSet[t.id]; })) affected.push(i);
+    });
+    var hand = { placed: ctx.placed, melds: ctx.melds, infos: infos, affected: affected, moved: moved, rack: ctx.rack, handNo: ctx.handNo || 1,
+      handsLeft: ctx.handsLeft || 0, drawsUsed: ctx.drawsUsed || 0, rummy: ctx.placed.length >= RUMMY_TILES, sweep: ctx.rack.length === 0 && ctx.placed.length > 0, rules: rules, run: ctx.run, table: ctx.table };
+    hand.types = affected.map(function (i) { return infos[i].type; });
+    hand.rng = rng; hand.regs = regs;
+    hand.movedTiles = [];
+    ctx.melds.forEach(function (m) { m.forEach(function (t) { if (movedSet[t.id]) hand.movedTiles.push(t); }); });
+    hand.colorsPlaced = {};
+    ctx.placed.forEach(function (t) { if (!t.wild) hand.colorsPlaced[t.c] = 1; });
+    function debuffed(t) {
+      if (t.wild) return false;
+      if (rules.debuffColor !== undefined && t.c === rules.debuffColor && t.fin !== "ivory") return true;
+      if (rules.ceiling && t.n > rules.ceiling) return true;
+      return false;
+    }
+    // 1. the melds you made or changed
+    S.mult = 1;
+    affected.forEach(function (i) {
+      var info = infos[i];
+      if (rules.noGroups && isGroupType(info.type)) { S.steps.push({ src: "rule", text: TYPES[info.type].name + ": groups don't score tonight", ref: { meld: i }, chips: 0, mult: 0, after: { chips: S.chips, mult: S.mult } }); return; }
+      var v = typeValue(info.type, levels);
+      add("meld", { chips: v.chips, mult: v.mult }, TYPES[info.type].name, { meld: i });
+      regs.forEach(function (r, ri) { if (r.def.meld) { var e = r.def.meld(r, info, hand, ctx.melds[i]); if (e) add("reg", e, r.def.name, { reg: ri, meld: i }); } });
+    });
+    // 2. each tile you played, in table order
+    var order = [];
+    ctx.melds.forEach(function (m, i) { m.forEach(function (t) { if (placedSet[t.id]) order.push({ t: t, meld: i }); }); });
+    order.forEach(function (o) {
+      var t = o.t;
+      if (debuffed(t)) { S.steps.push({ src: "rule", text: "no score", ref: { tile: t.id }, chips: 0, mult: 0, after: { chips: S.chips, mult: S.mult } }); return; }
+      if (!t.wild) add("tile", { chips: t.n }, "+" + t.n, { tile: t.id });
+      if (t.fin === "marble") add("tile", { chips: 25 }, "Marble", { tile: t.id });
+      if (t.fin === "lucky" && rng() < 1 / 3 * (hand.run && hand.run.luckBoost ? 2 : 1)) add("tile", { mult: 10 }, "Lucky!", { tile: t.id });
+      if (t.fin === "gold") add("tile", { money: 2 + (hand.run && hand.run.goldBonus || 0) }, "Gold", { tile: t.id });
+      if (t.fin === "glass") {
+        add("tile", { xmult: 1.5 }, "Glass", { tile: t.id });
+        if (!(hand.run && hand.run.glassSafe) && rng() < 0.25) S.broken.push(t.id);
+      }
+      regs.forEach(function (r, ri) { if (r.def.tile) { var e = r.def.tile(r, t, hand); if (e) add("reg", e, r.def.name, { reg: ri, tile: t.id }); } });
+    });
+    // 3. rearranging
+    if (moved.length && !rules.noRemeld) {
+      add("remeld", { mult: moved.length }, "Remeld x" + moved.length, { moved: moved });
+    }
+    // 4. tiles kept in the rack
+    ctx.rack.forEach(function (t) { if (t.fin === "steel" && !debuffed(t)) add("held", { xmult: 1.5 }, "Steel", { tile: t.id }); });
+    // 5. the regulars, left to right
+    regs.forEach(function (r, ri) { if (r.def.hand) { var e = r.def.hand(r, hand, S); if (e) add("reg", e, r.def.name, { reg: ri }); } });
+    // 6. going out
+    // 6. a big hand: RUMMY (7+ tiles), or a CLEAN SWEEP (the rack emptied)
+    if (hand.rummy || hand.sweep) {
+      var x = hand.sweep ? 3 : 2;
+      regs.forEach(function (r) { if (r.def.rummyX) x += r.def.rummyX; });
+      add("rummy", { xmult: x }, hand.sweep ? "CLEAN SWEEP!" : "RUMMY!", {});
+    }
+    S.total = Math.floor(S.chips * S.mult);
+    S.rummy = hand.rummy || hand.sweep; S.sweep = hand.sweep; S.affected = affected; S.infos = infos; S.moved = moved; S.hand = hand;
+    return S;
+  }
+
+  var api = { RUMMY_TILES: RUMMY_TILES, COLORS: COLORS, FINISHES: FINISHES, TYPES: TYPES, TYPE_KEYS: TYPE_KEYS, isGroupType: isGroupType, typeValue: typeValue,
+    analyze: analyze, sortMeld: sortMeld, rearranged: rearranged, scoreHand: scoreHand };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.RUMMY = api;
+})(this);
+
+</script>
+<script>
+// content.js — REMELD: the regulars, the drinks, the tools, the house rules and the perks.
+(function (root) {
+  "use strict";
+  var R = typeof module !== "undefined" && module.exports ? require("./rummy.js") : root.RUMMY;
+  var isGroup = R.isGroupType;
+  function isLongRun(t) { return t === "BIGRUN" || t === "GRANDRUN" || t === "LADDER"; }
+  function colorTile(c) { return function (r, t) { return !t.wild && t.c === c ? { mult: 3 } : null; }; }
+  function neighbor(r, hand) { var i = hand.regs.indexOf(r); var n = hand.regs[i + 1]; return n && n.def.id !== "MIMIC" ? n : null; }
+
+  // rarity: 1 common, 2 uncommon, 3 rare. demo: offered in the free demo
+  var REGULARS = [
+    { id: "BARTENDER", name: "The Bartender", rarity: 1, cost: 4, demo: 1, desc: "+4 mult", hand: function () { return { mult: 4 }; } },
+    { id: "RUBY", name: "Ruby Rose", rarity: 1, cost: 4, demo: 1, desc: "Each Ruby tile played: +3 mult", tile: colorTile(0) },
+    { id: "SAPPHIRE", name: "Sapphire Sam", rarity: 1, cost: 4, demo: 1, desc: "Each Sapphire tile played: +3 mult", tile: colorTile(1) },
+    { id: "TRIOTOM", name: "Trio Tom", rarity: 1, cost: 5, demo: 1, desc: "Each group you make or change: +6 mult", meld: function (r, info) { return isGroup(info.type) ? { mult: 6 } : null; } },
+    { id: "RUNNER", name: "Runner Rita", rarity: 1, cost: 5, demo: 1, desc: "Each run you make or change: +5 mult", meld: function (r, info) { return !isGroup(info.type) ? { mult: 5 } : null; } },
+    { id: "LOWLARRY", name: "Low Larry", rarity: 1, cost: 4, demo: 1, desc: "Tiles 1 to 5 played: +10 chips each", tile: function (r, t) { return !t.wild && t.n <= 5 ? { chips: 10 } : null; } },
+    { id: "HIGHHATTIE", name: "High Hattie", rarity: 1, cost: 4, demo: 1, desc: "Tiles 10 to 13 played: +2 mult each", tile: function (r, t) { return !t.wild && t.n >= 10 ? { mult: 2 } : null; } },
+    { id: "PENNY", name: "Penny Pincher", rarity: 1, cost: 4, demo: 1, desc: "End of table: +$1 for each draw you didn't use", endTable: function (r, tb) { return tb.drawsLeft; } },
+    { id: "GENEROUS", name: "Generous Gus", rarity: 1, cost: 5, demo: 1, desc: "+2 mult for each tile you play this hand", hand: function (r, h) { return { mult: 2 * h.placed.length }; } },
+    { id: "MOVER", name: "The Mover", rarity: 2, cost: 6, demo: 1, desc: "Each tile you rearrange: +2 more mult", hand: function (r, h) { return h.moved.length ? { mult: 2 * h.moved.length } : null; } },
+    { id: "ARCHITECT", name: "The Architect", rarity: 2, cost: 6, demo: 1, desc: "+15 chips for each meld on the table", hand: function (r, h) { return { chips: 15 * h.melds.length }; } },
+    { id: "LADDERLIL", name: "Ladder Lil", rarity: 2, cost: 7, demo: 1, desc: "Runs of 5 or more: x2 mult", meld: function (r, info) { return isLongRun(info.type) ? { xmult: 2 } : null; } },
+    { id: "SINGLEMALT", name: "Single Malt", rarity: 2, cost: 7, demo: 1, desc: "If you play exactly one tile: x3 mult", hand: function (r, h) { return h.placed.length === 1 ? { xmult: 3 } : null; } },
+    { id: "SLOWBURN", name: "Slow Burn", rarity: 2, cost: 6, demo: 1, desc: "Gains +1 mult for every hand you play", scale: true,
+      hand: function (r) { return r.st.v ? { mult: r.st.v } : null; }, after: function (r) { r.st.v = (r.st.v || 0) + 1; }, show: function (r) { return "+" + (r.st.v || 0) + " mult"; } },
+    { id: "STEADY", name: "Steady Hand", rarity: 2, cost: 5, demo: 1, desc: "+1 draw at every table", passive: function (s) { s.draws++; } },
+    
+  ];
+
+  var DRINKS = R.TYPE_KEYS.map(function (k) { return { id: "D_" + k, kind: "drink", type: k, name: R.TYPES[k].drink, cost: 3, desc: "Level up " + R.TYPES[k].name + " (+" + R.TYPES[k].lc + " chips, +" + R.TYPES[k].lm + " mult)" }; });
+
+  // tools work on tiles selected in your rack (they change those tiles in your bag for good)
+  var TOOLS = [
+    { id: "CHISEL", name: "Chisel", cost: 3, pick: 2, desc: "Add 1 to up to 2 selected tiles", apply: function (t) { if (!t.wild && t.n < 13) t.n++; } },
+    { id: "FILE", name: "File", cost: 3, pick: 2, desc: "Take 1 from up to 2 selected tiles", apply: function (t) { if (!t.wild && t.n > 1) t.n--; } },
+    { id: "PAINT0", name: "Ruby Paint", cost: 3, pick: 3, desc: "Paint up to 3 selected tiles Ruby", apply: function (t) { t.c = 0; } },
+    { id: "PAINT1", name: "Sapphire Paint", cost: 3, pick: 3, desc: "Paint up to 3 selected tiles Sapphire", apply: function (t) { t.c = 1; } },
+    { id: "PAINT2", name: "Amber Paint", cost: 3, pick: 3, desc: "Paint up to 3 selected tiles Amber", apply: function (t) { t.c = 2; } },
+    { id: "PAINT3", name: "Onyx Paint", cost: 3, pick: 3, desc: "Paint up to 3 selected tiles Onyx", apply: function (t) { t.c = 3; } },
+    { id: "GILD", name: "Gold Leaf", cost: 3, pick: 1, desc: "Make 1 selected tile Gold (+$2 when played)", apply: function (t) { t.fin = "gold"; } },
+    { id: "GLAZE", name: "Glaze", cost: 3, pick: 2, desc: "Make up to 2 selected tiles Glass (x1.5 mult)", apply: function (t) { t.fin = "glass"; } },
+    { id: "MARBLE", name: "Marble Dust", cost: 3, pick: 2, desc: "Make up to 2 selected tiles Marble (+25 chips)", apply: function (t) { t.fin = "marble"; } },
+    { id: "LUCKY", name: "Clover", cost: 3, pick: 2, desc: "Make up to 2 selected tiles Lucky", apply: function (t) { t.fin = "lucky"; } },
+    { id: "STEEL", name: "Steel Plate", cost: 3, pick: 1, desc: "Make 1 selected tile Steel (x1.5 mult while held)", apply: function (t) { t.fin = "steel"; } },
+    { id: "IVORY", name: "Ivory Wash", cost: 4, pick: 1, desc: "Make 1 selected tile Ivory (every color)", apply: function (t) { t.fin = "ivory"; } },
+    { id: "TORCH", name: "Torch", cost: 3, pick: 2, desc: "Burn up to 2 selected tiles out of your bag", destroy: true },
+    { id: "MOULD", name: "Mould", cost: 4, pick: 1, desc: "Add a copy of 1 selected tile to your bag", copy: true },
+    { id: "WILDINK", name: "Wild Ink", cost: 5, pick: 1, desc: "Turn 1 selected tile into a Wild", apply: function (t) { t.wild = true; t.fin = null; } },
+    { id: "TIPJAR", name: "Tip Jar", cost: 3, pick: 0, desc: "Double your money (up to +$20)", money: true }
+  ];
+  TOOLS.forEach(function (t) { t.kind = "tool"; });
+
+  // the third table of every night has a house rule
+  var BOSSES = [
+    { id: "PURIST", name: "The Purist", desc: "Wild tiles can't be played", rules: { noWild: true } },
+    { id: "STICKLER", name: "The Stickler", desc: "Runs must be at least 4 long", rules: { minRun: 4 } },
+    { id: "SNOB", name: "The Snob", desc: "Groups score nothing", rules: { noGroups: true } },
+    { id: "COLOR", name: "The Critic", desc: "One color scores nothing", rules: { debuffColor: 0 }, pickColor: true },
+    { id: "CRAMPED", name: "Cramped Quarters", desc: "2 fewer tiles in your rack", rules: { rackMinus: 2 } },
+    { id: "LASTCALL", name: "Last Call", desc: "Only 3 hands", rules: { handsMinus: 1 } },
+    { id: "ROPE", name: "Velvet Rope", desc: "The house's melds can't be touched", rules: { lockHouse: true } },
+    { id: "MISER", name: "The Miser", desc: "No draws", rules: { noDraws: true } },
+    { id: "CEILING", name: "Low Ceiling", desc: "Tiles above 9 score no chips", rules: { ceiling: 9 } },
+    { id: "ACCOUNTANT", name: "The Accountant", desc: "Every hand must play at least 3 tiles", rules: { minPlay: 3 } },
+    { id: "TAXMAN", name: "The Taxman", desc: "Lose $1 for every tile you play", rules: { tax: 1 } },
+    { id: "STILL", name: "Still Waters", desc: "Rearranging earns no bonus", rules: { noRemeld: true } }
+  ];
+  var FINAL_BOSS = { id: "OWNER", name: "The Owner", desc: "Runs must be 4 long, and only 3 hands", rules: { minRun: 4, handsMinus: 1 } };
+
+  var PERKS = [
+    { id: "LICENSE", name: "Late License", cost: 10, desc: "+1 hand at every table", apply: function (s) { s.hands++; } },
+    { id: "FRESHDECK", name: "Fresh Rack", cost: 10, desc: "+1 draw at every table", apply: function (s) { s.draws++; } },
+    { id: "WIDERACK", name: "Wide Rack", cost: 10, desc: "+1 tile in your rack", apply: function (s) { s.rack++; } },
+    { id: "VIP", name: "VIP Lounge", cost: 10, desc: "+1 seat for a regular", apply: function (s) { s.slots++; } },
+    { id: "HAPPYHOUR", name: "Happy Hour", cost: 10, desc: "Everything in the shop costs 25% less", apply: function (s) { s.discount = 0.75; } },
+    { id: "SAVINGS", name: "Savings Book", cost: 10, desc: "Interest can reach $10 instead of $5", apply: function (s) { s.interestCap = 10; } },
+    { id: "BACKBAR", name: "Back Bar", cost: 8, desc: "+1 slot for drinks and tools", apply: function (s) { s.consSlots++; } },
+    { id: "SHUFFLE", name: "Lucky Shuffle", cost: 8, desc: "Shop rerolls cost $2 less", apply: function (s) { s.rerollOff = 2; } }
+  ];
+
+  var REG = {}; REGULARS.forEach(function (r) { REG[r.id] = r; });
+  var CONS = {}; DRINKS.concat(TOOLS).forEach(function (c) { CONS[c.id] = c; });
+  var BOSS = {}; BOSSES.concat([FINAL_BOSS]).forEach(function (b) { BOSS[b.id] = b; });
+  var PERK = {}; PERKS.forEach(function (p) { PERK[p.id] = p; });
+
+  var api = { REGULARS: REGULARS, DRINKS: DRINKS, TOOLS: TOOLS, BOSSES: BOSSES, FINAL_BOSS: FINAL_BOSS, PERKS: PERKS, REG: REG, CONS: CONS, BOSS: BOSS, PERK: PERK };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.CONTENT = api;
+})(this);
+
+</script>
+<script>
+// run.js — REMELD: a run of eight nights. Tables, hands, draws, the cash-out, the shop.
+(function (root) {
+  "use strict";
+  var node = typeof module !== "undefined" && module.exports;
+  var R = node ? require("./rummy.js") : root.RUMMY, C = node ? require("./content.js") : root.CONTENT;
+
+  var NIGHTS = 8;
+  // the score a table asks for: the night's base, x1 / x1.5 / x2 for the three tables
+  var BASE = [240, 680, 1400, 2500, 3900, 5200, 7000, 9000];
+  var TABLE_X = [1, 1.3, 1.1];
+  var STAKES = [
+    { name: "Penny Stakes", desc: "The standard game", x: 1 },
+    { name: "Nickel Stakes", desc: "Tables ask for 25% more", x: 1.25 },
+    { name: "Dime Stakes", desc: "...and one draw fewer", x: 1.25, draws: -1 },
+    { name: "Dollar Stakes", desc: "...and tables ask for 50% more", x: 1.5, draws: -1 },
+    { name: "High Stakes", desc: "...and one hand fewer", x: 1.5, draws: -1, hands: -1 }
+  ];
+  var DEMO_NIGHTS = 2;
+
+  function rnd(run) {
+    run.rs = (run.rs + 0x6D2B79F5) >>> 0;
+    var t = run.rs;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+  function pick(run, arr) { return arr[Math.floor(rnd(run) * arr.length)]; }
+  function shuffle(run, arr) { for (var i = arr.length - 1; i > 0; i--) { var j = Math.floor(rnd(run) * (i + 1)); var x = arr[i]; arr[i] = arr[j]; arr[j] = x; } return arr; }
+
+  function tile(run, n, c, extra) { var t = { id: run.nextId++, n: n, c: c, wild: false, fin: null }; if (extra) for (var k in extra) t[k] = extra[k]; return t; }
+  function newBag(run) {
+    var bag = [];
+    for (var c = 0; c < 4; c++) for (var n = 1; n <= 13; n++) bag.push(tile(run, n, c));
+    bag.push(tile(run, 0, 0, { wild: true })); bag.push(tile(run, 0, 1, { wild: true }));
+    return bag;
+  }
+
+  function regPool(run) { return C.REGULARS.filter(function (r) { return !run.demo || r.demo; }); }
+  function newRun(opts) {
+    opts = opts || {};
+    var run = { v: 1, seed: (opts.seed >>> 0) || 1, rs: (opts.seed >>> 0) || 1, demo: !!opts.demo, stake: opts.stake || 0, nextId: 1, night: 1, tableNo: 0,
+      money: 4, regs: [], cons: [], levels: {}, perks: [], phase: "table", endless: false,
+      stats: { hands: 0, rummies: 0, best: 0, moved: 0, tables: 0 }, bosses: [], tb: null, shop: null, pack: null };
+    run.bag = newBag(run);
+    var pool = C.BOSSES.slice();
+    shuffle(run, pool);
+    for (var i = 0; i < NIGHTS; i++) run.bosses.push(i === NIGHTS - 1 ? C.FINAL_BOSS.id : pool[i].id);
+    startTable(run);
+    return run;
+  }
+  function nightsTotal(run) { return run.demo ? DEMO_NIGHTS : NIGHTS; }
+
+  function stats(run) {
+    var st = STAKES[run.stake] || STAKES[0];
+    var s = { hands: 4 + (st.hands || 0), draws: 3 + (st.draws || 0), rack: 10, slots: 5, consSlots: 2, discount: 1, interestCap: 5, rerollOff: 0,
+      glassSafe: false, goldBonus: 0, luckBoost: false };
+    run.perks.forEach(function (p) { C.PERK[p].apply(s); });
+    run.regs.forEach(function (r) { var d = C.REG[r.id]; if (d.passive) d.passive(s); });
+    return s;
+  }
+  function target(run, night, tableNo) {
+    var base = night <= NIGHTS ? BASE[night - 1] : BASE[NIGHTS - 1] * Math.pow(1.7, night - NIGHTS);
+    var x = (STAKES[run.stake] || STAKES[0]).x;
+    return Math.round(base * TABLE_X[tableNo] * x / 10) * 10;
+  }
+  function bossOf(run, night) {
+    if (night > NIGHTS) return C.BOSSES[(night * 7) % C.BOSSES.length];
+    return C.BOSS[run.bosses[night - 1]];
+  }
+
+  // two melds the house lays before you sit down
+  function houseMeld(run, rules) {
+    var house = { house: true };
+    if (rnd(run) < 0.5) {
+      var c = Math.floor(rnd(run) * 4), len = Math.max((rules && rules.minRun) || 3, 3 + (rnd(run) < 0.35 ? 1 : 0)), s = 1 + Math.floor(rnd(run) * (14 - len));
+      var m = [];
+      for (var i = 0; i < len; i++) m.push(tile(run, s + i, c, house));
+      return m;
+    }
+    var n = 1 + Math.floor(rnd(run) * 13), cols = shuffle(run, [0, 1, 2, 3]).slice(0, rnd(run) < 0.3 ? 4 : 3);
+    return cols.map(function (c) { return tile(run, n, c, house); });
+  }
+
+  function startTable(run) {
+    var s = stats(run), boss = run.tableNo === 2 ? bossOf(run, run.night) : null, rules = {};
+    if (boss) {
+      for (var k in boss.rules) rules[k] = boss.rules[k];
+      if (boss.pickColor) rules.debuffColor = Math.floor(rnd(run) * 4);
+    }
+    var hands = Math.max(1, s.hands - (rules.handsMinus || 0)), draws = rules.noDraws ? 0 : Math.max(0, s.draws);
+    var tb = { target: target(run, run.night, run.tableNo), score: 0, hands: hands, handsLeft: hands, draws: draws, drawsLeft: draws, handNo: 1, drawsUsed: 0,
+      rackSize: Math.max(4, s.rack - (rules.rackMinus || 0)), rules: rules, boss: boss ? boss.id : null, pile: shuffle(run, run.bag.slice()), rack: [], melds: [], last: null };
+    tb.melds.push(houseMeld(run, rules)); tb.melds.push(houseMeld(run, rules));
+    tb.houseSets = tb.melds.map(function (m) { return m.map(function (t) { return t.id; }); });
+    run.tb = tb; run.phase = "table";
+    refill(run);
+    return tb;
+  }
+  function refill(run) { var tb = run.tb; while (tb.rack.length < tb.rackSize && tb.pile.length) tb.rack.push(tb.pile.pop()); }
+
+  // every tile at the table, by id
+  function tileMap(run) {
+    var m = {}, tb = run.tb;
+    tb.rack.forEach(function (t) { m[t.id] = t; });
+    tb.melds.forEach(function (ml) { ml.forEach(function (t) { m[t.id] = t; }); });
+    return m;
+  }
+
+  // checks a proposed table (melds as lists of tile ids). Returns { ok, error, melds, placed, rack, infos, bad:[meld index] }
+  function check(run, proposal) {
+    var tb = run.tb, map = tileMap(run), seen = {}, rules = tb.rules, levels = run.levels;
+    var onTable = {}, inRack = {};
+    tb.melds.forEach(function (m) { m.forEach(function (t) { onTable[t.id] = 1; }); });
+    tb.rack.forEach(function (t) { inRack[t.id] = 1; });
+    var melds = [], infos = [], bad = [], placed = [];
+    for (var i = 0; i < proposal.length; i++) {
+      var m = [];
+      for (var j = 0; j < proposal[i].length; j++) {
+        var id = proposal[i][j], t = map[id];
+        if (!t) return { ok: false, error: "unknown tile" };
+        if (seen[id]) return { ok: false, error: "a tile is used twice" };
+        seen[id] = 1;
+        m.push(t);
+        if (inRack[id]) placed.push(t);
+      }
+      if (!m.length) continue;
+      var info = R.analyze(m, rules, levels);
+      melds.push(R.sortMeld(m, info)); infos.push(info);
+      if (!info.valid) bad.push(melds.length - 1);
+    }
+    var missing = Object.keys(onTable).filter(function (id) { return !seen[id]; });
+    var res = { ok: false, melds: melds, infos: infos, bad: bad, placed: placed, rack: tb.rack.filter(function (t) { return !seen[t.id]; }) };
+    if (missing.length) { res.error = "tiles on the table must stay on the table"; return res; }
+    if (rules.lockHouse) {
+      var ok = tb.houseSets.every(function (hs) {
+        return melds.some(function (m) { return m.length === hs.length && hs.every(function (id) { return m.some(function (t) { return t.id === id; }); }); });
+      });
+      if (!ok) { res.error = "the house's melds can't be touched"; return res; }
+    }
+    if (!placed.length) { res.error = "play at least one tile from your rack"; return res; }
+    if (rules.minPlay && placed.length < rules.minPlay) { res.error = "play at least " + rules.minPlay + " tiles tonight"; return res; }
+    if (rules.noWild && placed.some(function (t) { return t.wild; })) { res.error = "the Purist won't allow wild tiles"; return res; }
+    if (bad.length) { res.error = infos[bad[0]].why; return res; }
+    res.ok = true;
+    return res;
+  }
+
+  function regCtx(run) { return run.regs.map(function (r) { return { def: C.REG[r.id], st: r.st, id: r.id }; }); }
+  function preview(run, proposal) {
+    var c = check(run, proposal);
+    if (!c.ok) return { check: c };
+    return { check: c, score: score(run, c, true) };
+  }
+  function score(run, c, dry) {
+    var tb = run.tb, s = stats(run), regs = regCtx(run);
+    if (dry) regs.forEach(function (r) { r.st = JSON.parse(JSON.stringify(r.st)); });
+    var saved = run.rs, fixed = 0.5;
+    var res = R.scoreHand({ melds: c.melds, startMelds: tb.melds, placed: c.placed, rack: c.rack, levels: run.levels, rules: tb.rules, regs: regs,
+      handNo: tb.handNo, handsLeft: tb.handsLeft - 1, drawsUsed: tb.drawsUsed, rng: dry ? function () { return fixed; } : function () { return rnd(run); }, run: s, table: tb });
+    if (dry) run.rs = saved;
+    res.regs = regs;
+    return res;
+  }
+
+  function play(run, proposal) {
+    var tb = run.tb;
+    if (run.phase !== "table") return { error: "not at a table" };
+    var c = check(run, proposal);
+    if (!c.ok) return { error: c.error, check: c };
+    var res = score(run, c, false);
+    tb.melds = c.melds;
+    tb.rack = c.rack;
+    tb.score += res.total;
+    var money = res.money - (tb.rules.tax ? tb.rules.tax * c.placed.length : 0);
+    run.money = Math.max(0, run.money + money);
+    res.moneyNet = money;
+    if (res.broken.length) run.bag = run.bag.filter(function (t) { return res.broken.indexOf(t.id) < 0; });
+    res.regs.forEach(function (r) { if (r.def.after) r.def.after(r, res.hand); });
+    run.regs.forEach(function (r, i) { r.st = res.regs[i].st; });
+    tb.handsLeft--; tb.handNo++;
+    run.stats.hands++; run.stats.moved += res.moved.length;
+    if (res.rummy) run.stats.rummies++;
+    run.stats.best = Math.max(run.stats.best, res.total);
+    tb.last = res;
+    refill(run);
+    settle(run);
+    return res;
+  }
+  // nothing to play: spend a hand, take two more tiles
+  function pass(run) {
+    var tb = run.tb;
+    if (run.phase !== "table" || tb.handsLeft <= 0) return false;
+    tb.handsLeft--; tb.handNo++;
+    for (var i = 0; i < 2 && tb.pile.length; i++) tb.rack.push(tb.pile.pop());
+    settle(run);
+    return true;
+  }
+  function draw(run, ids) {
+    var tb = run.tb;
+    if (run.phase !== "table" || tb.drawsLeft <= 0 || !ids.length || ids.length > 5) return false;
+    var out = tb.rack.filter(function (t) { return ids.indexOf(t.id) >= 0; });
+    if (out.length !== ids.length) return false;
+    tb.rack = tb.rack.filter(function (t) { return ids.indexOf(t.id) < 0; });
+    for (var i = 0; i < out.length && tb.pile.length; i++) tb.rack.push(tb.pile.pop());
+    tb.drawsLeft--; tb.drawsUsed++;
+    return true;
+  }
+  function settle(run) {
+    var tb = run.tb;
+    if (tb.score >= tb.target) { run.phase = "cashout"; run.cash = cashout(run); }
+    else if (tb.handsLeft <= 0) run.phase = "lost";
+  }
+  function cashout(run) {
+    var tb = run.tb, s = stats(run), lines = [];
+    lines.push({ text: ["Opening table", "Main table", "House table"][run.tableNo] + " won", money: [3, 4, 5][run.tableNo] });
+    if (tb.handsLeft) lines.push({ text: tb.handsLeft + " hand" + (tb.handsLeft > 1 ? "s" : "") + " to spare", money: tb.handsLeft });
+    var interest = Math.min(Math.floor(run.money / 5), s.interestCap);
+    if (interest) lines.push({ text: "Interest ($1 per $5)", money: interest });
+    run.regs.forEach(function (r) { var d = C.REG[r.id]; if (d.endTable) { var m = d.endTable(r, tb); if (m) lines.push({ text: d.name, money: m }); } });
+    var total = lines.reduce(function (a, l) { return a + l.money; }, 0);
+    run.stats.tables++;
+    return { lines: lines, total: total, paid: false };
+  }
+  function collect(run) {
+    if (run.phase !== "cashout" || run.cash.paid) return false;
+    run.money += run.cash.total; run.cash.paid = true;
+    var lastNight = run.tableNo === 2 && run.night >= nightsTotal(run) && !run.endless;
+    if (lastNight) { run.phase = run.demo ? "demoend" : "won"; return true; }
+    run.phase = "shop";
+    newShop(run);
+    return true;
+  }
+
+  // --- the shop ---
+  function price(run, base) { return Math.max(1, Math.ceil(base * stats(run).discount)); }
+  function rollReg(run, exclude) {
+    var owned = run.regs.map(function (r) { return r.id; }).concat(exclude || []);
+    var pool = regPool(run).filter(function (r) { return owned.indexOf(r.id) < 0; });
+    if (!pool.length) return null;
+    var x = rnd(run), rar = x < 0.65 ? 1 : x < 0.93 ? 2 : 3;
+    var p = pool.filter(function (r) { return r.rarity === rar; });
+    return pick(run, p.length ? p : pool).id;
+  }
+  function rollCons(run) { return rnd(run) < 0.45 ? pick(run, C.DRINKS).id : pick(run, C.TOOLS.filter(function (t) { return !run.demo || t.id !== "WILDINK"; })).id; }
+  function twoCons(run) { var a = rollCons(run), b = rollCons(run), g = 0; while (b === a && g++ < 10) b = rollCons(run); return [a, b]; }
+  function specialTile(run) {
+    var x = rnd(run), t = tile(run, 1 + Math.floor(rnd(run) * 13), Math.floor(rnd(run) * 4));
+    if (x < 0.12) { t.wild = true; t.n = 0; }
+    else t.fin = pick(run, ["gold", "glass", "marble", "lucky", "steel", "ivory", "marble", "lucky"]);
+    return t;
+  }
+  function newShop(run) {
+    var a = rollReg(run), b = rollReg(run, [a]);
+    run.shop = { regs: [a, b].filter(Boolean).map(function (id) { return { id: id, sold: false }; }),
+      bar: twoCons(run).map(function (id) { return { id: id, sold: false }; }),
+      packs: [pick(run, ["tiles", "bar", "tiles"]), pick(run, ["bar", "regulars", "tiles"])].map(function (k) { return { kind: k, sold: false }; }),
+      perk: run.perkOffer && run.perkOffer.night === run.night ? run.perkOffer.id : null, reroll: 5 };
+    if (!run.shop.perk && run.tableNo === 0) {
+      var left = C.PERKS.filter(function (p) { return run.perks.indexOf(p.id) < 0; });
+      if (left.length) { run.perkOffer = { night: run.night, id: pick(run, left).id }; run.shop.perk = run.perkOffer.id; }
+    }
+    if (run.shop.perk && run.perks.indexOf(run.shop.perk) >= 0) run.shop.perk = null;
+  }
+  var PACKS = { tiles: { name: "Tile Box", cost: 4, desc: "Pick 1 of 3 special tiles for your bag" }, bar: { name: "Bar Tab", cost: 4, desc: "Pick 1 of 3 drinks and tools" },
+    regulars: { name: "Guest List", cost: 6, desc: "Pick 1 of 2 regulars" } };
+  function regPrice(run, id) { return price(run, C.REG[id].cost); }
+  function consPrice(run, id) { return price(run, C.CONS[id].cost); }
+  function buyReg(run, i) {
+    var o = run.shop.regs[i], s = stats(run);
+    if (!o || o.sold || run.regs.length >= s.slots || run.money < regPrice(run, o.id)) return false;
+    run.money -= regPrice(run, o.id); o.sold = true;
+    run.regs.push({ id: o.id, st: {} });
+    return true;
+  }
+  function sellReg(run, i) {
+    var r = run.regs[i];
+    if (!r || (run.phase !== "shop" && run.phase !== "table")) return false;
+    run.money += Math.max(1, Math.floor(C.REG[r.id].cost / 2));
+    run.regs.splice(i, 1);
+    return true;
+  }
+  function moveReg(run, i, j) { if (i < 0 || j < 0 || i >= run.regs.length || j >= run.regs.length) return false; var r = run.regs.splice(i, 1)[0]; run.regs.splice(j, 0, r); return true; }
+  function buyCons(run, i) {
+    var o = run.shop.bar[i];
+    if (!o || o.sold || run.money < consPrice(run, o.id)) return false;
+    var d = C.CONS[o.id];
+    if (d.kind !== "drink" && run.cons.length >= stats(run).consSlots) return false;
+    run.money -= consPrice(run, o.id); o.sold = true;
+    if (d.kind === "drink") drink(run, d.type); else run.cons.push(o.id);
+    return true;
+  }
+  function drink(run, type) { run.levels[type] = (run.levels[type] || 1) + 1; }
+  function buyPerk(run) {
+    var id = run.shop.perk;
+    if (!id || run.money < price(run, C.PERK[id].cost)) return false;
+    run.money -= price(run, C.PERK[id].cost);
+    run.perks.push(id); run.shop.perk = null; run.perkOffer = null;
+    return true;
+  }
+  function reroll(run) {
+    var cost = Math.max(1, run.shop.reroll - stats(run).rerollOff);
+    if (run.money < cost) return false;
+    run.money -= cost; run.shop.reroll++;
+    var a = rollReg(run), b = rollReg(run, [a]);
+    run.shop.regs = [a, b].filter(Boolean).map(function (id) { return { id: id, sold: false }; });
+    return true;
+  }
+  function rerollCost(run) { return Math.max(1, run.shop.reroll - stats(run).rerollOff); }
+  function openPack(run, i) {
+    var o = run.shop.packs[i], P = PACKS[o && o.kind];
+    if (!o || o.sold || run.money < price(run, P.cost)) return false;
+    if (o.kind === "regulars" && run.regs.length >= stats(run).slots) return false;
+    run.money -= price(run, P.cost); o.sold = true;
+    var choices = [];
+    if (o.kind === "tiles") for (var k = 0; k < 3; k++) choices.push({ tile: specialTile(run) });
+    if (o.kind === "bar") for (k = 0; k < 3; k++) choices.push({ cons: rollCons(run) });
+    if (o.kind === "regulars") { var a = rollReg(run), b = rollReg(run, [a]); [a, b].filter(Boolean).forEach(function (id) { choices.push({ reg: id }); }); }
+    run.pack = { kind: o.kind, choices: choices };
+    return true;
+  }
+  function choose(run, i) {
+    var p = run.pack;
+    if (!p) return false;
+    if (i >= 0) {
+      var c = p.choices[i];
+      if (!c) return false;
+      if (c.tile) run.bag.push(c.tile);
+      if (c.cons) { var d = C.CONS[c.cons]; if (d.kind === "drink") drink(run, d.type); else if (run.cons.length < stats(run).consSlots) run.cons.push(c.cons); else return false; }
+      if (c.reg) { if (run.regs.length >= stats(run).slots) return false; run.regs.push({ id: c.reg, st: {} }); }
+    }
+    run.pack = null;
+    return true;
+  }
+  function leaveShop(run) {
+    if (run.phase !== "shop" || run.pack) return false;
+    run.tableNo++;
+    if (run.tableNo > 2) { run.tableNo = 0; run.night++; }
+    run.shop = null;
+    startTable(run);
+    return true;
+  }
+  function goEndless(run) { if (run.phase !== "won") return false; run.endless = true; run.phase = "shop"; newShop(run); return true; }
+
+  // tools and drinks from your slots. Tools act on tiles selected in your rack (at a table)
+  function useCons(run, i, ids) {
+    var id = run.cons[i], d = C.CONS[id];
+    if (!d) return { error: "nothing there" };
+    if (d.kind === "drink") { drink(run, d.type); run.cons.splice(i, 1); return { ok: true }; }
+    if (d.money) { run.money += Math.min(run.money, 20); run.cons.splice(i, 1); return { ok: true }; }
+    if (run.phase !== "table") return { error: "use tools at a table, on tiles in your rack" };
+    ids = ids || [];
+    var tiles = run.tb.rack.filter(function (t) { return ids.indexOf(t.id) >= 0; });
+    if (!tiles.length) return { error: "select tiles in your rack first" };
+    if (tiles.length > d.pick) return { error: "select at most " + d.pick };
+    if (d.destroy) {
+      run.bag = run.bag.filter(function (t) { return ids.indexOf(t.id) < 0; });
+      run.tb.rack = run.tb.rack.filter(function (t) { return ids.indexOf(t.id) < 0; });
+      refill(run);
+    } else if (d.copy) {
+      var src = tiles[0], cp = tile(run, src.n, src.c, { wild: src.wild, fin: src.fin });
+      run.bag.push(cp);
+    } else tiles.forEach(function (t) { d.apply(t); });
+    run.cons.splice(i, 1);
+    return { ok: true };
+  }
+  function sellCons(run, i) { if (!run.cons[i]) return false; run.money += 1; run.cons.splice(i, 1); return true; }
+
+  // --- saving: tiles are stored once (in the bag or the table) and referenced by id ---
+  function save(run) {
+    var tiles = {};
+    function keep(t) { tiles[t.id] = t; return t.id; }
+    var o = JSON.parse(JSON.stringify(run, function (k, v) { return k === "tb" || k === "bag" || k === "last" ? undefined : v; }));
+    o.bag = run.bag.map(keep);
+    if (run.tb) {
+      var tb = run.tb;
+      o.tb = { target: tb.target, score: tb.score, hands: tb.hands, handsLeft: tb.handsLeft, draws: tb.draws, drawsLeft: tb.drawsLeft, handNo: tb.handNo, drawsUsed: tb.drawsUsed,
+        rackSize: tb.rackSize, rules: tb.rules, boss: tb.boss, houseSets: tb.houseSets, pile: tb.pile.map(keep), rack: tb.rack.map(keep), melds: tb.melds.map(function (m) { return m.map(keep); }) };
+    }
+    o.tiles = tiles;
+    return JSON.stringify(o);
+  }
+  function load(str) {
+    var o = JSON.parse(str);
+    if (!o || o.v !== 1) throw new Error("not a REMELD save");
+    var T = o.tiles;
+    function get(id) { return T[id]; }
+    o.bag = o.bag.map(get);
+    if (o.tb) { o.tb.pile = o.tb.pile.map(get); o.tb.rack = o.tb.rack.map(get); o.tb.melds = o.tb.melds.map(function (m) { return m.map(get); }); o.tb.last = null; }
+    delete o.tiles;
+    return o;
+  }
+
+  var api = { NIGHTS: NIGHTS, BASE: BASE, STAKES: STAKES, DEMO_NIGHTS: DEMO_NIGHTS, PACKS: PACKS, newRun: newRun, stats: stats, target: target, bossOf: bossOf, nightsTotal: nightsTotal,
+    check: check, preview: preview, play: play, pass: pass, draw: draw, collect: collect, buyReg: buyReg, sellReg: sellReg, moveReg: moveReg, buyCons: buyCons, buyPerk: buyPerk,
+    reroll: reroll, rerollCost: rerollCost, openPack: openPack, choose: choose, leaveShop: leaveShop, goEndless: goEndless, useCons: useCons, sellCons: sellCons,
+    regPrice: regPrice, consPrice: consPrice, price: price, save: save, load: load, rnd: rnd, tileMap: tileMap };
+  if (node) module.exports = api;
+  else root.RUN = api;
+})(this);
+
+</script>
+<script>
+// planner.js — finds a good hand for the current table: melds from the rack, additions to the table,
+// borrowed end tiles, split runs. Used by the IDEA button and by the balance bot.
+(function (root) {
+  "use strict";
+  var R = typeof module !== "undefined" && module.exports ? require("./rummy.js") : root.RUMMY;
+  function valid(tiles, rules) { return R.analyze(tiles, rules, null).valid; }
+  function sortedRun(m, rules) { var info = R.analyze(m, rules, null); return info.valid && !R.isGroupType(info.type) ? R.sortMeld(m, info) : null; }
+
+  // all melds (3-5 tiles) that can be made from a pool of tiles; each must contain a "must" tile if given
+  function meldsFrom(pool, rules, need) {
+    var out = [], wild = pool.filter(function (t) { return t.wild; });
+    var real = pool.filter(function (t) { return !t.wild; });
+    // groups
+    var byN = {};
+    real.forEach(function (t) { (byN[t.n] = byN[t.n] || []).push(t); });
+    Object.keys(byN).forEach(function (n) {
+      var cols = {}; byN[n].forEach(function (t) { if (!cols[t.c]) cols[t.c] = t; });
+      var ts = Object.keys(cols).map(function (c) { return cols[c]; });
+      var cand = ts.concat(wild.slice(0, 1));
+      if (cand.length >= 3) {
+        if (cand.length >= 4) out.push(cand.slice(0, 4));
+        out.push(cand.slice(0, 3));
+      }
+    });
+    // runs
+    for (var c = 0; c < 4; c++) {
+      var have = {};
+      real.forEach(function (t) { if (t.c === c || t.fin === "ivory") { if (!have[t.n]) have[t.n] = t; } });
+      for (var s = 1; s <= 11; s++) for (var len = 3; len <= 6 && s + len - 1 <= 13; len++) {
+        var m = [], w = 0;
+        for (var v = s; v < s + len; v++) { if (have[v]) m.push(have[v]); else w++; }
+        if (w > wild.length || m.length < 2) continue;
+        m = m.concat(wild.slice(0, w));
+        out.push(m);
+      }
+    }
+    return out.filter(function (m) { return valid(m, rules) && (!need || m.some(need)); });
+  }
+
+  // one greedy hand: returns a proposal (list of id lists) or null
+  function planHand(run) {
+    var tb = run.tb, rules = tb.rules, lock = {};
+    if (rules.lockHouse) tb.houseSets.forEach(function (hs) { hs.forEach(function (id) { lock[id] = 1; }); });
+    var melds = tb.melds.map(function (m) { return m.slice(); }), rack = tb.rack.slice();
+    if (rules.noWild) rack = rack.filter(function (t) { return !t.wild; });
+    var placed = 0, inRack = {};
+    tb.rack.forEach(function (t) { inRack[t.id] = 1; });
+    function locked(m) { return m.some(function (t) { return lock[t.id]; }); }
+    function gain(tiles) { return tiles.reduce(function (a, t) { return a + (inRack[t.id] ? 12 + (t.wild ? 0 : t.n) : 4); }, 0); }
+    for (var step = 0; step < 10 && rack.length; step++) {
+      var best = null, bestG = 0;
+      // a. new melds from the rack
+      meldsFrom(rack, rules).forEach(function (m) { var g = gain(m) + 6; if (g > bestG) { bestG = g; best = { kind: "new", m: m }; } });
+      // b. add a rack tile to a table meld
+      rack.forEach(function (t) {
+        melds.forEach(function (m, i) {
+          if (locked(m)) return;
+          var n = m.concat([t]);
+          if (valid(n, rules)) { var g = gain([t]); if (g > bestG) { bestG = g; best = { kind: "ext", i: i, t: t }; } }
+        });
+      });
+      // c. split a run with a matching tile: 3-4-5-6-7 + 5 -> 3-4-5 / 5-6-7
+      rack.forEach(function (t) {
+        if (t.wild) return;
+        melds.forEach(function (m, i) {
+          if (locked(m) || m.length < 5) return;
+          var s = sortedRun(m, rules); if (!s) return;
+          var info = R.analyze(s, rules, null), at = -1;
+          s.forEach(function (x, k) { if (info.values[x.id] === t.n && (x.c === t.c || x.fin === "ivory" || t.fin === "ivory")) at = k; });
+          if (at < 2 || s.length - at < 3) return;
+          var a = s.slice(0, at + 1), b = [t].concat(s.slice(at + 1));
+          if (valid(a, rules) && valid(b, rules)) { var g = gain([t]) + 4 * m.length; if (g > bestG) { bestG = g; best = { kind: "split", i: i, a: a, b: b, t: t }; } }
+        });
+      });
+      // d. borrow one tile from a long meld to make a new one with rack tiles
+      var donors = [];
+      melds.forEach(function (m, i) {
+        if (locked(m) || m.length < 4) return;
+        m.forEach(function (t) { var rest = m.filter(function (x) { return x !== t; }); if (valid(rest, rules)) donors.push({ t: t, i: i }); });
+      });
+      donors.forEach(function (d) {
+        meldsFrom(rack.concat([d.t]), rules, function (x) { return x === d.t; }).forEach(function (m) {
+          if (m.filter(function (x) { return inRack[x.id]; }).length < 2) return;
+          var g = gain(m) + 6; if (g > bestG) { bestG = g; best = { kind: "borrow", d: d, m: m }; }
+        });
+      });
+      if (!best) break;
+      if (best.kind === "new") { melds.push(best.m); rack = rack.filter(function (t) { return best.m.indexOf(t) < 0; }); }
+      else if (best.kind === "ext") { melds[best.i] = melds[best.i].concat([best.t]); rack = rack.filter(function (t) { return t !== best.t; }); }
+      else if (best.kind === "split") { melds.splice(best.i, 1, best.a, best.b); rack = rack.filter(function (t) { return t !== best.t; }); }
+      else { melds[best.d.i] = melds[best.d.i].filter(function (x) { return x !== best.d.t; }); melds.push(best.m); rack = rack.filter(function (t) { return best.m.indexOf(t) < 0; }); }
+      placed++;
+    }
+    if (!placed) return null;
+    return melds.map(function (m) { return m.map(function (t) { return t.id; }); });
+  }
+
+  // tiles that fit nothing: no neighbor of the same color within 2, no other tile of the same number
+  function loners(rack) {
+    return rack.filter(function (t) {
+      if (t.wild) return false;
+      return !rack.some(function (u) { return u !== t && !u.wild && ((u.c === t.c && Math.abs(u.n - t.n) <= 2) || u.n === t.n); });
+    });
+  }
+
+  var api = { planHand: planHand, meldsFrom: meldsFrom, loners: loners };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.PLANNER = api;
+})(this);
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var R = window.RUMMY, C = window.CONTENT, RUN = window.RUN, P = window.PLANNER;
+  var ED = window.REMELD_EDITION || "full", DEMO = ED === "demo";
+  var STORE_URL = "https://kqmigqkqri.itch.io/remeld";
+  var W = 1280, H = 800;
+  var SERIF = "Georgia, 'Times New Roman', serif", SANS = "'Segoe UI', system-ui, -apple-system, sans-serif";
+  var COL = { bg: "#0c1a14", felt: "#145238", felt2: "#0f3f2b", gold: "#d8b45f", gold2: "#f1d78f", cream: "#f4ecd8", ink: "#1d1b18", text: "#f4ecd8", dim: "#a9b7a8",
+    chips: "#3e86d6", mult: "#d6493e", money: "#e9c24a", panel: "#10261c", panel2: "#173527", good: "#7fd18a", bad: "#e8665a" };
+  var cv = document.getElementById("c"), cx = cv.getContext("2d"), scale = 1, dpr = 1;
+
+  // ---------------- saving ----------------
+  var KEY = DEMO ? "remeld.demo.run.v1" : "remeld.run.v1", PKEY = DEMO ? "remeld.demo.profile.v1" : "remeld.profile.v1";
+  var profile = { stakes: 1, wins: 0, runs: 0, best: 0, music: true, sound: true, seenHelp: false };
+  try { var pr = localStorage.getItem(PKEY); if (pr) { var po = JSON.parse(pr); for (var k0 in po) profile[k0] = po[k0]; } } catch (e) {}
+  function saveProfile() { try { localStorage.setItem(PKEY, JSON.stringify(profile)); } catch (e) {} }
+  var run = null;
+  try { var rs = localStorage.getItem(KEY); if (rs) { run = RUN.load(rs); if (run.phase === "lost" || run.phase === "won" || run.phase === "demoend") run = null; } } catch (e) { run = null; }
+  function saveRun() { try { if (run && run.phase !== "lost") localStorage.setItem(KEY, RUN.save(run)); else localStorage.removeItem(KEY); } catch (e) {} }
+
+  // ---------------- sound and music, all synthesised ----------------
+  var ac = null, master = null;
+  function audio() {
+    try {
+      if (!ac) { ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = 0.9; master.connect(ac.destination); }
+      if (ac.state === "suspended") ac.resume();
+      return ac;
+    } catch (e) { return null; }
+  }
+  function tone(f, d, type, vol, delay, slide) {
+    if (!profile.sound) return;
+    var a = audio(); if (!a) return;
+    var t0 = a.currentTime + (delay || 0), o = a.createOscillator(), g = a.createGain();
+    o.type = type || "triangle"; o.frequency.setValueAtTime(f, t0);
+    if (slide) o.frequency.exponentialRampToValueAtTime(slide, t0 + d);
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol || 0.05, t0 + 0.006); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+    o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + d + 0.03);
+  }
+  function click(f, vol) {
+    if (!profile.sound) return;
+    var a = audio(); if (!a) return;
+    var len = Math.floor(a.sampleRate * 0.03), b = a.createBuffer(1, len, a.sampleRate), d = b.getChannelData(0);
+    for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 6);
+    var s = a.createBufferSource(), fl = a.createBiquadFilter(), g = a.createGain();
+    s.buffer = b; fl.type = "bandpass"; fl.frequency.value = f || 1800; fl.Q.value = 2; g.gain.value = vol || 0.6;
+    s.connect(fl); fl.connect(g); g.connect(master); s.start();
+  }
+  var sfxPitch = 0;
+  function sfx(k, n) {
+    if (k === "tile") click(1500 + Math.random() * 400, 0.5);
+    else if (k === "drop") { click(900, 0.6); click(2200, 0.25); }
+    else if (k === "chips") tone(420 + Math.min(n || 0, 30) * 22, 0.08, "square", 0.025);
+    else if (k === "mult") tone(660 + Math.min(n || 0, 30) * 30, 0.1, "triangle", 0.04);
+    else if (k === "xmult") { tone(220, 0.25, "sawtooth", 0.035, 0, 330); tone(880, 0.2, "triangle", 0.04, 0.02); }
+    else if (k === "money") { tone(1318, 0.07, "square", 0.025); tone(1760, 0.12, "square", 0.025, 0.06); }
+    else if (k === "total") [392, 523, 659].forEach(function (f, i) { tone(f, 0.25, "triangle", 0.05, i * 0.05); });
+    else if (k === "rummy") [523, 659, 784, 1047, 1319].forEach(function (f, i) { tone(f, 0.35, "triangle", 0.06, i * 0.07); });
+    else if (k === "win") [392, 494, 587, 784, 988].forEach(function (f, i) { tone(f, 0.5, "triangle", 0.06, i * 0.1); });
+    else if (k === "lose") [330, 294, 247, 196].forEach(function (f, i) { tone(f, 0.45, "sawtooth", 0.03, i * 0.16); });
+    else if (k === "bad") tone(150, 0.12, "square", 0.035);
+    else if (k === "buy") { tone(784, 0.06, "triangle", 0.05); tone(1175, 0.12, "triangle", 0.05, 0.05); }
+    else if (k === "ui") click(2600, 0.3);
+    else if (k === "shatter") { click(5000, 0.8); click(3200, 0.6); }
+  }
+  // a quiet walking-bass jazz loop
+  var music = { on: false, next: 0, beat: 0 };
+  var PROG = [[50, [62, 65, 69, 72]], [55, [59, 62, 65, 67]], [48, [60, 64, 67, 71]], [57, [61, 64, 67, 70]]];
+  function midi(n) { return 440 * Math.pow(2, (n - 69) / 12); }
+  function musicTick() {
+    if (!profile.music || !ac || ac.state !== "running") return;
+    var a = ac, spb = 60 / 92;
+    if (music.next < a.currentTime) music.next = a.currentTime + 0.05;
+    while (music.next < a.currentTime + 0.3) {
+      var bar = Math.floor(music.beat / 4) % 4, b = music.beat % 4, ch = PROG[bar], t = music.next;
+      var walk = [0, 3, 5, 7][b] + (b === 3 ? (Math.random() < 0.5 ? 1 : -1) : 0);
+      note(midi(ch[0] - 12 + walk), spb * 0.9, "triangle", 0.05, t);
+      if (b === 1 || b === 3) ch[1].forEach(function (n, i) { note(midi(n), spb * 0.7, "sine", 0.012, t + spb * 0.08 + i * 0.01); });
+      brush(t, 0.04); brush(t + spb * 0.66, 0.025);
+      music.beat++; music.next += spb;
+    }
+  }
+  function note(f, d, type, vol, t0) {
+    var o = ac.createOscillator(), g = ac.createGain();
+    o.type = type; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+    o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + d + 0.05);
+  }
+  var brushBuf = null;
+  function brush(t0, vol) {
+    if (!brushBuf) { var len = Math.floor(ac.sampleRate * 0.12); brushBuf = ac.createBuffer(1, len, ac.sampleRate); var d = brushBuf.getChannelData(0); for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
+    var s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    s.buffer = brushBuf; f.type = "highpass"; f.frequency.value = 6000; g.gain.value = vol;
+    s.connect(f); f.connect(g); g.connect(master); s.start(t0);
+  }
+
+  // ---------------- drawing helpers ----------------
+  function rr(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
+  function text(s, x, y, size, col, align, weight, font) { cx.font = (weight || 600) + " " + size + "px " + (font || SANS); cx.fillStyle = col || COL.text; cx.textAlign = align || "left"; cx.textBaseline = "middle"; cx.fillText(s, x, y); }
+  function tw(s, size, weight, font) { cx.font = (weight || 600) + " " + size + "px " + (font || SANS); return cx.measureText(s).width; }
+  function wrap(s, x, y, maxW, size, col, lh, weight, align) {
+    var lines = [];
+    String(s).split("\n").forEach(function (para) {
+      var words = para.split(" "), line = "";
+      for (var i = 0; i < words.length; i++) { var t = line ? line + " " + words[i] : words[i]; if (tw(t, size, weight) > maxW && line) { lines.push(line); line = words[i]; } else line = t; }
+      lines.push(line);
+    });
+    lines.forEach(function (l, i) { text(l, align === "center" ? x : x, y + i * lh, size, col, align, weight); });
+    return y + lines.length * lh;
+  }
+  function fmt(n) {
+    n = Math.floor(n);
+    if (n < 1e6) return n.toLocaleString("en-US");
+    var u = ["M", "B", "T", "Qa", "Qi"], i = -1;
+    while (n >= 1000 && i < u.length - 1 && (i >= 0 || n >= 1e6)) { n /= 1000; i++; }
+    return n.toFixed(n < 10 ? 2 : n < 100 ? 1 : 0) + u[i - 1 < 0 ? 0 : i - 1];
+  }
+  var buttons = [], mouse = { x: -1, y: -1, down: false };
+  function hot(x, y, w, h) { return mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h; }
+  function button(x, y, w, h, label, fn, o) {
+    o = o || {};
+    var on = hot(x, y, w, h) && !o.disabled;
+    rr(x, y + (on && mouse.down ? 2 : 0), w, h, 8);
+    var base = o.color || (o.primary ? "#c99a3b" : "#2a4a39");
+    cx.fillStyle = o.disabled ? "#1c2c24" : on ? lighten(base) : base; cx.fill();
+    cx.strokeStyle = o.disabled ? "#2a3a32" : o.primary ? COL.gold2 : "#4f7360"; cx.lineWidth = 1.5; cx.stroke();
+    text(label, x + w / 2, y + h / 2 + 1 + (on && mouse.down ? 2 : 0), o.size || 15, o.disabled ? "#5b6d63" : o.primary ? "#1f1608" : COL.text, "center", 800);
+    if (!o.disabled && fn) buttons.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+  function lighten(hex) { var n = parseInt(hex.slice(1), 16), r = Math.min(255, (n >> 16) + 28), g = Math.min(255, ((n >> 8) & 255) + 28), b = Math.min(255, (n & 255) + 28); return "rgb(" + r + "," + g + "," + b + ")"; }
+  function panel(x, y, w, h, title) {
+    rr(x, y, w, h, 12); cx.fillStyle = COL.panel; cx.fill(); cx.strokeStyle = "#2c5140"; cx.lineWidth = 1.5; cx.stroke();
+    if (title) text(title, x + 14, y + 18, 12, COL.gold, "left", 800);
+  }
+
+  // ---------------- tiles ----------------
+  function mark(kind, x, y, s, col) {
+    cx.fillStyle = col; cx.beginPath();
+    if (kind === "circle") cx.arc(x, y, s, 0, 7);
+    else if (kind === "triangle") { cx.moveTo(x, y - s * 1.1); cx.lineTo(x + s * 1.1, y + s * 0.8); cx.lineTo(x - s * 1.1, y + s * 0.8); cx.closePath(); }
+    else if (kind === "square") cx.rect(x - s * 0.9, y - s * 0.9, s * 1.8, s * 1.8);
+    else { cx.moveTo(x, y - s * 1.2); cx.lineTo(x + s, y); cx.lineTo(x, y + s * 1.2); cx.lineTo(x - s, y); cx.closePath(); }
+    cx.fill();
+  }
+  function drawTile(t, x, y, w, h, o) {
+    o = o || {};
+    var col = R.COLORS[t.c] || R.COLORS[0];
+    cx.save();
+    if (o.alpha !== undefined) cx.globalAlpha = o.alpha;
+    // shadow
+    rr(x + 2, y + 3, w, h, 6); cx.fillStyle = "rgba(0,0,0,0.35)"; cx.fill();
+    var face = t.fin === "glass" ? "#dcebf2" : t.fin === "marble" ? "#e9e7e2" : t.fin === "steel" ? "#cfd4da" : t.fin === "gold" ? "#f6e4a8" : t.fin === "ivory" ? "#fffaf0" : COL.cream;
+    var g = cx.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, face); g.addColorStop(1, shade(face, 0.86));
+    rr(x, y, w, h, 6); cx.fillStyle = g; cx.fill();
+    if (t.fin === "marble") { cx.strokeStyle = "rgba(120,120,130,0.35)"; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(x + 4, y + h * 0.2); cx.quadraticCurveTo(x + w * 0.6, y + h * 0.4, x + w - 6, y + h * 0.15); cx.moveTo(x + 6, y + h * 0.8); cx.quadraticCurveTo(x + w * 0.4, y + h * 0.6, x + w - 4, y + h * 0.9); cx.stroke(); }
+    if (t.fin === "glass") { cx.fillStyle = "rgba(255,255,255,0.6)"; cx.beginPath(); cx.moveTo(x + 4, y + 4); cx.lineTo(x + w * 0.45, y + 4); cx.lineTo(x + 4, y + h * 0.4); cx.closePath(); cx.fill(); }
+    if (t.fin === "steel") { cx.strokeStyle = "rgba(90,100,110,0.6)"; cx.lineWidth = 1; for (var q = 0; q < 3; q++) { cx.beginPath(); cx.moveTo(x + 3, y + 8 + q * 4); cx.lineTo(x + w - 3, y + 8 + q * 4); cx.stroke(); } }
+    var edge = t.fin === "gold" ? "#b98a1e" : t.fin === "lucky" ? "#3f9a4a" : t.fin === "ivory" ? "#c9a8e8" : t.house ? "#9a8a6a" : "#b7aa8c";
+    rr(x, y, w, h, 6); cx.strokeStyle = edge; cx.lineWidth = t.fin ? 2.5 : 1.2; cx.stroke();
+    if (o.blank) {}
+    else if (t.wild) {
+      var cols = ["#d1423b", "#2c6bc9", "#d98c12", "#26252e"];
+      cx.font = "900 " + Math.round(h * 0.42) + "px " + SERIF; cx.textAlign = "center"; cx.textBaseline = "middle";
+      var gg = cx.createLinearGradient(x, y, x + w, y + h); cols.forEach(function (c, i) { gg.addColorStop(i / 3, c); });
+      cx.fillStyle = gg; cx.fillText("★", x + w / 2, y + h * 0.42);
+      text("WILD", x + w / 2, y + h * 0.8, Math.round(h * 0.15), "#6a5a40", "center", 800);
+      if (o.value) text(String(o.value), x + w - 7, y + 9, Math.round(h * 0.17), "#6a5a40", "center", 800);
+    } else {
+      var ncol = t.fin === "ivory" ? "#7d5a9a" : col.hex;
+      cx.font = "800 " + Math.round(h * 0.46) + "px " + SERIF; cx.textAlign = "center"; cx.textBaseline = "middle"; cx.fillStyle = ncol;
+      cx.fillText(String(t.n), x + w / 2, y + h * 0.42);
+      if (t.fin === "ivory") ["circle", "triangle", "square", "diamond"].forEach(function (m, i) { mark(m, x + w / 2 - 9 + i * 6, y + h * 0.8, 2, R.COLORS[i].hex); });
+      else mark(col.mark, x + w / 2, y + h * 0.8, Math.max(2.5, h * 0.06), ncol);
+    }
+    if (t.fin === "lucky") text("♣", x + 8, y + 9, Math.round(h * 0.18), "#3f9a4a", "center", 800);
+    if (t.fin === "gold") text("$", x + 8, y + 9, Math.round(h * 0.18), "#b98a1e", "center", 900);
+    if (t.house) { cx.fillStyle = "#9a8a6a"; cx.beginPath(); cx.moveTo(x + w - 7, y + 4); cx.lineTo(x + w - 4, y + 7); cx.lineTo(x + w - 7, y + 10); cx.lineTo(x + w - 10, y + 7); cx.closePath(); cx.fill(); }
+    if (o.debuff) { cx.fillStyle = "rgba(40,30,30,0.45)"; rr(x, y, w, h, 6); cx.fill(); cx.strokeStyle = "#e8665a"; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(x + 5, y + h - 5); cx.lineTo(x + w - 5, y + 5); cx.stroke(); }
+    if (o.sel) { rr(x - 2, y - 2, w + 4, h + 4, 7); cx.strokeStyle = COL.gold2; cx.lineWidth = 3; cx.stroke(); }
+    if (o.glow) { rr(x - 3, y - 3, w + 6, h + 6, 8); cx.strokeStyle = "rgba(241,215,143," + o.glow + ")"; cx.lineWidth = 4; cx.stroke(); }
+    if (o.broken) { cx.strokeStyle = "rgba(60,80,90,0.8)"; cx.lineWidth = 1.5; cx.beginPath(); cx.moveTo(x + w * 0.3, y); cx.lineTo(x + w * 0.5, y + h * 0.5); cx.lineTo(x + w * 0.2, y + h); cx.moveTo(x + w * 0.5, y + h * 0.5); cx.lineTo(x + w, y + h * 0.6); cx.stroke(); }
+    cx.restore();
+  }
+  function shade(hex, f) { var n = parseInt(hex.slice(1), 16); return "rgb(" + Math.round((n >> 16) * f) + "," + Math.round(((n >> 8) & 255) * f) + "," + Math.round((n & 255) * f) + ")"; }
+
+  // ---------------- the regulars and the bar, as cards ----------------
+  var RARITY = [null, { name: "Common", col: "#9b7a4c" }, { name: "Uncommon", col: "#a9b4bd" }, { name: "Rare", col: "#e0bb52" }];
+  function initials(name) { return name.replace(/^The /, "").split(/[\s-]+/).map(function (w) { return w[0]; }).join("").slice(0, 2).toUpperCase(); }
+  function regCard(def, x, y, w, h, o) {
+    o = o || {};
+    var rar = RARITY[def.rarity], lift = o.lift || 0;
+    y -= lift;
+    cx.save();
+    if (o.shake) cx.translate(Math.sin(performance.now() / 25) * 2 * o.shake, 0);
+    rr(x + 3, y + 4, w, h, 10); cx.fillStyle = "rgba(0,0,0,0.4)"; cx.fill();
+    var g = cx.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, "#21402f"); g.addColorStop(1, "#122a1e");
+    rr(x, y, w, h, 10); cx.fillStyle = g; cx.fill();
+    rr(x, y, w, h, 10); cx.strokeStyle = rar.col; cx.lineWidth = 2.5; cx.stroke();
+    rr(x + 5, y + 5, w - 10, h - 10, 7); cx.strokeStyle = "rgba(216,180,95,0.35)"; cx.lineWidth = 1; cx.stroke();
+    // art deco fan and monogram
+    var mx = x + w / 2, my = y + h * 0.36, r = Math.min(w, h) * 0.22;
+    cx.strokeStyle = rar.col; cx.lineWidth = 1;
+    for (var i = 0; i < 7; i++) { var a = Math.PI + (i + 0.5) / 7 * Math.PI; cx.beginPath(); cx.moveTo(mx, my + r * 0.2); cx.lineTo(mx + Math.cos(a) * r * 1.5, my + Math.sin(a) * r * 1.5 + r * 0.2); cx.stroke(); }
+    cx.beginPath(); cx.arc(mx, my, r, 0, 7); cx.fillStyle = "#0d1f16"; cx.fill(); cx.strokeStyle = rar.col; cx.lineWidth = 2; cx.stroke();
+    text(initials(def.name), mx, my + 1, Math.round(r * 0.9), rar.col, "center", 800, SERIF);
+    var nameSize = w < 100 ? 11 : 13;
+    wrap(def.name, mx, y + h * 0.66, w - 12, nameSize, COL.text, nameSize + 2, 800, "center");
+    if (o.value) text(o.value, mx, y + h - 14, 12, COL.gold2, "center", 800);
+    if (o.flash) { rr(x - 3, y - 3, w + 6, h + 6, 12); cx.strokeStyle = "rgba(241,215,143," + o.flash + ")"; cx.lineWidth = 4; cx.stroke(); }
+    cx.restore();
+  }
+  function consCard(id, x, y, w, h, o) {
+    o = o || {};
+    var d = C.CONS[id], drink = d.kind === "drink";
+    rr(x + 2, y + 3, w, h, 9); cx.fillStyle = "rgba(0,0,0,0.4)"; cx.fill();
+    rr(x, y, w, h, 9); cx.fillStyle = drink ? "#2c1f33" : "#2e2a1d"; cx.fill();
+    rr(x, y, w, h, 9); cx.strokeStyle = o.sel ? COL.gold2 : drink ? "#a07ac0" : "#b39a5a"; cx.lineWidth = o.sel ? 3 : 2; cx.stroke();
+    var mx = x + w / 2, my = y + h * 0.38;
+    if (drink) {
+      cx.strokeStyle = "#e6d6f2"; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(mx - 14, my - 12); cx.lineTo(mx + 14, my - 12); cx.lineTo(mx, my + 4); cx.closePath(); cx.stroke();
+      cx.beginPath(); cx.moveTo(mx, my + 4); cx.lineTo(mx, my + 16); cx.moveTo(mx - 8, my + 16); cx.lineTo(mx + 8, my + 16); cx.stroke();
+      cx.fillStyle = "#c070a0"; cx.beginPath(); cx.moveTo(mx - 10, my - 9); cx.lineTo(mx + 10, my - 9); cx.lineTo(mx, my + 1); cx.closePath(); cx.fill();
+    } else {
+      cx.beginPath(); cx.arc(mx, my, 15, 0, 7); cx.fillStyle = "#1a1710"; cx.fill(); cx.strokeStyle = "#d8c27a"; cx.lineWidth = 2; cx.stroke();
+      text(toolGlyph(id), mx, my + 1, 16, "#f0dfa0", "center", 800, SERIF);
+    }
+    wrap(d.name, mx, y + h * 0.7, w - 8, 11, COL.text, 13, 800, "center");
+  }
+  function toolGlyph(id) { return { CHISEL: "+1", FILE: "-1", PAINT0: "●", PAINT1: "▲", PAINT2: "■", PAINT3: "◆", GILD: "$", GLAZE: "◇", MARBLE: "M", LUCKY: "♣", STEEL: "S", IVORY: "✦", TORCH: "✖", MOULD: "×2", WILDINK: "★", TIPJAR: "¢" }[id] || "?"; }
+  function tooltip(x, y, w, title, body, foot, col) {
+    cx.font = "600 14px " + SANS;
+    var lines = Math.ceil(tw(body, 14) / (w - 24)) + (body.match(/\n/g) || []).length + 1;
+    var h = 44 + lines * 19 + (foot ? 22 : 0);
+    if (x + w > W - 8) x = W - 8 - w; if (x < 8) x = 8;
+    if (y + h > H - 8) y = H - 8 - h; if (y < 8) y = 8;
+    rr(x, y, w, h, 10); cx.fillStyle = "rgba(8,18,13,0.97)"; cx.fill(); cx.strokeStyle = col || COL.gold; cx.lineWidth = 1.5; cx.stroke();
+    text(title, x + 12, y + 20, 16, COL.text, "left", 800, SERIF);
+    var yy = wrap(body, x + 12, y + 44, w - 24, 14, "#d9e3d6", 19, 600);
+    if (foot) text(foot, x + 12, yy + 8, 13, COL.gold2, "left", 800);
+  }
+
+  // ---------------- layout ----------------
+  var LP = { x: 12, y: 12, w: 250, h: 776 };            // left panel
+  var TOP = { x: 274, y: 12, w: 994, h: 146 };           // regulars and bar
+  var TABLE = { x: 274, y: 168, w: 994, h: 404 };        // the felt
+  var RACK = { x: 274, y: 584, w: 994, h: 108 };          // your rack
+  var BTN_Y = 704;
+
+  function regSlots() { return RUN.stats(run).slots; }
+  function regRect(i) { var n = Math.max(regSlots(), run.regs.length), cw = 112, gap = 8; return { x: TOP.x + 6 + i * (cw + gap), y: TOP.y + 6, w: cw, h: 134 }; }
+  function consRect(i) { var n = RUN.stats(run).consSlots; return { x: TOP.x + TOP.w - n * 82 - 4 + i * 82, y: TOP.y + 6, w: 76, h: 134 }; }
+
+  // ---------------- the hand you are building ----------------
+  var work = null, tmap = {}, prev = null, rackOrigin = {}, sortMode = "num", anim = null, msg = null, selCons = -1, demoBlink = 0;
+  function startHand() {
+    var tb = run.tb;
+    tmap = RUN.tileMap(run);
+    rackOrigin = {};
+    tb.rack.forEach(function (t) { rackOrigin[t.id] = 1; });
+    var keepSel = work ? work.sel : {};
+    work = { melds: tb.melds.map(function (m) { return m.map(function (t) { return t.id; }); }), rack: tb.rack.map(function (t) { return t.id; }), sel: {} };
+    tb.rack.forEach(function (t) { if (keepSel[t.id]) work.sel[t.id] = 1; });
+    sortRack();
+    refresh();
+  }
+  function sortRack() {
+    work.rack.sort(function (a, b) {
+      var A = tmap[a], B = tmap[b];
+      if (sortMode === "num") return (A.wild ? 99 : A.n) - (B.wild ? 99 : B.n) || A.c - B.c;
+      return (A.wild ? 9 : A.c) - (B.wild ? 9 : B.c) || A.n - B.n;
+    });
+  }
+  function refresh() {
+    work.melds = work.melds.filter(function (m) { return m.length; });
+    prev = RUN.preview(run, work.melds);
+  }
+  function changed() { return work.rack.length !== run.tb.rack.length || prev.check.placed && prev.check.placed.length; }
+
+  // positions of every tile at the table, the trays, and the new-meld slot
+  function layoutTable() {
+    var sizes = [[58, 80], [50, 70], [44, 62], [40, 56], [34, 48], [30, 42]], L = null;
+    var infos = prev && prev.check && prev.check.infos;
+    for (var s = 0; s < sizes.length; s++) {
+      var tw2 = sizes[s][0], th = sizes[s][1], gap = 3, pad = 6, x = TABLE.x + 14, y = TABLE.y + 16, rowH = th + pad * 2 + 22, trays = [], tiles = {}, fits = true;
+      var melds = work.melds.map(function (m, i) {
+        var tiles2 = m.map(function (id) { return tmap[id]; }), info = R.analyze(tiles2, run.tb.rules, run.levels);
+        return { ids: R.sortMeld(tiles2, info).map(function (t) { return t.id; }), info: info, i: i };
+      });
+      for (var i = 0; i <= melds.length; i++) {
+        var n = i < melds.length ? melds[i].ids.length : 1, w = i < melds.length ? n * (tw2 + gap) - gap + pad * 2 : tw2 + pad * 2 + 18;
+        if (x + w > TABLE.x + TABLE.w - 10) { x = TABLE.x + 14; y += rowH; }
+        if (y + rowH > TABLE.y + TABLE.h + 4) { fits = false; break; }
+        if (i < melds.length) {
+          var tr = { x: x, y: y, w: w, h: th + pad * 2, meld: melds[i].i, info: melds[i].info };
+          melds[i].ids.forEach(function (id, k) { tiles[id] = { x: x + pad + k * (tw2 + gap), y: y + pad, w: tw2, h: th, meld: melds[i].i }; });
+          trays.push(tr);
+        } else L = { trays: trays, tiles: tiles, slot: { x: x, y: y, w: w, h: th + pad * 2 }, tw: tw2, th: th };
+        x += w + 14;
+      }
+      if (fits && L) {
+        // centre the rows on the felt
+        var bottom = L.slot.y + L.slot.h + 22, top = TABLE.y + 16, shift = Math.max(0, Math.floor((TABLE.y + TABLE.h - 40 - bottom) / 2));
+        if (shift) { L.trays.forEach(function (t) { t.y += shift; }); for (var q in L.tiles) L.tiles[q].y += shift; L.slot.y += shift; }
+        return L;
+      }
+    }
+    return L || { trays: [], tiles: {}, slot: { x: TABLE.x + 14, y: TABLE.y + 16, w: 60, h: 60 }, tw: 30, th: 42 };
+  }
+  function layoutRack() {
+    var n = work.rack.length, w = 52, h = 74, gap = 6;
+    if (n * (w + gap) > RACK.w - 30) { w = Math.floor((RACK.w - 30) / n) - gap; h = Math.round(w * 1.42); }
+    var total = n * (w + gap) - gap, x0 = RACK.x + (RACK.w - total) / 2, pos = {};
+    work.rack.forEach(function (id, i) { pos[id] = { x: x0 + i * (w + gap), y: RACK.y + (RACK.h - h) / 2 + 2 - (work.sel[id] ? 12 : 0), w: w, h: h }; });
+    return pos;
+  }
+
+  // ---------------- dragging tiles ----------------
+  var drag = null;
+  function tileAt(m) {
+    if (!work || anim) return null;
+    var rp = layoutRack(), lt = layoutTable(), id;
+    for (id in rp) { var p = rp[id]; if (m.x >= p.x && m.x <= p.x + p.w && m.y >= p.y && m.y <= p.y + p.h + (work.sel[id] ? 12 : 0)) return { id: +id, from: "rack" }; }
+    for (id in lt.tiles) { var q = lt.tiles[id]; if (m.x >= q.x && m.x <= q.x + q.w && m.y >= q.y && m.y <= q.y + q.h) return { id: +id, from: "table", meld: q.meld }; }
+    return null;
+  }
+  function locked(id) {
+    if (!run.tb.rules.lockHouse) return false;
+    return run.tb.houseSets.some(function (hs) { return hs.indexOf(id) >= 0; });
+  }
+  function dropAt(id, m) {
+    var lt = layoutTable(), from = work.rack.indexOf(id) >= 0 ? "rack" : "table";
+    var target = null;
+    lt.trays.forEach(function (tr) { if (m.x >= tr.x - 8 && m.x <= tr.x + tr.w + 8 && m.y >= tr.y - 8 && m.y <= tr.y + tr.h + 8) target = { meld: tr.meld }; });
+    if (!target && m.x >= RACK.x && m.x <= RACK.x + RACK.w && m.y >= RACK.y - 10 && m.y <= RACK.y + RACK.h + 20) target = { rack: true };
+    if (!target && m.x >= TABLE.x && m.x <= TABLE.x + TABLE.w && m.y >= TABLE.y && m.y <= TABLE.y + TABLE.h) target = { fresh: true };
+    if (!target) return false;
+    if (target.rack) {
+      if (from === "rack") { // reorder in the rack
+        var rp = layoutRack(), idx = 0;
+        work.rack.forEach(function (o, i) { if (rp[o] && m.x > rp[o].x + rp[o].w / 2) idx = i + 1; });
+        var at = work.rack.indexOf(id); work.rack.splice(at, 1); if (at < idx) idx--; work.rack.splice(idx, 0, id);
+        return true;
+      }
+      if (!rackOrigin[id]) { flash("Tiles on the table must stay on the table."); return false; }
+      removeFromMelds(id); work.rack.push(id); refresh(); return true;
+    }
+    if (locked(id) || (target.meld !== undefined && work.melds[target.meld].some(locked))) { flash("The Velvet Rope: the house's melds can't be touched."); return false; }
+    if (from === "rack") { work.rack.splice(work.rack.indexOf(id), 1); delete work.sel[id]; }
+    else { var src = meldOf(id); if (target.meld === src) return false; removeFromMelds(id); }
+    if (target.fresh) work.melds.push([id]);
+    else { var tm = work.melds[target.meld]; if (tm) tm.push(id); else work.melds.push([id]); }
+    refresh();
+    return true;
+  }
+  function meldOf(id) { for (var i = 0; i < work.melds.length; i++) if (work.melds[i].indexOf(id) >= 0) return i; return -1; }
+  function removeFromMelds(id) { var i = meldOf(id); if (i >= 0) work.melds[i].splice(work.melds[i].indexOf(id), 1); }
+  function resetHand() { var sel = work.sel; startHand(); work.sel = sel; }
+  function flash(s, col) { msg = { s: s, t: 0, col: col || COL.text }; }
+
+  // ---------------- playing, drawing ----------------
+  function doPlay() {
+    if (anim || !prev || !prev.check.ok) { if (prev && prev.check.error && changed()) flash(cap(prev.check.error) + ".", COL.bad); sfx("bad"); return; }
+    var snapshot = { melds: work.melds.map(function (m) { return m.slice(); }), rack: work.rack.slice(), layout: layoutTable(), rackPos: layoutRack() };
+    var before = run.tb.score, startMoney = run.money;
+    var res = RUN.play(run, work.melds);
+    if (res.error) { flash(res.error, COL.bad); return; }
+    anim = { res: res, snap: snapshot, i: -1, t: 0, chips: 0, mult: 0, shown: before, scoreFrom: before, moneyFrom: startMoney, stage: "steps", pops: [] };
+    saveRun();
+  }
+  function doDraw() {
+    if (anim) return;
+    var ids = Object.keys(work.sel).map(Number).filter(function (id) { return rackOrigin[id]; });
+    if (!ids.length) { flash("Select up to 5 tiles in your rack to throw back, then draw.", COL.dim); return; }
+    if (ids.length > 5) { flash("You can throw back at most 5 tiles at a time.", COL.bad); return; }
+    if (run.tb.drawsLeft <= 0) { flash("No draws left at this table.", COL.bad); sfx("bad"); return; }
+    RUN.draw(run, ids); sfx("tile"); work.sel = {}; startHand(); saveRun();
+  }
+  function doPass() {
+    if (anim) return;
+    if (!RUN.pass(run)) return;
+    sfx("tile"); flash("Passed: one hand spent, two tiles drawn.", COL.dim); startHand(); saveRun();
+    if (run.phase === "lost") lose();
+  }
+  function doIdea() {
+    if (anim) return;
+    var plan = P.planHand(run);
+    if (!plan) { flash("No play found. Try drawing new tiles - or pass.", COL.dim); return; }
+    startHand();
+    var used = {};
+    plan.forEach(function (m) { m.forEach(function (id) { used[id] = 1; }); });
+    work.melds = plan; work.rack = work.rack.filter(function (id) { return !used[id]; });
+    refresh(); sfx("drop");
+    flash("An idea - move tiles around if you can do better.", COL.dim);
+  }
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+  function lose() { profile.runs++; saveProfile(); sfx("lose"); screen = "lost"; saveRun(); }
+
+  // the scoring show, one step at a time
+  function updateAnim(dt) {
+    var a = anim;
+    a.t += dt;
+    if (a.stage === "steps") {
+      var steps = a.res.steps, speed = steps.length > 24 ? 0.07 : steps.length > 14 ? 0.11 : 0.16;
+      if (a.i < 0 && a.t > 0.2) { a.i = 0; a.t = 0; apply(steps[0]); }
+      else if (a.i >= 0 && a.t >= speed) {
+        a.i++; a.t = 0;
+        if (a.i < steps.length) apply(steps[a.i]);
+        else { a.stage = "total"; a.t = 0; a.total = a.res.total; sfx(a.res.rummy ? "rummy" : "total"); }
+      }
+    } else if (a.stage === "total") {
+      if (a.t > (a.res.rummy ? 1.2 : 0.8)) { a.stage = "fly"; a.t = 0; }
+    } else if (a.stage === "fly") {
+      a.shown = a.scoreFrom + a.res.total * Math.min(1, a.t / 0.5);
+      if (a.t > 0.7) finishAnim();
+    }
+  }
+  function apply(st) {
+    var a = anim;
+    a.chips = st.after.chips; a.mult = st.after.mult;
+    var where = popWhere(st.ref);
+    if (st.chips) { a.pops.push({ x: where.x, y: where.y, s: "+" + st.chips, col: COL.chips, t: 0 }); sfx("chips", a.i); }
+    if (st.mult) { a.pops.push({ x: where.x, y: where.y - (st.chips ? 20 : 0), s: "+" + st.mult + " mult", col: COL.mult, t: 0 }); sfx("mult", a.i); }
+    if (st.xmult) { a.pops.push({ x: where.x, y: where.y - 20, s: "x" + st.xmult + " mult", col: "#ff8a5a", t: 0, big: true }); sfx("xmult"); }
+    if (st.money) { a.pops.push({ x: where.x, y: where.y + 20, s: "+$" + st.money, col: COL.money, t: 0 }); sfx("money"); }
+    if (!st.chips && !st.mult && !st.xmult && !st.money) a.pops.push({ x: where.x, y: where.y, s: st.text, col: COL.dim, t: 0 });
+    a.focus = st.ref; a.focusT = 0; a.label = st.text;
+  }
+  function popWhere(ref) {
+    var L = anim.snap.layout;
+    if (ref && ref.tile !== undefined && L.tiles[ref.tile]) { var p = L.tiles[ref.tile]; return { x: p.x + p.w / 2, y: p.y - 6 }; }
+    if (ref && ref.tile !== undefined && anim.snap.rackPos[ref.tile]) { var q = anim.snap.rackPos[ref.tile]; return { x: q.x + q.w / 2, y: q.y - 6 }; }
+    if (ref && ref.reg !== undefined) { var r = regRect(ref.reg); return { x: r.x + r.w / 2, y: r.y + r.h + 14 }; }
+    if (ref && ref.meld !== undefined) { var tr = L.trays.filter(function (t) { return t.meld === ref.meld; })[0]; if (tr) return { x: tr.x + tr.w / 2, y: tr.y - 4 }; }
+    return { x: TABLE.x + TABLE.w / 2, y: TABLE.y + TABLE.h / 2 };
+  }
+  function finishAnim() {
+    var res = anim.res;
+    if (res.broken.length) { sfx("shatter"); flash(res.broken.length > 1 ? res.broken.length + " glass tiles shattered." : "A glass tile shattered.", COL.dim); }
+    anim = null;
+    if (run.phase === "cashout") { sfx("win"); screen = "cashout"; cashT = 0; return; }
+    if (run.phase === "lost") { lose(); return; }
+    startHand();
+  }
+
+  // ---------------- left panel ----------------
+  function tableName(no) { return ["Opening Table", "Main Table", "House Table"][no]; }
+  function drawLeft(shopMode) {
+    var x = LP.x, y = LP.y, w = LP.w;
+    panel(x, y, w, LP.h);
+    // night
+    text("NIGHT", x + 16, y + 22, 12, COL.dim, "left", 800);
+    text(run.night + (run.night <= RUN.nightsTotal(run) ? " / " + RUN.nightsTotal(run) : ""), x + 16, y + 48, 30, COL.gold2, "left", 700, SERIF);
+    if (run.stake) text(RUN.STAKES[run.stake].name, x + w - 16, y + 22, 12, COL.bad, "right", 800);
+    var tb = run.tb, nextNo = run.tableNo, nextNight = run.night;
+    if (shopMode) { nextNo = run.tableNo + 1; if (nextNo > 2) { nextNo = 0; nextNight++; } }
+    text(shopMode ? "Next: " + tableName(nextNo) : tableName(run.tableNo), x + w - 16, y + 48, 15, COL.text, "right", 700, SERIF);
+    // the house rule
+    var boss = shopMode ? (nextNo === 2 ? RUN.bossOf(run, nextNight) : null) : (tb.boss ? C.BOSS[tb.boss] : null);
+    var by = y + 72;
+    rr(x + 12, by, w - 24, 78, 8); cx.fillStyle = boss ? "#3a1c1c" : "#163626"; cx.fill(); cx.strokeStyle = boss ? "#a8483e" : "#2c5140"; cx.lineWidth = 1.2; cx.stroke();
+    if (boss) {
+      text(boss.name, x + 24, by + 18, 16, "#ffb3a6", "left", 800, SERIF);
+      var bd = boss.desc;
+      if (!shopMode && tb.rules.debuffColor !== undefined) bd = R.COLORS[tb.rules.debuffColor].name + " tiles score nothing";
+      if (shopMode && boss.pickColor) bd = "One color will score nothing";
+      wrap(bd, x + 24, by + 42, w - 48, 13, "#f0d6d0", 17, 600);
+    } else {
+      text(shopMode ? "No house rule" : "No house rule", x + 24, by + 18, 15, COL.dim, "left", 700, SERIF);
+      wrap(nextNo === 2 || run.tableNo === 2 ? "" : "The third table of each night has one.", x + 24, by + 42, w - 48, 13, COL.dim, 17, 600);
+    }
+    // target and score
+    var ty = by + 92, target = shopMode ? RUN.target(run, nextNight, nextNo) : tb.target;
+    text("SCORE AT LEAST", x + 16, ty, 12, COL.dim, "left", 800);
+    text(fmt(target), x + w - 16, ty + 26, 26, COL.text, "right", 700, SERIF);
+    if (!shopMode) {
+      var shown = anim ? anim.shown : tb.score;
+      text("TABLE SCORE", x + 16, ty + 62, 12, COL.dim, "left", 800);
+      text(fmt(shown), x + w - 16, ty + 88, 30, COL.gold2, "right", 700, SERIF);
+      rr(x + 16, ty + 108, w - 32, 10, 5); cx.fillStyle = "#0a1a12"; cx.fill();
+      var f = Math.min(1, shown / target);
+      if (f > 0) { rr(x + 16, ty + 108, Math.max(10, (w - 32) * f), 10, 5); cx.fillStyle = f >= 1 ? COL.good : COL.gold; cx.fill(); }
+      // this hand
+      var hy = ty + 136;
+      rr(x + 12, hy, w - 24, 112, 10); cx.fillStyle = "#0b1d14"; cx.fill();
+      var chips = 0, mult = 0, total = 0, label = "", valid = false;
+      if (anim) { chips = anim.chips; mult = anim.mult; total = anim.stage !== "steps" ? anim.res.total : 0; label = anim.label || ""; valid = true; }
+      else if (prev && prev.score) { chips = prev.score.chips; mult = prev.score.mult; total = prev.score.total; valid = true; label = handLabel(prev.score); }
+      else if (prev && prev.check && changed()) label = cap(prev.check.error || "");
+      wrapClip(label || "Build a hand", x + w / 2, hy + 14, w - 36, 12, valid ? COL.text : COL.dim);
+      rr(x + 20, hy + 40, 92, 38, 8); cx.fillStyle = COL.chips; cx.fill();
+      rr(x + w - 112, hy + 40, 92, 38, 8); cx.fillStyle = COL.mult; cx.fill();
+      text(fmt(chips), x + 66, hy + 60, 21, "#fff", "center", 800);
+      text(mult % 1 ? mult.toFixed(1) : fmt(mult), x + w - 66, hy + 60, 21, "#fff", "center", 800);
+      text("×", x + w / 2, hy + 59, 22, COL.text, "center", 800);
+      if (valid) text("= " + fmt(total || Math.floor(chips * mult)), x + w / 2, hy + 94, 18, total ? COL.gold2 : COL.text, "center", 800);
+      // hands, draws, money
+      var cy = hy + 126;
+      counter(x + 14, cy, "HANDS", tb.handsLeft, COL.chips);
+      counter(x + 14 + (w - 28) / 3, cy, "DRAWS", tb.drawsLeft, COL.mult);
+      counter(x + 14 + 2 * (w - 28) / 3, cy, "MONEY", "$" + run.money, COL.money);
+    } else {
+      counter(x + 14, ty + 62, "MONEY", "$" + run.money, COL.money, (w - 28));
+    }
+    // bottom buttons
+    var bb = y + LP.h - 48;
+    button(x + 14, bb, 70, 34, "HELP", function () { helpFrom = screen; helpPage = 0; screen = "help"; }, { size: 12 });
+    button(x + 90, bb, 70, 34, "BAG", function () { bagFrom = screen; screen = "bag"; }, { size: 12 });
+    button(x + 166, bb, 70, 34, "MELDS", function () { bagFrom = screen; screen = "levels"; }, { size: 12 });
+    button(x + 14, bb - 42, 108, 32, profile.music ? "Music: on" : "Music: off", function () { profile.music = !profile.music; saveProfile(); }, { size: 12 });
+    button(x + 128, bb - 42, 108, 32, profile.sound ? "Sound: on" : "Sound: off", function () { profile.sound = !profile.sound; saveProfile(); }, { size: 12 });
+  }
+  function wrapClip(s, x, y, maxW, size, col) {
+    var words = String(s).split(" "), lines = [], line = "";
+    words.forEach(function (wd) { var t = line ? line + " " + wd : wd; if (tw(t, size, 700) > maxW && line) { lines.push(line); line = wd; } else line = t; });
+    lines.push(line);
+    if (lines.length > 2) { lines = lines.slice(0, 2); lines[1] += " ..."; }
+    lines.forEach(function (l, i) { text(l, x, y + (lines.length === 1 ? 4 : 0) + i * 14, size, col, "center", 700); });
+  }
+  function counter(x, y, label, val, col, w) {
+    w = w || (LP.w - 28) / 3 - 6;
+    rr(x, y, w, 54, 8); cx.fillStyle = "#0b1d14"; cx.fill();
+    text(label, x + w / 2, y + 15, 11, COL.dim, "center", 800);
+    text(String(val), x + w / 2, y + 37, 21, col, "center", 800);
+  }
+  function handLabel(sc) {
+    var names = sc.affected.map(function (i) { return R.TYPES[sc.infos[i].type].name; });
+    var s = names.slice(0, 3).join(" + ") + (names.length > 3 ? " +" + (names.length - 3) : "");
+    if (sc.moved.length) s += " · Remeld " + sc.moved.length;
+    if (sc.sweep) s += " · CLEAN SWEEP"; else if (sc.rummy) s += " · RUMMY";
+    return s;
+  }
+
+  // ---------------- top strip: regulars and the bar ----------------
+  var regHover = -1, consHover = -1, regDrag = null;
+  function drawTop(shopMode) {
+    panel(TOP.x, TOP.y, TOP.w, TOP.h);
+    var slots = regSlots();
+    regHover = -1; consHover = -1;
+    for (var i = 0; i < slots; i++) {
+      var r = regRect(i);
+      if (i >= run.regs.length) { rr(r.x, r.y, r.w, r.h, 10); cx.strokeStyle = "rgba(216,180,95,0.18)"; cx.setLineDash([5, 5]); cx.lineWidth = 1.5; cx.stroke(); cx.setLineDash([]); continue; }
+      var g = run.regs[i], def = C.REG[g.id], o = { value: def.show ? def.show({ st: g.st }) : "" };
+      if (anim && anim.focus && anim.focus.reg === i) { o.flash = 1; o.shake = 1; o.lift = 6; }
+      if (hot(r.x, r.y, r.w, r.h) && !regDrag) { regHover = i; o.lift = 4; }
+      if (regDrag && regDrag.i === i && regDrag.moved) continue;
+      regCard(def, r.x, r.y, r.w, r.h, o);
+    }
+    text(run.regs.length + "/" + slots, regRect(slots - 1).x + 112 + 10, TOP.y + TOP.h - 14, 11, COL.dim, "left", 700);
+    var cs = RUN.stats(run).consSlots;
+    for (var j = 0; j < cs; j++) {
+      var q = consRect(j);
+      if (j >= run.cons.length) { rr(q.x, q.y, q.w, q.h, 9); cx.strokeStyle = "rgba(160,122,192,0.2)"; cx.setLineDash([5, 5]); cx.lineWidth = 1.5; cx.stroke(); cx.setLineDash([]); continue; }
+      if (hot(q.x, q.y, q.w, q.h)) consHover = j;
+      consCard(run.cons[j], q.x, q.y, q.w, q.h, { sel: selCons === j });
+    }
+    if (regDrag && regDrag.moved) { var d = C.REG[run.regs[regDrag.i].id]; regCard(d, mouse.x - 56, mouse.y - 60, 112, 134, { lift: 0 }); }
+  }
+  function topTooltips(shopMode) {
+    if (regHover >= 0 && !regDrag) {
+      var g = run.regs[regHover], def = C.REG[g.id], r = regRect(regHover);
+      var foot = def.show ? "Now: " + def.show({ st: g.st }) : "";
+      foot = (foot ? foot + "   " : "") + "Sell for $" + Math.max(1, Math.floor(def.cost / 2)) + " (right-click)";
+      tooltip(r.x, r.y + r.h + 8, 270, def.name, def.desc + "\n" + RARITY[def.rarity].name + ". Drag to reorder - they score left to right.", foot, RARITY[def.rarity].col);
+    }
+    if (consHover >= 0 && consHover !== selCons) {
+      var id = run.cons[consHover], d = C.CONS[id], q = consRect(consHover);
+      tooltip(q.x - 200, q.y + q.h + 8, 270, d.name, d.desc + (d.kind === "tool" && !d.money ? "\nSelect tiles in your rack, then click this card and USE." : ""), "Click to use or sell", d.kind === "drink" ? "#a07ac0" : "#b39a5a");
+    }
+  }
+  function drawConsMenu() {
+    if (selCons < 0 || !run.cons[selCons]) { selCons = -1; return; }
+    var q = consRect(selCons), id = run.cons[selCons], d = C.CONS[id], x = q.x - 70, y = q.y + q.h + 8;
+    rr(x, y, 150, 86, 10); cx.fillStyle = "rgba(8,18,13,0.97)"; cx.fill(); cx.strokeStyle = COL.gold; cx.stroke();
+    var canUse = d.kind === "drink" || d.money || (screen === "table" && !anim);
+    button(x + 10, y + 10, 130, 32, "USE", function () { useCons(selCons); }, { primary: true, disabled: !canUse, size: 14 });
+    button(x + 10, y + 46, 130, 30, "SELL $1", function () { RUN.sellCons(run, selCons); selCons = -1; sfx("money"); saveRun(); }, { size: 13 });
+  }
+  function useCons(i) {
+    var ids = Object.keys(work ? work.sel : {}).map(Number);
+    if (screen === "table" && work && changed()) resetHand();
+    var r = RUN.useCons(run, i, ids);
+    if (r.error) { flash(cap(r.error) + ".", COL.bad); sfx("bad"); return; }
+    sfx("buy"); selCons = -1;
+    if (screen === "table") { work.sel = {}; startHand(); }
+    saveRun();
+  }
+
+  // ---------------- the table screen ----------------
+  function drawFelt() {
+    var g = cx.createRadialGradient(TABLE.x + TABLE.w / 2, TABLE.y + TABLE.h / 2, 60, TABLE.x + TABLE.w / 2, TABLE.y + TABLE.h / 2, 620);
+    g.addColorStop(0, "#1b6a48"); g.addColorStop(1, "#0f3f2b");
+    rr(TABLE.x, TABLE.y, TABLE.w, TABLE.h, 16); cx.fillStyle = g; cx.fill();
+    rr(TABLE.x, TABLE.y, TABLE.w, TABLE.h, 16); cx.strokeStyle = COL.gold; cx.lineWidth = 2; cx.stroke();
+    rr(TABLE.x + 6, TABLE.y + 6, TABLE.w - 12, TABLE.h - 12, 12); cx.strokeStyle = "rgba(216,180,95,0.25)"; cx.lineWidth = 1; cx.stroke();
+    // art deco corners
+    [[TABLE.x + 16, TABLE.y + 16, 1, 1], [TABLE.x + TABLE.w - 16, TABLE.y + 16, -1, 1], [TABLE.x + 16, TABLE.y + TABLE.h - 16, 1, -1], [TABLE.x + TABLE.w - 16, TABLE.y + TABLE.h - 16, -1, -1]].forEach(function (c) {
+      cx.strokeStyle = "rgba(216,180,95,0.35)"; cx.lineWidth = 1;
+      for (var i = 0; i < 3; i++) { cx.beginPath(); cx.moveTo(c[0], c[1] + c[3] * (10 + i * 7)); cx.lineTo(c[0], c[1]); cx.lineTo(c[0] + c[2] * (10 + i * 7), c[1]); cx.stroke(); }
+    });
+  }
+  function drawTableTiles() {
+    var L = anim ? anim.snap.layout : layoutTable(), tb = run.tb;
+    var placedSet = {}, movedSet = {}, affected = {};
+    if (!anim && prev && prev.check && prev.check.placed) prev.check.placed.forEach(function (t) { placedSet[t.id] = 1; });
+    var sc = anim ? anim.res : prev && prev.score;
+    if (sc) { sc.moved.forEach(function (id) { movedSet[id] = 1; }); }
+    L.trays.forEach(function (tr) {
+      var ids = (anim ? anim.snap.melds : work.melds)[tr.meld] || [];
+      var isNew = ids.some(function (id) { return rackOrigin[id] && (anim || placedSet[id]); }) || ids.some(function (id) { return movedSet[id]; });
+      var focus = anim && anim.focus && anim.focus.meld === tr.meld;
+      rr(tr.x, tr.y, tr.w, tr.h, 8); cx.fillStyle = focus ? "rgba(241,215,143,0.25)" : "rgba(5,25,15,0.35)"; cx.fill();
+      cx.strokeStyle = !tr.info.valid ? COL.bad : isNew ? COL.gold2 : "rgba(216,180,95,0.35)"; cx.lineWidth = !tr.info.valid || isNew ? 2 : 1; cx.stroke();
+      var label = tr.info.valid ? R.TYPES[tr.info.type].name : (ids.length < 3 ? "needs " + (3 - ids.length) + " more" : "not a meld");
+      text(label, tr.x + tr.w / 2, tr.y + tr.h + 10, 11, !tr.info.valid ? COL.bad : isNew ? COL.gold2 : "rgba(233,226,205,0.6)", "center", 700);
+    });
+    if (!anim) {
+      var s = L.slot, over = drag && drag.moved && mouse.x >= TABLE.x && mouse.y >= TABLE.y && mouse.y <= TABLE.y + TABLE.h;
+      rr(s.x, s.y, s.w, s.h, 8); cx.setLineDash([6, 5]); cx.strokeStyle = over ? COL.gold2 : "rgba(216,180,95,0.3)"; cx.lineWidth = 1.5; cx.stroke(); cx.setLineDash([]);
+      text("+", s.x + s.w / 2, s.y + s.h / 2 - 6, 22, "rgba(216,180,95,0.5)", "center", 400);
+      text("new meld", s.x + s.w / 2, s.y + s.h / 2 + 16, 10, "rgba(216,180,95,0.5)", "center", 700);
+    }
+    var info = {};
+    L.trays.forEach(function (tr) { if (tr.info.valid && tr.info.values) for (var id in tr.info.values) info[id] = tr.info.values[id]; });
+    for (var id in L.tiles) {
+      if (drag && drag.moved && drag.id === +id) continue;
+      var p = L.tiles[id], t = tmap[id];
+      if (!t) continue;
+      var o = { value: t.wild ? info[id] : 0, debuff: debuffed(t) };
+      if (anim && anim.focus && anim.focus.tile === +id) { o.glow = 1; p = { x: p.x, y: p.y - 6, w: p.w, h: p.h }; }
+      if (anim && anim.res.broken.indexOf(+id) >= 0 && anim.stage !== "steps") o.broken = true;
+      if (!anim && (placedSet[id] || movedSet[id])) o.glow = 0.6;
+      drawTile(t, p.x, p.y, p.w, p.h, o);
+    }
+  }
+  function debuffed(t) { var r = run.tb.rules; if (t.wild) return false; return (r.debuffColor !== undefined && t.c === r.debuffColor && t.fin !== "ivory") || (r.ceiling && t.n > r.ceiling); }
+  function drawRack() {
+    var g = cx.createLinearGradient(0, RACK.y, 0, RACK.y + RACK.h); g.addColorStop(0, "#5a3a1e"); g.addColorStop(1, "#3a2410");
+    rr(RACK.x, RACK.y + 10, RACK.w, RACK.h - 4, 12); cx.fillStyle = g; cx.fill();
+    rr(RACK.x, RACK.y + 10, RACK.w, RACK.h - 4, 12); cx.strokeStyle = "#8a6232"; cx.lineWidth = 1.5; cx.stroke();
+    var pos = anim ? anim.snap.rackPos : layoutRack(), ids = anim ? anim.snap.rack : work.rack;
+    ids.forEach(function (id) {
+      if (drag && drag.moved && drag.id === id) return;
+      var p = pos[id], t = tmap[id];
+      if (!p || !t) return;
+      var o = { sel: !anim && work.sel[id], debuff: debuffed(t) };
+      if (anim && anim.focus && anim.focus.tile === id) o.glow = 1;
+      drawTile(t, p.x, p.y, p.w, p.h, o);
+    });
+    text(run.tb.pile.length + " in the bag", RACK.x + RACK.w - 14, RACK.y + RACK.h - 2, 11, "#c9a77a", "right", 700);
+  }
+  function drawButtons() {
+    var tb = run.tb, x = RACK.x, can = prev && prev.check.ok && !anim, nsel = Object.keys(work.sel).length;
+    button(x, BTN_Y, 120, 52, "IDEA", doIdea, { size: 15, disabled: !!anim });
+    button(x + 130, BTN_Y, 120, 52, "RESET", function () { resetHand(); sfx("ui"); }, { size: 15, disabled: !!anim || !changed() });
+    button(x + 260, BTN_Y, 130, 52, sortMode === "num" ? "SORT: 1-13" : "SORT: COLOR", function () { sortMode = sortMode === "num" ? "col" : "num"; sortRack(); sfx("ui"); }, { size: 13, disabled: !!anim });
+    button(x + RACK.w - 560, BTN_Y, 150, 52, "PASS (+2 tiles)", doPass, { size: 13, disabled: !!anim || changed(), color: "#4a3a2a" });
+    button(x + RACK.w - 400, BTN_Y, 180, 52, "DRAW" + (nsel ? " " + nsel : "") + "  (" + tb.drawsLeft + " left)", doDraw, { size: 14, disabled: !!anim || tb.drawsLeft <= 0, color: "#7a2f2a" });
+    button(x + RACK.w - 210, BTN_Y, 210, 52, "PLAY HAND", doPlay, { primary: true, size: 18, disabled: !can });
+    text("Drag tiles onto the table. Take melds apart and rebuild them. Click rack tiles to select them for DRAW or a tool.", RACK.x + RACK.w / 2, BTN_Y + 72, 12, "rgba(233,226,205,0.55)", "center", 600);
+  }
+  function drawPops(dt) {
+    if (!anim) return;
+    anim.pops = anim.pops.filter(function (p) { p.t += dt; return p.t < 0.9; });
+    anim.pops.forEach(function (p) {
+      var a = Math.min(1, (0.9 - p.t) * 3), y = p.y - p.t * 30, s = p.big ? 22 : 17;
+      cx.globalAlpha = a;
+      var w = tw(p.s, s, 900) + 16;
+      rr(p.x - w / 2, y - s * 0.75, w, s * 1.5, 6); cx.fillStyle = "rgba(10,10,10,0.75)"; cx.fill();
+      text(p.s, p.x, y, s, p.col, "center", 900);
+      cx.globalAlpha = 1;
+    });
+    if (anim.stage !== "steps") {
+      var t = anim.t, big = anim.res.rummy;
+      var cxp = TABLE.x + TABLE.w / 2, cyp = TABLE.y + TABLE.h / 2;
+      if (anim.stage === "fly") { cxp += (LP.x + LP.w / 2 - cxp) * Math.min(1, t / 0.5); cyp += (LP.y + 330 - cyp) * Math.min(1, t / 0.5); }
+      var s2 = anim.stage === "total" ? 1 + Math.max(0, 0.4 - t) : 1 - Math.min(0.6, t);
+      cx.save(); cx.translate(cxp, cyp); cx.scale(s2, s2);
+      if (big) { pixelBurst(t); text(anim.res.sweep ? "CLEAN SWEEP!" : "RUMMY!", 0, -56, 40, "#ff8a5a", "center", 900, SERIF); }
+      var st = fmt(anim.res.total), w = tw(st, 44, 900, SERIF) + 50;
+      rr(-w / 2, -32, w, 64, 14); cx.fillStyle = "rgba(10,12,10,0.88)"; cx.fill(); cx.strokeStyle = COL.gold2; cx.lineWidth = 2; cx.stroke();
+      text(st, 0, 2, 44, COL.gold2, "center", 900, SERIF);
+      cx.restore();
+    }
+  }
+  function pixelBurst(t) {
+    for (var i = 0; i < 18; i++) {
+      var a = i / 18 * Math.PI * 2, r = 60 + t * 160;
+      cx.fillStyle = ["#d1423b", "#2c6bc9", "#d98c12", "#f1d78f"][i % 4];
+      cx.globalAlpha = Math.max(0, 1 - t);
+      cx.fillRect(Math.cos(a) * r - 4, Math.sin(a) * r * 0.6 - 4, 8, 8);
+    }
+    cx.globalAlpha = 1;
+  }
+  function drawMsg(dt) {
+    if (!msg) return;
+    msg.t += dt;
+    if (msg.t > 3.2) { msg = null; return; }
+    var a = Math.min(1, (3.2 - msg.t) * 2), w = tw(msg.s, 15, 700) + 36;
+    cx.globalAlpha = a;
+    rr(TABLE.x + TABLE.w / 2 - w / 2, TABLE.y + TABLE.h - 46, w, 34, 17); cx.fillStyle = "rgba(6,14,10,0.9)"; cx.fill();
+    text(msg.s, TABLE.x + TABLE.w / 2, TABLE.y + TABLE.h - 29, 15, msg.col, "center", 700);
+    cx.globalAlpha = 1;
+  }
+  function drawTableScreen(dt) {
+    if (anim) updateAnim(dt * animSpeed);
+    drawLeft(false);
+    drawTop(false);
+    drawFelt();
+    if (run.tb.handNo === 1 && !anim && !changed() && run.night === 1 && run.tableNo === 0) {
+      text("The house has laid two melds. Make melds from your rack below, add to these, or take them apart and rebuild.", TABLE.x + TABLE.w / 2, TABLE.y + TABLE.h - 22, 13, "rgba(241,215,143,0.7)", "center", 600);
+    }
+    drawTableTiles();
+    drawRack();
+    drawButtons();
+    drawPops(dt * animSpeed);
+    if (drag && drag.moved) { var t = tmap[drag.id]; drawTile(t, mouse.x - 26, mouse.y - 37, 52, 74, { glow: 0.8 }); }
+    drawMsg(dt);
+    drawConsMenu();
+    if (!drag) topTooltips(false);
+  }
+
+  // ---------------- cash-out, shop, packs ----------------
+  var cashT = 0, animSpeed = 1;
+  function drawCashout(dt) {
+    cashT += dt;
+    drawLeft(false); drawTop(false); drawFelt(); drawTableTiles(); drawRack();
+    cx.fillStyle = "rgba(4,12,8,0.6)"; cx.fillRect(TABLE.x, TABLE.y, TABLE.w, H - TABLE.y);
+    var c = run.cash, x = TABLE.x + TABLE.w / 2 - 220, y = TABLE.y + 40, h = 120 + c.lines.length * 34;
+    rr(x, y, 440, h, 16); cx.fillStyle = COL.panel; cx.fill(); cx.strokeStyle = COL.gold; cx.lineWidth = 2; cx.stroke();
+    text("TABLE WON", x + 220, y + 32, 28, COL.gold2, "center", 700, SERIF);
+    c.lines.forEach(function (l, i) {
+      if (cashT < 0.25 + i * 0.25) return;
+      text(l.text, x + 30, y + 78 + i * 34, 16, COL.text, "left", 600);
+      text("+$" + l.money, x + 410, y + 78 + i * 34, 18, COL.money, "right", 800);
+    });
+    if (cashT > 0.3 + c.lines.length * 0.25) button(x + 110, y + h - 52, 220, 42, "COLLECT $" + c.total, collect, { primary: true, size: 17 });
+  }
+  function collect() {
+    RUN.collect(run); sfx("money");
+    if (run.phase === "won") { profile.wins++; profile.runs++; if (run.stake + 1 >= profile.stakes && run.stake + 1 < RUN.STAKES.length) profile.stakes = run.stake + 2; profile.best = Math.max(profile.best, run.stats.best); saveProfile(); screen = "won"; sfx("win"); }
+    else if (run.phase === "demoend") { profile.runs++; saveProfile(); screen = "demoend"; }
+    else { screen = "shop"; }
+    saveRun();
+  }
+  var SHOP = { x: TABLE.x, y: TABLE.y, w: TABLE.w, h: 560 };
+  var shopHover = null;
+  function drawShop(dt) {
+    drawLeft(true);
+    drawTop(true);
+    var x = SHOP.x, y = SHOP.y, s = run.shop;
+    rr(x, y, SHOP.w, 612, 16); cx.fillStyle = "#13261d"; cx.fill(); cx.strokeStyle = COL.gold; cx.lineWidth = 2; cx.stroke();
+    text("THE BAR", x + SHOP.w / 2, y + 30, 26, COL.gold2, "center", 700, SERIF);
+    shopHover = null;
+    // regulars for hire
+    text("REGULARS", x + 30, y + 66, 12, COL.dim, "left", 800);
+    s.regs.forEach(function (o, i) {
+      var cxp = x + 30 + i * 150, cyp = y + 80;
+      if (o.sold) { text("taken", cxp + 60, cyp + 70, 13, COL.dim, "center", 700); return; }
+      var def = C.REG[o.id], pr = RUN.regPrice(run, o.id), can = run.money >= pr && run.regs.length < regSlots();
+      var on = hot(cxp, cyp, 120, 150);
+      regCard(def, cxp, cyp, 120, 150, { lift: on ? 4 : 0 });
+      if (on) shopHover = { title: def.name, body: def.desc + "\n" + RARITY[def.rarity].name + ".", x: cxp + 128, y: cyp - 40, col: RARITY[def.rarity].col };
+      button(cxp + 10, cyp + 160, 100, 34, "$" + pr, function () { if (RUN.buyReg(run, i)) { sfx("buy"); saveRun(); } else { sfx("bad"); flash(run.regs.length >= regSlots() ? "No free seat. Sell a regular first (right-click it)." : "Not enough money."); } }, { primary: can, disabled: !can, size: 15 });
+    });
+    button(x + 30, y + 250, 270, 36, "REROLL REGULARS  $" + RUN.rerollCost(run), function () { if (RUN.reroll(run)) { sfx("ui"); saveRun(); } else sfx("bad"); }, { size: 13, disabled: run.money < RUN.rerollCost(run) });
+    // the bar: drinks and tools
+    text("DRINKS AND TOOLS", x + 360, y + 66, 12, COL.dim, "left", 800);
+    s.bar.forEach(function (o, i) {
+      var cxp = x + 360 + i * 110, cyp = y + 80;
+      if (o.sold) { text("taken", cxp + 46, cyp + 70, 13, COL.dim, "center", 700); return; }
+      var d = C.CONS[o.id], pr = RUN.consPrice(run, o.id), can = run.money >= pr && (d.kind === "drink" || run.cons.length < RUN.stats(run).consSlots);
+      consCard(o.id, cxp, cyp, 92, 150, {});
+      if (hot(cxp, cyp, 92, 150)) shopHover = { title: d.name, body: d.desc + (d.kind === "drink" ? "\nDrinks take effect at once." : "\nTools wait in your slots; use them at a table."), x: cxp + 100, y: cyp - 40, col: d.kind === "drink" ? "#a07ac0" : "#b39a5a" };
+      button(cxp + 6, cyp + 160, 80, 34, "$" + pr, function () { if (RUN.buyCons(run, i)) { sfx("buy"); saveRun(); } else sfx("bad"); }, { primary: can, disabled: !can, size: 15 });
+    });
+    // packs
+    text("PACKS", x + 600, y + 66, 12, COL.dim, "left", 800);
+    s.packs.forEach(function (o, i) {
+      var cxp = x + 600 + i * 120, cyp = y + 80, Pk = RUN.PACKS[o.kind];
+      if (o.sold) { text("opened", cxp + 50, cyp + 70, 13, COL.dim, "center", 700); return; }
+      packArt(o.kind, cxp, cyp, 100, 150);
+      if (hot(cxp, cyp, 100, 150)) shopHover = { title: Pk.name, body: Pk.desc, x: cxp + 108, y: cyp - 40, col: COL.gold };
+      var pr = RUN.price(run, Pk.cost), can = run.money >= pr;
+      button(cxp + 10, cyp + 160, 80, 34, "$" + pr, function () { if (RUN.openPack(run, i)) { sfx("buy"); packT = 0; saveRun(); } else { sfx("bad"); if (o.kind === "regulars") flash("No free seat for a new regular."); } }, { primary: can, disabled: !can, size: 15 });
+    });
+    // perk
+    if (s.perk) {
+      var pd = C.PERK[s.perk], ppr = RUN.price(run, pd.cost), px = x + 850, py = y + 80;
+      text("CLUB PERK", px, y + 66, 12, COL.dim, "left", 800);
+      rr(px, py, 120, 150, 10); cx.fillStyle = "#33261a"; cx.fill(); cx.strokeStyle = COL.gold2; cx.lineWidth = 2; cx.stroke();
+      text("✦", px + 60, py + 46, 34, COL.gold2, "center", 400);
+      wrap(pd.name, px + 60, py + 96, 108, 13, COL.text, 15, 800, "center");
+      if (hot(px, py, 120, 150)) shopHover = { title: pd.name, body: pd.desc + "\nPerks last for the whole run. One is offered each night.", x: px - 290, y: py - 40, col: COL.gold2 };
+      button(px + 10, py + 160, 100, 34, "$" + ppr, function () { if (RUN.buyPerk(run)) { sfx("buy"); saveRun(); } else sfx("bad"); }, { primary: run.money >= ppr, disabled: run.money < ppr, size: 15 });
+    }
+    if (run.perks.length) text("Perks: " + run.perks.map(function (p) { return C.PERK[p].name; }).join(", "), x + 30, y + 312, 13, COL.gold2, "left", 700);
+    // levels of your melds, compactly
+    text("YOUR MELDS", x + 30, y + 350, 12, COL.dim, "left", 800);
+    R.TYPE_KEYS.forEach(function (k, i) {
+      var v = R.typeValue(k, run.levels), l = run.levels[k] || 1, cxp = x + 30 + (i % 4) * 230, cyp = y + 372 + Math.floor(i / 4) * 30;
+      text(R.TYPES[k].name + (l > 1 ? " (lv " + l + ")" : ""), cxp, cyp, 13, l > 1 ? COL.gold2 : COL.text, "left", 700);
+      text(v.chips + " × " + v.mult, cxp + 200, cyp, 13, COL.dim, "right", 700);
+    });
+    var nextNo = run.tableNo + 1, nn = run.night;
+    if (nextNo > 2) { nextNo = 0; nn++; }
+    button(x + SHOP.w - 300, y + 520, 270, 64, "TO THE " + tableName(nextNo).toUpperCase(), function () { RUN.leaveShop(run); screen = "table"; startHand(); sfx("ui"); saveRun(); }, { primary: true, size: 16 });
+    text("Right-click a regular to sell it. Drag regulars to change their order.", x + 30, y + 560, 13, COL.dim, "left", 600);
+    drawConsMenu();
+    if (run.pack) drawPack(dt);
+    else {
+      if (shopHover) tooltip(shopHover.x, shopHover.y, 280, shopHover.title, shopHover.body, "", shopHover.col);
+      topTooltips(true);
+    }
+    drawMsg(dt);
+  }
+  function packArt(kind, x, y, w, h) {
+    rr(x, y, w, h, 10); cx.fillStyle = kind === "tiles" ? "#3a2a18" : kind === "bar" ? "#2c1f33" : "#1f3328"; cx.fill();
+    cx.strokeStyle = COL.gold; cx.lineWidth = 2; cx.stroke();
+    if (kind === "tiles") { drawTile({ n: 7, c: 0, fin: "gold" }, x + 14, y + 26, 34, 48); drawTile({ n: 9, c: 1, fin: "glass" }, x + 52, y + 36, 34, 48); }
+    else if (kind === "bar") { consCard("D_RUN", x + 22, y + 18, 56, 76, {}); }
+    else { text("♛", x + w / 2, y + 56, 42, COL.gold2, "center", 400); }
+    wrap(RUN.PACKS[kind].name, x + w / 2, y + 112, w - 10, 14, COL.text, 16, 800, "center");
+  }
+  var packT = 0;
+  function drawPack(dt) {
+    packT += dt;
+    var p = run.pack;
+    cx.fillStyle = "rgba(4,10,7,0.85)"; cx.fillRect(0, 0, W, H);
+    text(RUN.PACKS[p.kind].name.toUpperCase(), W / 2, 200, 30, COL.gold2, "center", 700, SERIF);
+    text("Pick one", W / 2, 236, 16, COL.dim, "center", 600);
+    var n = p.choices.length, cw = 150, gap = 40, x0 = W / 2 - (n * cw + (n - 1) * gap) / 2, hov = null;
+    p.choices.forEach(function (c, i) {
+      var x = x0 + i * (cw + gap), y = 280, on = hot(x, y, cw, 200);
+      if (c.tile) {
+        drawTile(c.tile, x + 35, y + 30 - (on ? 6 : 0), 80, 112, { glow: on ? 0.8 : 0 });
+        var f = c.tile.wild ? { name: "Wild", desc: "stands for any tile" } : R.FINISHES[c.tile.fin];
+        text((c.tile.wild ? "" : R.COLORS[c.tile.c].name + " " + c.tile.n + " - ") + f.name, x + cw / 2, y + 166, 14, COL.text, "center", 700);
+        wrap(f.desc, x + cw / 2, y + 188, cw, 12, COL.dim, 15, 600, "center");
+      } else if (c.cons) {
+        consCard(c.cons, x + 25, y + (on ? -6 : 0), 100, 160, {});
+        if (on) hov = { title: C.CONS[c.cons].name, body: C.CONS[c.cons].desc, x: x, y: y + 220 };
+      } else if (c.reg) {
+        regCard(C.REG[c.reg], x + 10, y, 130, 170, { lift: on ? 6 : 0 });
+        if (on) hov = { title: C.REG[c.reg].name, body: C.REG[c.reg].desc, x: x, y: y + 220 };
+      }
+      if (packT > 0.3) button(x + 25, y + 230, 100, 36, "TAKE", function () { if (RUN.choose(run, i)) { sfx("buy"); saveRun(); } else { sfx("bad"); flash("No room for that."); } }, { primary: true, size: 14 });
+    });
+    button(W / 2 - 70, 560, 140, 40, "SKIP", function () { RUN.choose(run, -1); saveRun(); }, { size: 14 });
+    if (hov) tooltip(hov.x, hov.y + 60, 280, hov.title, hov.body, "", COL.gold);
+  }
+
+  // ---------------- title, help, bag, levels, endings ----------------
+  var screen = "title", helpFrom = "title", helpPage = 0, bagFrom = "table", titleT = 0, stakePick = 0;
+  function newRun() {
+    run = RUN.newRun({ seed: (Date.now() ^ Math.floor(Math.random() * 1e9)) >>> 0, stake: stakePick, demo: DEMO });
+    screen = "table"; startHand(); saveRun(); audio();
+    if (!profile.seenHelp) { profile.seenHelp = true; saveProfile(); helpFrom = "table"; helpPage = 0; screen = "help"; }
+  }
+  function drawTitle(dt) {
+    titleT += dt;
+    var g = cx.createRadialGradient(W / 2, H / 2, 80, W / 2, H / 2, 760); g.addColorStop(0, "#1b5a3e"); g.addColorStop(1, "#08140e");
+    cx.fillStyle = g; cx.fillRect(0, 0, W, H);
+    // sunburst
+    cx.save(); cx.translate(W / 2, 250);
+    for (var i = 0; i < 24; i++) { var a = i / 24 * Math.PI * 2 + titleT * 0.03; cx.fillStyle = i % 2 ? "rgba(216,180,95,0.05)" : "rgba(216,180,95,0.02)"; cx.beginPath(); cx.moveTo(0, 0); cx.arc(0, 0, 900, a, a + Math.PI / 24); cx.closePath(); cx.fill(); }
+    cx.restore();
+    var letters = "REMELD", tw2 = 96, th = 134, x0 = W / 2 - (letters.length * (tw2 + 14) - 14) / 2;
+    for (var k = 0; k < letters.length; k++) {
+      var bob = Math.sin(titleT * 2 + k * 0.6) * 4, x = x0 + k * (tw2 + 14), y = 160 + bob;
+      drawTile({ n: 0, c: k % 4 }, x, y, tw2, th, { blank: true });
+      cx.font = "800 84px " + SERIF; cx.textAlign = "center"; cx.textBaseline = "middle"; cx.fillStyle = R.COLORS[k % 4].hex; cx.fillText(letters[k], x + tw2 / 2, y + th * 0.44);
+      mark(R.COLORS[k % 4].mark, x + tw2 / 2, y + th * 0.84, 7, R.COLORS[k % 4].hex);
+    }
+    text("A tile rummy roguelike. Take the table apart, build it back bigger.", W / 2, 350, 20, "#e9dfc4", "center", 600, SERIF);
+    text("FREE DEMO · the first two nights", W / 2, 384, 15, COL.gold2, "center", 800);
+    var by = 430;
+    if (run) button(W / 2 - 150, by, 300, 56, "CONTINUE RUN", function () { audio(); screen = run.phase === "shop" ? "shop" : run.phase === "cashout" ? "cashout" : "table"; if (screen === "table") startHand(); }, { primary: true, size: 19 });
+    var ny = run ? by + 70 : by;
+    button(W / 2 - 150, ny, 300, 56, "NEW RUN", function () { if (run && !confirmNew) { confirmNew = true; return; } confirmNew = false; newRun(); }, { primary: !run, size: 19 });
+    if (confirmNew) text("Your current run will be lost. Click NEW RUN again to start over.", W / 2, ny + 72, 14, COL.bad, "center", 700);
+    
+    button(W / 2 - 150, H - 150, 145, 44, "HOW TO PLAY", function () { helpFrom = "title"; helpPage = 0; screen = "help"; }, { size: 14 });
+    button(W / 2 + 5, H - 150, 145, 44, profile.music ? "MUSIC: ON" : "MUSIC: OFF", function () { profile.music = !profile.music; saveProfile(); audio(); }, { size: 14 });
+    button(W / 2 - 150, H - 96, 300, 40, "GET THE FULL GAME", openStore, { size: 14 });
+    if (profile.runs) text("Runs " + profile.runs + "  ·  Wins " + profile.wins + (profile.best ? "  ·  Best hand " + fmt(profile.best) : ""), W / 2, H - 30, 13, COL.dim, "center", 600);
+  }
+  var confirmNew = false;
+  function openStore() { try { window.open(STORE_URL, "_blank", "noopener"); } catch (e) {} }
+  function ex(n, c, f) { return { n: n, c: c, fin: f || null, wild: n === 0 }; }
+  var HELP = [
+    { title: "Melds", body: "Tiles run 1 to 13 in four colors. A meld is three or more tiles that make either:\n\nA RUN - one color, numbers in a row (no wrapping from 13 to 1).\nA GROUP - one number, every tile a different color (so 3 or 4 tiles).\n\nA Wild stands for any tile.",
+      tiles: [[ex(4, 1), ex(5, 1), ex(6, 1), ex(7, 1)], [ex(9, 0), ex(9, 2), ex(9, 3)], [ex(11, 2), ex(0, 0), ex(13, 2)]] },
+    { title: "A hand", body: "Drag tiles from your rack onto the table: make new melds, or add to melds already there. When every meld on the table is valid, PLAY HAND.\n\nYour score is CHIPS × MULT. Each meld you make or change adds its chips and mult; every tile you play adds its number in chips. Reach the table's target within your hands.",
+      tiles: [[ex(2, 3), ex(3, 3), ex(4, 3)], [ex(5, 3)]] },
+    { title: "Take the table apart", body: "Any tile already on the table can be moved to another meld - as long as every meld is valid when you play. Split a long run with a matching tile, borrow the end of a run, break a group of four.\n\nEvery table tile you rearrange adds +1 mult (REMELD). Play 7 or more tiles in one hand for RUMMY (x2), or empty your rack for a CLEAN SWEEP (x3).",
+      tiles: [[ex(3, 0), ex(4, 0), ex(5, 0)], [ex(5, 0), ex(6, 0), ex(7, 0)]] },
+    { title: "The night", body: "Each night has three tables; the third has a house rule. Win a table to get paid, then visit the bar: hire regulars (they change how you score, left to right), buy drinks (level up a kind of meld), tools (change tiles in your bag) and packs.\n\nDRAW throws back up to 5 selected rack tiles for new ones. PASS spends a hand for two extra tiles. IDEA suggests a play.\n\nSurvive eight nights.",
+      tiles: [] }
+  ];
+  function drawHelp() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    var pg = HELP[helpPage];
+    text("HOW TO PLAY", W / 2, 50, 16, COL.dim, "center", 800);
+    text(pg.title, W / 2, 96, 36, COL.gold2, "center", 700, SERIF);
+    var y = wrap(pg.body, 240, 160, 800, 18, COL.text, 27, 600);
+    var tx = W / 2 - pg.tiles.reduce(function (a, m) { return a + m.length * 66 + 40; }, -40) / 2;
+    pg.tiles.forEach(function (m) {
+      m.forEach(function (t, i) { drawTile(t, tx + i * 66, y + 30, 60, 84, {}); });
+      tx += m.length * 66 + 40;
+    });
+    text((helpPage + 1) + " / " + HELP.length, W / 2, H - 120, 14, COL.dim, "center", 700);
+    if (helpPage > 0) button(W / 2 - 230, H - 96, 140, 48, "BACK", function () { helpPage--; }, { size: 15 });
+    if (helpPage < HELP.length - 1) button(W / 2 + 90, H - 96, 140, 48, "NEXT", function () { helpPage++; }, { primary: true, size: 15 });
+    button(W / 2 - 70, H - 96, 140, 48, helpPage < HELP.length - 1 ? "SKIP" : "PLAY", function () { screen = helpFrom; if (screen === "table") startHand(); }, { primary: helpPage === HELP.length - 1, size: 15 });
+  }
+  function drawBag() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    text("YOUR BAG · " + run.bag.length + " tiles", W / 2, 50, 26, COL.gold2, "center", 700, SERIF);
+    var cols = [[], [], [], []], wild = [];
+    run.bag.forEach(function (t) { if (t.wild) wild.push(t); else cols[t.c].push(t); });
+    cols.forEach(function (list, c) {
+      list.sort(function (a, b) { return a.n - b.n; });
+      text(R.COLORS[c].name, 120, 128 + c * 120, 15, R.COLORS[c].hex === "#26252e" ? "#c9c9d6" : R.COLORS[c].hex, "right", 800);
+      list.forEach(function (t, i) { drawTile(t, 140 + i * Math.min(54, 1000 / Math.max(13, list.length)), 92 + c * 120, 46, 66, {}); });
+    });
+    text("Wild", 120, 128 + 4 * 120, 15, COL.text, "right", 800);
+    wild.forEach(function (t, i) { drawTile(t, 140 + i * 54, 92 + 4 * 120, 46, 66, {}); });
+    button(W / 2 - 80, H - 90, 160, 48, "BACK", function () { screen = bagFrom; }, { primary: true });
+  }
+  function drawLevels() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    text("YOUR MELDS", W / 2, 50, 26, COL.gold2, "center", 700, SERIF);
+    var y = 110;
+    R.TYPE_KEYS.forEach(function (k) {
+      var T = R.TYPES[k], v = R.typeValue(k, run.levels), l = run.levels[k] || 1;
+      rr(240, y, 800, 60, 10); cx.fillStyle = COL.panel; cx.fill();
+      text(T.name, 270, y + 22, 20, COL.text, "left", 700, SERIF);
+      text({ TRIO: "3 of a number", QUARTET: "4 of a number", RUN: "3 in a row", LONGRUN: "4 in a row", BIGRUN: "5 in a row", GRANDRUN: "6 to 12 in a row", LADDER: "1 to 13, one color" }[k], 270, y + 44, 13, COL.dim, "left", 600);
+      text("level " + l, 600, y + 30, 15, l > 1 ? COL.gold2 : COL.dim, "left", 800);
+      rr(720, y + 14, 110, 32, 6); cx.fillStyle = COL.chips; cx.fill(); text(v.chips + " chips", 775, y + 31, 15, "#fff", "center", 800);
+      rr(850, y + 14, 110, 32, 6); cx.fillStyle = COL.mult; cx.fill(); text(v.mult + " mult", 905, y + 31, 15, "#fff", "center", 800);
+      text(T.drink, 1030, y + 31, 12, "#c9a8e8", "right", 700);
+      y += 72;
+    });
+    text("Drinks level them up: " + R.TYPE_KEYS.map(function (k) { return R.TYPES[k].drink; }).join(", ") + ".", W / 2, y + 20, 14, COL.dim, "center", 600);
+    button(W / 2 - 80, H - 90, 160, 48, "BACK", function () { screen = bagFrom; }, { primary: true });
+  }
+  function drawEnd(won) {
+    cx.fillStyle = "rgba(4,10,7,0.92)"; cx.fillRect(0, 0, W, H);
+    text(won ? "THE PARLOR IS YOURS" : "THE HOUSE WINS", W / 2, 180, 44, won ? COL.gold2 : COL.bad, "center", 700, SERIF);
+    var st = run.stats;
+    text(won ? "Eight nights survived" + (run.stake ? " at " + RUN.STAKES[run.stake].name : "") + "." : "Night " + run.night + ", " + tableName(run.tableNo) + ". " + fmt(run.tb.score) + " of " + fmt(run.tb.target) + ".", W / 2, 240, 20, COL.text, "center", 600, SERIF);
+    text("Best hand " + fmt(st.best) + "  ·  " + st.hands + " hands  ·  " + st.rummies + " RUMMY  ·  " + st.moved + " tiles rearranged", W / 2, 290, 16, COL.dim, "center", 700);
+    run.regs.forEach(function (r, i) { regCard(C.REG[r.id], W / 2 - run.regs.length * 60 + i * 120, 340, 112, 134, {}); });
+    
+    button(W / 2 - 110, 560, 220, 52, "NEW RUN", function () { newRun(); }, { primary: true, size: 16 });
+    button(W / 2 - 110, 624, 220, 44, "TITLE", function () { run = null; saveRun(); screen = "title"; }, { size: 14 });
+  }
+  
+  function drawDemoEnd() {
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    text("THE DEMO ENDS HERE", W / 2, 120, 40, COL.gold2, "center", 700, SERIF);
+    text("You survived two nights at the Parlor.", W / 2, 180, 20, COL.text, "center", 600, SERIF);
+    var y = wrap("The full game has all eight nights, 40 regulars (25 you haven't met), every house rule including The Owner, five stakes to climb, and an endless mode once you win.", W / 2, 250, 760, 18, COL.text, 28, 600, "center");
+    button(W / 2 - 170, y + 50, 340, 60, "GET THE FULL GAME", openStore, { primary: true, size: 19 });
+    button(W / 2 - 90, y + 130, 180, 44, "TITLE", function () { run = null; saveRun(); screen = "title"; }, { size: 14 });
+  }
+  
+
+  // ---------------- main loop and input ----------------
+  var lastT = performance.now(), lastScreen = "";
+  function frame(now) {
+    var dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+    buttons = [];
+    cx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    cx.fillStyle = COL.bg; cx.fillRect(0, 0, W, H);
+    musicTick();
+    if (screen !== lastScreen) { msg = null; selCons = -1; lastScreen = screen; }
+    if (screen === "title") drawTitle(dt);
+    else if (screen === "table") drawTableScreen(dt);
+    else if (screen === "cashout") drawCashout(dt);
+    else if (screen === "shop") drawShop(dt);
+    else if (screen === "help") drawHelp();
+    else if (screen === "bag") drawBag();
+    else if (screen === "levels") drawLevels();
+    else if (screen === "lost") { drawTableScreen(0); drawEnd(false); }
+    else if (screen === "won") drawEnd(true);
+    else if (screen === "demoend") drawDemoEnd();
+    requestAnimationFrame(frame);
+  }
+  function resize() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H); dpr = window.devicePixelRatio || 1;
+    cv.style.width = Math.floor(W * scale) + "px"; cv.style.height = Math.floor(H * scale) + "px";
+    cv.width = Math.floor(W * scale * dpr); cv.height = Math.floor(H * scale * dpr);
+  }
+  window.addEventListener("resize", resize); resize();
+  function local(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+  cv.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  cv.addEventListener("pointermove", function (e) {
+    var m = local(e); mouse.x = m.x; mouse.y = m.y;
+    if (drag && !drag.moved && Math.hypot(m.x - drag.sx, m.y - drag.sy) > 6) { drag.moved = true; sfx("tile"); }
+    if (regDrag && !regDrag.moved && Math.hypot(m.x - regDrag.sx, m.y - regDrag.sy) > 6) regDrag.moved = true;
+  });
+  cv.addEventListener("pointerdown", function (e) {
+    var m = local(e);
+    mouse.x = m.x; mouse.y = m.y; mouse.down = true;
+    cv.focus(); audio();
+    if (e.button === 2) { rightClick(m); return; }
+    for (var i = buttons.length - 1; i >= 0; i--) { var b = buttons[i]; if (m.x >= b.x && m.x <= b.x + b.w && m.y >= b.y && m.y <= b.y + b.h) { sfx("ui"); b.fn(); return; } }
+    if ((screen === "table" || screen === "shop") && run && !run.pack) {
+      // the bar slots and the regulars
+      var cs = RUN.stats(run).consSlots;
+      for (var j = 0; j < Math.min(cs, run.cons.length); j++) { var q = consRect(j); if (m.x >= q.x && m.x <= q.x + q.w && m.y >= q.y && m.y <= q.y + q.h) { selCons = selCons === j ? -1 : j; sfx("ui"); return; } }
+      for (var k = 0; k < run.regs.length; k++) { var r = regRect(k); if (m.x >= r.x && m.x <= r.x + r.w && m.y >= r.y && m.y <= r.y + r.h) { regDrag = { i: k, sx: m.x, sy: m.y, moved: false }; return; } }
+      selCons = -1;
+    }
+    if (screen === "table" && !anim) {
+      var hit = tileAt(m);
+      if (hit) drag = { id: hit.id, from: hit.from, sx: m.x, sy: m.y, moved: false };
+    }
+  });
+  window.addEventListener("pointerup", function (e) {
+    var m = mouse; mouse.down = false;
+    if (regDrag) {
+      if (regDrag.moved) { var to = -1; for (var k = 0; k < run.regs.length; k++) { var r = regRect(k); if (m.x >= r.x - 4 && m.x <= r.x + r.w + 4) to = k; } if (to >= 0 && to !== regDrag.i) { RUN.moveReg(run, regDrag.i, to); sfx("drop"); saveRun(); } }
+      regDrag = null; return;
+    }
+    if (!drag) return;
+    var d = drag; drag = null;
+    if (!d.moved) {
+      if (d.from === "rack") { if (work.sel[d.id]) delete work.sel[d.id]; else work.sel[d.id] = 1; sfx("tile"); }
+      return;
+    }
+    if (dropAt(d.id, m)) sfx("drop"); else sfx("bad");
+  });
+  function rightClick(m) {
+    if (!run || (screen !== "table" && screen !== "shop")) return;
+    for (var k = 0; k < run.regs.length; k++) {
+      var r = regRect(k);
+      if (m.x >= r.x && m.x <= r.x + r.w && m.y >= r.y && m.y <= r.y + r.h) {
+        var def = C.REG[run.regs[k].id];
+        if (sellArm === k) { RUN.sellReg(run, k); sfx("money"); flash("Sold " + def.name + " for $" + Math.max(1, Math.floor(def.cost / 2)) + "."); sellArm = -1; saveRun(); }
+        else { sellArm = k; flash("Right-click " + def.name + " again to sell for $" + Math.max(1, Math.floor(def.cost / 2)) + "."); }
+        return;
+      }
+    }
+    if (screen === "table" && !anim) {
+      var hit = tileAt(m);
+      if (hit && hit.from === "table" && rackOrigin[hit.id]) { removeFromMelds(hit.id); work.rack.push(hit.id); refresh(); sfx("drop"); }
+    }
+  }
+  var sellArm = -1;
+  window.addEventListener("keydown", function (e) {
+    var k = e.key;
+    if (screen === "table" && !anim) {
+      if (k === "Enter") { doPlay(); e.preventDefault(); }
+      else if (k === "d" || k === "D") doDraw();
+      else if (k === "r" || k === "R") resetHand();
+      else if (k === "i" || k === "I") doIdea();
+      else if (k === "s" || k === "S") { sortMode = sortMode === "num" ? "col" : "num"; sortRack(); }
+      else if (k === "Escape") { work.sel = {}; selCons = -1; }
+    } else if (screen === "cashout" && (k === "Enter" || k === " ") && cashT > 1) { collect(); e.preventDefault(); }
+    else if ((screen === "help" || screen === "bag" || screen === "levels") && k === "Escape") screen = screen === "help" ? helpFrom : bagFrom;
+  });
+
+  // hooks for the screenshot tool and tests
+  window.REMELD_APP = {
+    edition: ED,
+    run: function () { return run; },
+    screen: function (s) { if (s) { screen = s; if (s === "table") startHand(); } return screen; },
+    newRun: function (seed, stake) { stakePick = stake || 0; run = RUN.newRun({ seed: seed, stake: stake || 0, demo: DEMO }); screen = "table"; startHand(); return run; },
+    load: function (str) { run = RUN.load(str); screen = run.phase === "shop" ? "shop" : run.phase === "cashout" ? "cashout" : "table"; if (screen === "table") startHand(); },
+    idea: function () { doIdea(); return prev && prev.check.ok; },
+    play: function () { doPlay(); return !!anim; },
+    draw: function (ids) { work.sel = {}; ids.forEach(function (id) { work.sel[id] = 1; }); doDraw(); },
+    work: function () { return work; },
+    preview: function () { return prev; },
+    drop: function (id, x, y) { return dropAt(id, { x: x, y: y }); },
+    layout: function () { return { table: layoutTable(), rack: layoutRack() }; },
+    busy: function () { return !!anim; },
+    collect: function () { collect(); },
+    hover: function (x, y) { mouse.x = x; mouse.y = y; },
+    speed: function (v) { animSpeed = v; },
+    quiet: function () { msg = null; },
+    profile: profile
+  };
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
