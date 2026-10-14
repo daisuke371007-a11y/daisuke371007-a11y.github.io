@@ -1,0 +1,1029 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PANGLINT</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b1210; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; outline: none; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="c" tabindex="0"></canvas>
+<script>window.PANGLINT_EDITION = "demo";</script>
+<script>
+// content.js — PANGLINT: what is in the gravel, the claims, the outfitter's shop.
+(function (root) {
+  "use strict";
+  // grain kinds. rho: density (g/cm3). r: radius as a fraction of the pan radius. val: gold units (GOLD) or dollars (GEM).
+  var K = { SAND: 0, PEBBLE: 1, BLACK: 2, GARNET: 3, FINE: 4, FLAKE: 5, NUGGET: 6 };
+  var KINDS = [
+    { id: "SAND", name: "quartz sand", rho: 2.65, r: 0.011, gold: 0, gem: 0 },
+    { id: "PEBBLE", name: "pebble", rho: 2.6, r: 0.034, gold: 0, gem: 0 },
+    { id: "BLACK", name: "black sand", rho: 5.2, r: 0.009, gold: 0, gem: 0 },
+    { id: "GARNET", name: "garnet", rho: 4.0, r: 0.013, gold: 0, gem: 3 },
+    { id: "FINE", name: "flour gold", rho: 19.3, r: 0.0055, gold: 1, gem: 0 },
+    { id: "FLAKE", name: "gold flake", rho: 19.3, r: 0.0095, gold: 4, gem: 0 },
+    { id: "NUGGET", name: "nugget", rho: 19.3, r: 0.022, gold: 40, gem: 0 }
+  ];
+  // claims: what one scoop holds (per 100 grains of gravel), the gold price paid there, and the goal that opens the next claim.
+  // mix: relative counts of SAND, PEBBLE, BLACK, GARNET; gold: expected FINE, FLAKE, NUGGET per scoop at shovel level 0.
+  var CLAIMS = [
+    { id: "WILLOW", name: "Willow Creek", mix: [80, 9, 9, 2], gold: [7, 2.2, 0.03], price: 1, goal: 800, day: 150, seed: 7, water: "warm",
+      blurb: "A lazy creek with fine gold and plenty of sand. Learn to swirl." },
+    
+  ];
+  // the outfitter: bought with the day's take
+  var UPGRADES = [
+    { id: "PAN", name: "Bigger Pan", desc: "+15% gravel in every scoop.", max: 4, base: 80, grow: 1.9 },
+    { id: "SHOVEL", name: "Better Shovel", desc: "Dig closer to bedrock: +12% gold in the gravel.", max: 5, base: 100, grow: 1.8 },
+    { id: "SCREEN", name: "Classifier Screen", desc: "Sift out the pebbles before they go in the pan (-35% pebbles per level).", max: 2, base: 90, grow: 2.4 },
+    { id: "RIFFLE", name: "Riffled Pan", desc: "Ridges in the pan catch heavy grains at the lip: gold washes out much less.", max: 3, base: 150, grow: 2.2 },
+    { id: "SNUFFER", name: "Snuffer Bottle", desc: "Suck flakes out from under one more grain when you pick.", max: 2, base: 220, grow: 2.6 },
+    { id: "MAGNET", name: "Magnet", desc: "Press Q to lift black sand off the top of the pan.", max: 3, base: 260, grow: 2.0 },
+    { id: "LANTERN", name: "Lantern", desc: "+20 seconds of work before dark.", max: 3, base: 160, grow: 2.1 },
+    { id: "SLUICE", name: "Sluice Box", desc: "Runs in the creek all day. At dusk you pan its concentrate. Longer box per level.", max: 4, base: 600, grow: 2.0 },
+    { id: "PARTNER", name: "Take a Partner", desc: "A partner pans their own gravel all day, the way you taught them.", max: 3, base: 1200, grow: 2.3 },
+    { id: "ASSAY", name: "Assay Deal", desc: "+8% for your gold at the assay office.", max: 5, base: 250, grow: 1.9 }
+  ];
+  var UPGRADE = {}; UPGRADES.forEach(function (u) { UPGRADE[u.id] = u; });
+  var TIPS = [
+    "Swirl first, wash second. Hold the button to shake the pan: gold is seven times heavier than sand and sinks to the bottom.",
+    "Tip the pan by moving the mouse away from its centre. Tip a little and only the top layer washes out. Tip hard and the gold goes with it.",
+    "Running low on water? Right-click to dip the pan in the creek. Dipping stirs the top layers - swirl again before you tip.",
+    "Press F to pick. You only get the flakes you can see; anything still buried under sand goes back in the creek.",
+    "Black sand is heavy too. It sinks with the gold and hides it. Swirl longer, wash gently, or buy a magnet.",
+    "Pebbles float up when you shake. Shake, then tip: they roll out first."
+  ];
+  var api = { K: K, KINDS: KINDS, CLAIMS: CLAIMS, UPGRADES: UPGRADES, UPGRADE: UPGRADE, TIPS: TIPS, GRAINS: 520 };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.CONTENT = api;
+})(this);
+
+</script>
+<script>
+// pan.js — PANGLINT rules: the grains in the pan, swirling, tipping, washing, picking; days, claims, the outfitter.
+// Deterministic: fixed steps, seeded random numbers. No DOM here.
+(function (root) {
+  "use strict";
+  var C = (typeof module !== "undefined" && module.exports) ? require("./content.js") : root.CONTENT;
+  var K = C.K, KINDS = C.KINDS;
+  var RHO = KINDS.map(function (k) { return k.rho; }), RAD = KINDS.map(function (k) { return k.r; });
+  var PILE = 6;  // each grain in the simulation stands for a handful of real ones, so the pile is several grains deep
+  var AREA = RAD.map(function (r) { return Math.PI * r * r * PILE; });
+  var HEAVY = RHO.map(function (p) { return 1 / (1 + (p - 2.65) * 0.25); });     // how easily water moves it
+  var WASHK = RHO.map(function (p) { return 1 / (1 + (p - 2.65) * 0.45); });     // how easily water carries it over the lip
+  var CELL = 0.07, GN = Math.ceil(2 / CELL), CELLA = CELL * CELL;
+  var LIP = 0.80, STEP = 1 / 60, FLOAT_AT = 0.4;
+  var COLD = { warm: 1, fast: 1.3, cold: 1.8 };
+  var FLOATS = KINDS.map(function (k) { return k.id === "FINE" ? 0.95 : k.id === "FLAKE" ? 0.45 : 0; });
+
+  function rng(seed) {
+    var s = (seed >>> 0) || 1;
+    return function () { s = (s + 0x6D2B79F5) >>> 0; var t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+  function gauss(r) { return (r() + r() + r() - 1.5) * 1.15; }
+  function poisson(r, mean) { // small means only
+    if (mean <= 0) return 0;
+    if (mean > 30) return Math.max(0, Math.round(mean + gauss(r) * Math.sqrt(mean)));
+    var L = Math.exp(-mean), k = 0, p = 1;
+    do { k++; p *= r(); } while (p > L);
+    return k - 1;
+  }
+
+  // ---------- the game and the outfitter ----------
+  function newGame(opts) {
+    opts = opts || {};
+    return { v: 1, seed: opts.seed || 1, money: 0, ups: {}, claim: 0, open: 1, got: C.CLAIMS.map(function () { return 0; }), day: 0, best: 0, total: 0, done: false, glintDue: false };
+  }
+  function lv(g, id) { return g.ups[id] || 0; }
+  function cost(g, id) { var u = C.UPGRADE[id], l = lv(g, id); return l >= u.max ? Infinity : Math.round(u.base * Math.pow(u.grow, l)); }
+  function canBuy(g, id) { return g.money >= cost(g, id); }
+  function buy(g, id) { if (!canBuy(g, id)) return false; g.money -= cost(g, id); g.ups[id] = lv(g, id) + 1; return true; }
+  function stats(g) {
+    return {
+      cap: 1 + 0.15 * lv(g, "PAN"),
+      rich: 1 + 0.12 * lv(g, "SHOVEL"),
+      pebbles: Math.pow(0.65, lv(g, "SCREEN")),
+      riffle: Math.pow(0.6, lv(g, "RIFFLE")),
+      pick: 0.10 + 0.55 * lv(g, "SNUFFER"),
+      magnet: lv(g, "MAGNET"),
+      dayPlus: 20 * lv(g, "LANTERN"),
+      sluice: lv(g, "SLUICE"),
+      partners: lv(g, "PARTNER"),
+      assay: 1 + 0.08 * lv(g, "ASSAY")
+    };
+  }
+  function price(g, ci) { return C.CLAIMS[ci].price * stats(g).assay; }
+
+  // ---------- one pan of gravel ----------
+  function scoop(g, ci, r, extra) {
+    var cl = C.CLAIMS[ci], s = stats(g), mix = cl.mix, tot = mix[0] + mix[1] + mix[2] + mix[3];
+    var n0 = C.GRAINS * s.cap, list = [];
+    function add(k, n) { for (var i = 0; i < n; i++) list.push(k); }
+    add(K.SAND, Math.round(n0 * mix[0] / tot));
+    add(K.PEBBLE, Math.round(n0 * mix[1] / tot * s.pebbles / 3));    // pebbles are big: fewer of them
+    add(K.BLACK, Math.round(n0 * mix[2] / tot));
+    add(K.GARNET, poisson(r, n0 * mix[3] / tot / 4));
+    add(K.FINE, poisson(r, cl.gold[0] * s.cap * s.rich));
+    add(K.FLAKE, poisson(r, cl.gold[1] * s.cap * s.rich));
+    add(K.NUGGET, r() < cl.gold[2] * s.cap * s.rich ? 1 : 0);
+    if (extra) extra(list, r);
+    var p = makePan(list, r, s); p.cold = COLD[cl.water] || 1; return p;
+  }
+  function makePan(list, r, s) {
+    var n = list.length, p = {
+      n: n, k: new Uint8Array(n), x: new Float32Array(n), y: new Float32Array(n), z: new Float32Array(n), d: new Float32Array(n), alive: new Uint8Array(n),
+      tx: 0, ty: 0, shake: 0, water: 1, dip: 0, magCool: 0, t: 0, r: r, s: s, events: [], lostGold: 0, washed: 0,
+      goldIn: 0, gemIn: 0, glint: -1, cold: 1, light0: 0
+    };
+    for (var i = 0; i < n; i++) {
+      var a = r() * Math.PI * 2, rr = Math.sqrt(r()) * 0.62;
+      p.k[i] = list[i]; p.x[i] = Math.cos(a) * rr - 0.08; p.y[i] = Math.sin(a) * rr * 0.9 + 0.05; p.z[i] = r(); p.alive[i] = 1;
+      p.goldIn += KINDS[list[i]].gold; p.gemIn += KINDS[list[i]].gem;
+      if (list[i] === K.SAND || list[i] === K.PEBBLE) p.light0++;
+    }
+    return p;
+  }
+  // depth of every grain below the surface, in grain layers (area above it / cell area), from a grid of cells.
+  var cells = [];
+  function layer(p) {
+    var i, c;
+    for (c = 0; c < GN * GN; c++) if (cells[c]) cells[c].length = 0;
+    for (i = 0; i < p.n; i++) {
+      if (!p.alive[i]) continue;
+      c = Math.min(GN - 1, Math.max(0, ((p.y[i] + 1) / CELL) | 0)) * GN + Math.min(GN - 1, Math.max(0, ((p.x[i] + 1) / CELL) | 0));
+      (cells[c] || (cells[c] = [])).push(i);
+    }
+    var load = new Float32Array(GN * GN);
+    for (c = 0; c < GN * GN; c++) {
+      var L = cells[c]; if (!L || !L.length) continue;
+      L.sort(function (a, b) { return p.z[b] - p.z[a]; });
+      var acc = 0;
+      for (var j = 0; j < L.length; j++) { p.d[L[j]] = acc / CELLA; acc += AREA[p.k[L[j]]]; }
+      load[c] = acc / CELLA;
+    }
+    return load;
+  }
+  // inp: { tx, ty: tip (mouse offset, |t| <= 1), shake: 0..1, dip: true to dip in the creek, magnet: true }
+  function step(p, inp, dt) {
+    dt = dt || STEP; p.t += dt;
+    var r = p.r, i;
+    if (inp && inp.dip && p.dip <= 0) { p.dip = 0.7; p.events.push({ e: "dip" }); for (i = 0; i < p.n; i++) if (p.alive[i]) p.z[i] += (r() - p.z[i]) * 0.35 * HEAVY[p.k[i]]; }
+    var busy = p.dip > 0;
+    if (busy) { p.dip -= dt; p.water = Math.min(1, p.water + dt * 2); }
+    var tx = busy ? 0 : (inp ? inp.tx || 0 : 0), ty = busy ? 0 : (inp ? inp.ty || 0 : 0), m = Math.hypot(tx, ty);
+    if (m > 1) { tx /= m; ty /= m; m = 1; }
+    var k = 1 - Math.exp(-dt / 0.12);
+    p.tx += (tx - p.tx) * k; p.ty += (ty - p.ty) * k;
+    p.shake += ((busy ? 0.6 : (inp ? inp.shake || 0 : 0)) - p.shake) * (1 - Math.exp(-dt / 0.1));
+    if (p.magCool > 0) p.magCool -= dt;
+    if (inp && inp.magnet && p.s.magnet && p.magCool <= 0) magnet(p);
+    var T = Math.hypot(p.tx, p.ty), ux = T > 1e-6 ? p.tx / T : 0, uy = T > 1e-6 ? p.ty / T : 0, A = p.shake, W = 0.35 + 0.65 * p.water;
+    var load = layer(p), sq = Math.sqrt(dt);
+    var cut = T < 0.1 ? -1 : (T - 0.1) * 3.4 * (0.5 + 0.5 * p.water);   // layers that water can reach at the lip
+    var washRate = 5 * Math.pow(T, 1.4) * W;
+    var floatAt = FLOAT_AT / Math.sqrt(p.cold);   // colder water lifts the gold sooner
+    for (i = 0; i < p.n; i++) {
+      if (!p.alive[i]) continue;
+      var kk = p.k[i], rho = RHO[kk], depth = p.d[i];
+      // swirling sorts the grains: heavy ones sink, big ones float up, everything jiggles
+      if (A > 0.01) {
+        var drift = (3.0 - rho) / 16 + (RAD[kk] - 0.011) * 14;
+        p.z[i] += A * dt * 0.6 * drift + A * sq * 0.2 * gauss(r);
+        if (p.z[i] < 0) p.z[i] = 0; else if (p.z[i] > 1) p.z[i] = 1;
+      }
+      // tip too hard and the rush of water lifts fine gold off the bottom
+      if (T > floatAt && (kk === K.FINE || kk === K.FLAKE)) {
+        p.z[i] += (T - floatAt) * dt * 14 * p.water * (kk === K.FINE ? 1 : 0.3) * p.cold;
+        if (p.z[i] > 1) p.z[i] = 1;
+      }
+      // water and the tip move what is near the surface
+      var fl = FLOATS[kk] * p.z[i] * p.z[i];          // gold lifted near the surface rides the water
+      var mob = W * (HEAVY[kk] + (1 - HEAVY[kk]) * fl) / (1 + depth * 0.9);
+      var cx = Math.min(GN - 1, Math.max(0, ((p.x[i] + 1) / CELL) | 0)), cy = Math.min(GN - 1, Math.max(0, ((p.y[i] + 1) / CELL) | 0));
+      var gx = (load[cy * GN + Math.max(0, cx - 1)] - load[cy * GN + Math.min(GN - 1, cx + 1)]);
+      var gy = (load[Math.max(0, cy - 1) * GN + cx] - load[Math.min(GN - 1, cy + 1) * GN + cx]);
+      var spread = 0.05 * (0.3 + A) / (1 + depth);
+      var vx = p.tx * 0.75 * mob + gx * spread, vy = p.ty * 0.75 * mob + gy * spread;
+      // riffles: ridges near the lip that heavy grains catch behind
+      if (rho > 4 && p.s.riffle < 1) { var rd = Math.hypot(p.x[i], p.y[i]); if (rd > 0.72) { var out = (vx * p.x[i] + vy * p.y[i]) / rd; if (out > 0) { var hold = out * (1 - p.s.riffle); vx -= hold * p.x[i] / rd; vy -= hold * p.y[i] / rd; } } }
+      p.x[i] += vx * dt + A * sq * 0.035 * gauss(r) * HEAVY[kk];
+      p.y[i] += vy * dt + A * sq * 0.035 * gauss(r) * HEAVY[kk];
+      var dist = Math.hypot(p.x[i], p.y[i]), lim = 0.985 - RAD[kk];
+      // the lip: what reaches it on the low side near the surface goes over with the water
+      if (cut > 0 && dist > LIP && (p.x[i] * ux + p.y[i] * uy) > LIP * 0.86 && depth < cut) {
+        var wk = (WASHK[kk] + (1 - WASHK[kk]) * fl) * (rho > 4 ? p.s.riffle : 1) * (1 - depth / cut);
+        if (r() < washRate * wk * dt) { wash(p, i); continue; }
+      }
+      if (dist > lim) { p.x[i] *= lim / dist; p.y[i] *= lim / dist; }
+    }
+    p.water = Math.max(0, p.water - dt * 0.045 * T);
+  }
+  function wash(p, i) {
+    p.alive[i] = 0; p.washed++;
+    var kd = KINDS[p.k[i]];
+    p.water = Math.max(0, p.water - 0.0012);
+    if (kd.gold) { p.lostGold += kd.gold; p.events.push({ e: "lost", k: p.k[i], x: p.x[i], y: p.y[i] }); }
+    else p.events.push({ e: "wash", k: p.k[i], x: p.x[i], y: p.y[i] });
+  }
+  function magnet(p) {
+    var lvl = p.s.magnet, n = 0;
+    layer(p);
+    for (var i = 0; i < p.n; i++) if (p.alive[i] && p.k[i] === K.BLACK && p.d[i] < 0.6 * lvl && p.r() < 0.35 + 0.15 * lvl) { p.alive[i] = 0; n++; }
+    p.magCool = 2.5; p.events.push({ e: "magnet", n: n });
+    return n;
+  }
+  // what is left in the pan, by kind
+  function census(p) {
+    var c = KINDS.map(function () { return 0; }), gold = 0, light = 0;
+    for (var i = 0; i < p.n; i++) if (p.alive[i]) { c[p.k[i]]++; gold += KINDS[p.k[i]].gold; if (p.k[i] === K.SAND || p.k[i] === K.PEBBLE) light++; }
+    return { by: c, gold: gold, light: light };
+  }
+  // you can only pick once the pan is down to its concentrate
+  var PICK_AT = 0.25;
+  function canPick(p) { return census(p).light <= PICK_AT * Math.max(1, p.light0); }
+  // pick: everything gold (and garnet) you can see is yours; whatever is still buried goes back in the creek.
+  function finish(p) {
+    layer(p);
+    var res = { gold: 0, gem: 0, buried: 0, flakes: 0, glint: false, picked: [] };
+    for (var i = 0; i < p.n; i++) {
+      if (!p.alive[i]) continue;
+      var kd = KINDS[p.k[i]];
+      if (!kd.gold && !kd.gem) continue;
+      if (p.d[i] <= p.s.pick) {
+        res.gold += kd.gold; res.gem += kd.gem; if (kd.gold) res.flakes++;
+        if (i === p.glint) res.glint = true;
+        res.picked.push(i);
+      } else if (kd.gold) res.buried += kd.gold;
+    }
+    res.recovery = p.goldIn ? res.gold / p.goldIn : 0;
+    res.lost = p.lostGold;
+    return res;
+  }
+
+  // ---------- a working day ----------
+  function startDay(g, ci) {
+    g.day++; g.claim = ci;
+    var s = stats(g), cl = C.CLAIMS[ci];
+    return { g: g, ci: ci, r: rng(g.seed * 7919 + g.day * 104729 + ci * 31), t: 0, len: cl.day + s.dayPlus, pans: 0, gold: 0, gem: 0, pan: null, results: [], over: false, cleanup: false };
+  }
+  function newPan(run) {
+    var g = run.g, extra = null;
+    if (g.glintDue && C.CLAIMS[run.ci].glint) extra = function (list) { list.push(K.NUGGET); };
+    run.pan = scoop(g, run.ci, run.r, extra);
+    if (extra) run.pan.glint = run.pan.n - 1;
+    return run.pan;
+  }
+  // the sluice box's concentrate: heavy, rich, and still full of black sand
+  function cleanupPan(run) {
+    var g = run.g, s = stats(g), cl = C.CLAIMS[run.ci], list = [], r = run.r, lvl = s.sluice;
+    var hours = run.len / 150;
+    function add(k, n) { for (var i = 0; i < n; i++) list.push(k); }
+    add(K.SAND, Math.round(160 + 40 * lvl)); add(K.BLACK, Math.round(220 + 30 * lvl)); add(K.GARNET, poisson(r, cl.mix[3] * 1.5));
+    var worth = (0.6 + 0.7 * lvl) * hours * s.rich;
+    add(K.FINE, poisson(r, cl.gold[0] * worth)); add(K.FLAKE, poisson(r, cl.gold[1] * worth));
+    if (r() < cl.gold[2] * worth) add(K.NUGGET, 1);
+    run.pan = makePan(list, r, s); run.pan.cold = COLD[cl.water] || 1; run.cleanup = true;
+    return run.pan;
+  }
+  function closePan(run) {
+    var p = run.pan, res = finish(p);
+    run.gold += res.gold; run.gem += res.gem; run.pans++; run.results.push(res);
+    if (res.glint) run.g.glintFound = true;
+    run.pan = null;
+    return res;
+  }
+  // dusk: partners report in, the assay office pays, the next claim may open
+  function endDay(run, partnerGold) {
+    var g = run.g, ci = run.ci, s = stats(g), cl = C.CLAIMS[ci];
+    var pg = partnerGold == null ? partnerTake(run) : partnerGold;
+    var gold = run.gold + pg, pay = Math.round(gold * price(g, ci) + run.gem);
+    g.money += pay; g.total += pay; g.got[ci] += gold;
+    var opened = false;
+    if (ci === g.open - 1 && g.got[ci] >= cl.goal && g.open < C.CLAIMS.length) { g.open++; opened = true; }
+    if (cl.glint && g.got[ci] >= cl.goal && !g.glintFound) g.glintDue = true;
+    if (g.glintFound) g.done = true;
+    if (C.CLAIMS.length === 1 && g.got[0] >= cl.goal) g.done = true;
+    run.over = true;
+    run.summary = { gold: gold, own: run.gold, partners: pg, gem: run.gem, pay: pay, pans: run.pans, opened: opened, goal: cl.goal, got: g.got[ci], done: g.done, glint: !!g.glintFound };
+    return run.summary;
+  }
+  // partners pan like the bot does; their day is estimated from the bot's own pan of this claim
+  function partnerTake(run) {
+    var g = run.g, n = stats(g).partners;
+    if (!n) return 0;
+    var B = (typeof module !== "undefined" && module.exports) ? require("./bot.js") : root.BOT;
+    var tot = 0;
+    for (var i = 0; i < n; i++) {
+      var r2 = rng(g.seed * 131 + g.day * 977 + i * 17), p = scoop(g, run.ci, r2), res = B.panOut(p, 0.8);
+      var pans = Math.floor(run.len / Math.max(18, p.t + 2));
+      tot += res.gold * pans;
+    }
+    return Math.round(tot * 0.45);
+  }
+  function save(g) { return JSON.stringify(g); }
+  function load(str) { var g = JSON.parse(str); if (!g || g.v !== 1 || typeof g.ups !== "object" || !Array.isArray(g.got)) throw new Error("not a PANGLINT save"); while (g.got.length < C.CLAIMS.length) g.got.push(0); return g; }
+
+  var api = { rng: rng, newGame: newGame, lv: lv, cost: cost, canBuy: canBuy, buy: buy, stats: stats, price: price,
+    scoop: scoop, makePan: makePan, layer: layer, step: step, finish: finish, census: census, magnet: magnet, canPick: canPick, PICK_AT: PICK_AT,
+    startDay: startDay, newPan: newPan, cleanupPan: cleanupPan, closePan: closePan, endDay: endDay, partnerTake: partnerTake,
+    save: save, load: load, STEP: STEP, LIP: LIP, FLOAT_AT: FLOAT_AT };
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
+  else root.PAN = api;
+})(this);
+
+</script>
+<script>
+// bot.js — a panner that uses the real rules: swirl, tip, dip, pick. Used by the tests, for balance, and by your partners.
+(function (root) {
+  "use strict";
+  var NODE = typeof module !== "undefined" && module.exports;
+  var P = NODE ? require("./pan.js") : root.PAN, C = NODE ? require("./content.js") : root.CONTENT;
+  var K = C.K;
+  // the plan for one pan, as a function of time and what is left. skill 1 = careful, lower = hurried.
+  function controller(p, skill) {
+    skill = skill == null ? 1 : skill;
+    var st = { phase: "swirl", left: 2.4 * skill + 0.6, round: 0, light0: P.census(p).light, light: 0, angle: 0.35, done: false };
+    return function () {
+      var c = st.cache;
+      if (!c || p.t - st.ct > 0.25) { c = st.cache = P.census(p); st.ct = p.t; }
+      st.light = c.light;
+      var frac = st.light0 ? c.light / st.light0 : 0;
+      if ((frac < 0.035 + 0.04 * (1 - skill) && c.by[K.BLACK] < 40) || p.t > 55 || (frac < 0.06 && p.t > 40)) { st.done = true; return null; }
+      st.left -= P.STEP;
+      var inp = { tx: 0, ty: 0, shake: 0, dip: false, magnet: false };
+      if (p.water < 0.25 && st.phase !== "swirl") { inp.dip = true; st.phase = "swirl"; st.left = 1.0 + 0.6 * skill; return inp; }
+      if (st.phase === "swirl") {
+        inp.shake = 1;
+        if (st.left <= 0) { st.phase = "wash"; st.round++; st.left = 2.2; }
+      } else {
+        // a careful panner tips just short of where the water starts lifting the gold; a hurried one tips harder
+        var tip = P.FLOAT_AT / Math.sqrt(p.cold) + 0.03 + 0.25 * (1 - skill);
+        if (frac > 0.5) tip += 0.04;
+        inp.tx = tip; inp.shake = 0.3;
+        if (p.s.magnet && c.by[K.BLACK] > 25 && frac < 0.3) inp.magnet = true;
+        if (st.left <= 0) { st.phase = "swirl"; st.left = (1.0 + 0.9 * skill) * (frac < 0.3 ? 1.3 : 1); }
+      }
+      return inp;
+    };
+  }
+  // pan a whole pan to the end and pick
+  function panOut(p, skill) {
+    var ctl = controller(p, skill), inp;
+    while ((inp = ctl())) { P.step(p, inp, P.STEP); p.events.length = 0; }
+    return P.finish(p);
+  }
+  // a full day: pans until dark, then the sluice cleanup, then dusk
+  function day(g, ci, skill) {
+    var run = P.startDay(g, ci);
+    while (run.t < run.len) {
+      var p = P.newPan(run), t0 = p.t, res;
+      res = panOut(p, skill); run.pan = p;
+      run.t += p.t - t0 + 2; // scooping takes a moment
+      P.closePan(run);
+    }
+    if (P.stats(g).sluice) { var cp = P.cleanupPan(run); panOut(cp, skill); P.closePan(run); }
+    return { run: run, summary: P.endDay(run) };
+  }
+  // the outfitter: what the bot buys with the day's take
+  var ORDER = ["PAN", "SHOVEL", "SCREEN", "RIFFLE", "LANTERN", "SHOVEL", "PAN", "ASSAY", "SNUFFER", "SLUICE", "MAGNET", "PARTNER"];
+  function shop(g) {
+    var bought = true;
+    while (bought) {
+      bought = false;
+      var best = null;
+      C.UPGRADES.forEach(function (u) {
+        var c = P.cost(g, u.id); if (c === Infinity) return;
+        var w = ORDER.indexOf(u.id); w = w < 0 ? 20 : w;
+        var score = c * (1 + w * 0.08);
+        if (!best || score < best.s) best = { id: u.id, s: score, c: c };
+      });
+      if (best && g.money >= best.c) { P.buy(g, best.id); bought = true; }
+    }
+  }
+  // play the whole game: always the newest open claim
+  function campaign(maxDays, seed, skill) {
+    var g = P.newGame({ seed: seed || 1 }), log = [];
+    for (var d = 0; d < maxDays && !g.done; d++) {
+      var ci = g.open - 1, out = day(g, ci, skill);
+      log.push({ day: g.day, claim: C.CLAIMS[ci].id, gold: out.summary.gold, pay: out.summary.pay, pans: out.summary.pans, money: g.money });
+      shop(g);
+    }
+    return { g: g, log: log };
+  }
+  var api = { controller: controller, panOut: panOut, day: day, shop: shop, campaign: campaign };
+  if (NODE) module.exports = api; else root.BOT = api;
+})(this);
+
+</script>
+<script>
+(function () {
+  "use strict";
+  var C = window.CONTENT, P = window.PAN, BOT = window.BOT, K = C.K, KINDS = C.KINDS;
+  var ED = window.PANGLINT_EDITION || "full", DEMO = ED === "demo";
+  var PROFILE_URL = "https://kqmigqkqri.itch.io/";
+  var STORE_URL = "https://kqmigqkqri.itch.io/panglint";
+  var W = 1280, H = 800, PCX = 440, PCY = 410, PR = 320, PANEL = 850;
+  var SANS = "'Segoe UI', system-ui, -apple-system, sans-serif", SERIF = "Georgia, 'Times New Roman', serif";
+  var COL = { text: "#f3eee2", dim: "#b4ab98", gold: "#f2c14e", good: "#9be3a0", bad: "#ff8f7a", panel: "rgba(22,20,16,0.93)", line: "#5b5040", water: "#7fc8d8" };
+  var cv = document.getElementById("c"), cx = cv.getContext("2d"), scale = 1, dpr = 1;
+
+  // ---------------- saving ----------------
+  var KEY = DEMO ? "panglint.demo.v1" : "panglint.v1", SKEY = KEY + ".settings";
+  var settings = { sound: true, music: true, seenHelp: false };
+  try { var ss = localStorage.getItem(SKEY); if (ss) { var so = JSON.parse(ss); for (var k0 in so) settings[k0] = so[k0]; } } catch (e) {}
+  function saveSettings() { try { localStorage.setItem(SKEY, JSON.stringify(settings)); } catch (e) {} }
+  var g = null;
+  try { var raw = localStorage.getItem(KEY); if (raw) g = P.load(raw); } catch (e) { g = null; }
+  if (!g) g = P.newGame({ seed: (Date.now() % 100000) + 1 });
+  function persist() { try { localStorage.setItem(KEY, P.save(g)); } catch (e) {} }
+
+  // ---------------- sound: water, rattling gravel, chimes for gold, a slow guitar by the creek ----------------
+  var ac = null, master = null, waterS = null, waterF = null, rattle = null;
+  function noiseBuf(a) { var len = a.sampleRate * 2, buf = a.createBuffer(1, len, a.sampleRate), d = buf.getChannelData(0); for (var i = 0; i < len; i++) d[i] = Math.random() * 2 - 1; return buf; }
+  function audio() {
+    try {
+      if (!ac) {
+        ac = new (window.AudioContext || window.webkitAudioContext)(); master = ac.createGain(); master.gain.value = 0.8; master.connect(ac.destination);
+        var n1 = ac.createBufferSource(); n1.buffer = noiseBuf(ac); n1.loop = true; waterF = ac.createBiquadFilter(); waterF.type = "lowpass"; waterF.frequency.value = 500;
+        waterS = ac.createGain(); waterS.gain.value = 0; n1.connect(waterF); waterF.connect(waterS); waterS.connect(master); n1.start();
+        var n2 = ac.createBufferSource(); n2.buffer = noiseBuf(ac); n2.loop = true; var bp = ac.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 3200; bp.Q.value = 1.4;
+        rattle = ac.createGain(); rattle.gain.value = 0; n2.connect(bp); bp.connect(rattle); rattle.connect(master); n2.start();
+      }
+      if (ac.state === "suspended") ac.resume();
+      return ac;
+    } catch (e) { return null; }
+  }
+  function tone(f, d, type, vol, delay, slide) {
+    if (!settings.sound) return; var a = audio(); if (!a) return;
+    var t0 = a.currentTime + (delay || 0), o = a.createOscillator(), gn = a.createGain();
+    o.type = type || "sine"; o.frequency.setValueAtTime(f, t0); if (slide) o.frequency.exponentialRampToValueAtTime(slide, t0 + d);
+    gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol || 0.04, t0 + 0.005); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+    o.connect(gn); gn.connect(master); o.start(t0); o.stop(t0 + d + 0.03);
+  }
+  function splash(vol, delay) {
+    if (!settings.sound) return; var a = audio(); if (!a) return;
+    var t0 = a.currentTime + (delay || 0), s = a.createBufferSource(); s.buffer = noiseBuf(a); var f = a.createBiquadFilter(); f.type = "bandpass"; f.frequency.value = 900 + Math.random() * 900; f.Q.value = 0.7;
+    var gn = a.createGain(); gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol, t0 + 0.01); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.25);
+    s.connect(f); f.connect(gn); gn.connect(master); s.start(t0, Math.random()); s.stop(t0 + 0.3);
+  }
+  var PENTA = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24];
+  function sfx(k, n) {
+    if (k === "ui") tone(1300, 0.04, "sine", 0.025);
+    else if (k === "bad") tone(150, 0.14, "square", 0.03);
+    else if (k === "buy") { tone(660, 0.08, "triangle", 0.05); tone(990, 0.18, "triangle", 0.05, 0.06); }
+    else if (k === "chime") tone(880 * Math.pow(2, PENTA[(n || 0) % PENTA.length] / 12), 0.6, "sine", 0.05);
+    else if (k === "lost") tone(520, 0.3, "sine", 0.035, 0, 260);
+    else if (k === "dip") { splash(0.12); splash(0.08, 0.12); }
+    else if (k === "magnet") tone(220, 0.25, "sawtooth", 0.02, 0, 440);
+    else if (k === "scoop") { splash(0.05); tone(180, 0.12, "triangle", 0.03, 0.05, 120); }
+    else if (k === "dusk") [523, 659, 784, 1047].forEach(function (f, i) { tone(f, 0.8, "triangle", 0.045, i * 0.12); });
+    else if (k === "open") [392, 523, 659, 784, 1047].forEach(function (f, i) { tone(f, 0.9, "sine", 0.05, i * 0.1); });
+  }
+  var music = { next: 0, i: 0 };
+  function ambient() {
+    if (!ac || ac.state !== "running") return;
+    var p = screen === "work" && run && run.pan && !paused ? run.pan : null, on = settings.sound && p;
+    var T = p ? Math.hypot(p.tx, p.ty) : 0;
+    waterS.gain.setTargetAtTime(on ? 0.02 + p.water * (0.03 * p.shake + 0.09 * T) : (screen === "title" ? 0.015 : 0.008), ac.currentTime, 0.1);
+    waterF.frequency.setTargetAtTime(380 + T * 1100 + (p ? p.shake * 300 : 0), ac.currentTime, 0.1);
+    rattle.gain.setTargetAtTime(on ? p.shake * 0.035 * (0.6 + 0.4 * Math.sin(now() * 37)) : 0, ac.currentTime, 0.03);
+    if (!settings.music) return;
+    if (music.next < ac.currentTime) music.next = ac.currentTime + 0.05;
+    while (music.next < ac.currentTime + 0.3) {
+      var bar = Math.floor(music.i / 8) % 4, root = [0, 7, 9, 5][bar], step = music.i % 8;
+      var n = [0, 7, 12, 16, 19, 16, 12, 7][step] + root;
+      pluck(146.8 * Math.pow(2, n / 12), music.next, step === 0 ? 0.03 : 0.016);
+      music.i++; music.next += 0.36;
+    }
+  }
+  function pluck(f, t0, vol) {
+    var o = ac.createOscillator(), gn = ac.createGain(), lp = ac.createBiquadFilter(); o.type = "triangle"; o.frequency.value = f; lp.type = "lowpass"; lp.frequency.value = 1800;
+    gn.gain.setValueAtTime(0.0001, t0); gn.gain.exponentialRampToValueAtTime(vol, t0 + 0.006); gn.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.6);
+    o.connect(lp); lp.connect(gn); gn.connect(master); o.start(t0); o.stop(t0 + 1.7);
+  }
+
+  // ---------------- drawing helpers ----------------
+  function rr(x, y, w, h, r) { cx.beginPath(); cx.moveTo(x + r, y); cx.arcTo(x + w, y, x + w, y + h, r); cx.arcTo(x + w, y + h, x, y + h, r); cx.arcTo(x, y + h, x, y, r); cx.arcTo(x, y, x + w, y, r); cx.closePath(); }
+  function text(s, x, y, size, col, align, weight, font) { cx.font = (weight || 600) + " " + size + "px " + (font || SANS); cx.fillStyle = col || COL.text; cx.textAlign = align || "left"; cx.textBaseline = "middle"; cx.fillText(s, x, y); }
+  function tw(s, size, weight, font) { cx.font = (weight || 600) + " " + size + "px " + (font || SANS); return cx.measureText(s).width; }
+  function wrap(s, x, y, maxW, size, col, lh, weight, align) {
+    var lines = [];
+    String(s).split("\n").forEach(function (p) { var ws = p.split(" "), line = ""; ws.forEach(function (w) { var t = line ? line + " " + w : w; if (tw(t, size, weight) > maxW && line) { lines.push(line); line = w; } else line = t; }); lines.push(line); });
+    lines.forEach(function (l, i) { text(l, x, y + i * lh, size, col, align, weight); });
+    return y + lines.length * lh;
+  }
+  var buttons = [], mouse = { x: -1, y: -1, down: false };
+  function hot(x, y, w, h) { return mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h; }
+  function button(x, y, w, h, label, fn, o) {
+    o = o || {};
+    var on = hot(x, y, w, h) && !o.disabled;
+    rr(x, y, w, h, Math.min(h / 2, 12));
+    cx.fillStyle = o.disabled ? "rgba(36,32,26,0.85)" : o.primary ? (on ? "#ffd770" : COL.gold) : o.active ? "rgba(96,84,60,0.95)" : on ? "rgba(74,64,48,0.95)" : "rgba(44,38,30,0.92)"; cx.fill();
+    cx.strokeStyle = o.primary ? "#ffeab0" : o.active ? "#f2dca8" : "rgba(230,210,170,0.35)"; cx.lineWidth = 1.2; cx.stroke();
+    text(label, x + w / 2, y + h / 2 + 1, o.size || 14, o.disabled ? "#7a7060" : o.primary ? "#2a1b04" : COL.text, "center", 700);
+    if (!o.disabled && fn) buttons.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+  function glow(c, x, y, r, col, a) { var gr = c.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, col.replace("A", a)); gr.addColorStop(1, col.replace("A", 0)); c.fillStyle = gr; c.beginPath(); c.arc(x, y, r, 0, 7); c.fill(); }
+  var t0 = performance.now();
+  function now() { return (performance.now() - t0) / 1000; }
+  function hash(i, s) { var v = Math.sin(i * 127.1 + (s || 0) * 311.7) * 43758.5453; return v - Math.floor(v); }
+
+  // ---------------- the creek, painted once ----------------
+  var creek = document.createElement("canvas"); creek.width = W; creek.height = H;
+  (function paintCreek() {
+    var c = creek.getContext("2d");
+    var gr = c.createLinearGradient(0, 0, W, H); gr.addColorStop(0, "#14302f"); gr.addColorStop(0.5, "#1b3d3a"); gr.addColorStop(1, "#102624"); c.fillStyle = gr; c.fillRect(0, 0, W, H);
+    for (var i = 0; i < 900; i++) { // stones on the creek bed
+      var x = hash(i, 1) * W, y = hash(i, 2) * H, r = 3 + hash(i, 3) * 16, sh = 30 + hash(i, 4) * 40;
+      c.fillStyle = "rgba(" + (sh + 20 | 0) + "," + (sh + 28 | 0) + "," + (sh + 18 | 0) + ",0.18)"; c.beginPath(); c.ellipse(x, y, r, r * (0.6 + hash(i, 5) * 0.4), hash(i, 6) * 3, 0, 7); c.fill();
+    }
+    var bank = c.createLinearGradient(0, H - 150, 0, H); bank.addColorStop(0, "rgba(88,72,48,0)"); bank.addColorStop(1, "rgba(88,72,48,0.85)"); c.fillStyle = bank; c.fillRect(0, H - 150, W, 150);
+    for (i = 0; i < 1600; i++) { var bx = hash(i, 7) * W, by = H - hash(i, 8) * 120; c.fillStyle = "rgba(" + (120 + hash(i, 9) * 80 | 0) + "," + (100 + hash(i, 9) * 60 | 0) + ",70," + (0.25 + hash(i, 10) * 0.4) * (1 - (H - by) / 130) + ")"; c.fillRect(bx, by, 2, 2); }
+  })();
+  function drawCreek(t) {
+    cx.drawImage(creek, 0, 0);
+    cx.save(); cx.globalAlpha = 0.09; cx.strokeStyle = "#cfeef0"; cx.lineWidth = 2;
+    for (var i = 0; i < 26; i++) {
+      var y = (i * 37 + t * 22) % (H + 60) - 30, x0 = (hash(i, 11) * W + t * 40) % W;
+      cx.beginPath(); cx.moveTo(x0 - 120, y); cx.bezierCurveTo(x0 - 40, y - 8, x0 + 40, y + 8, x0 + 120, y); cx.stroke();
+    }
+    cx.restore();
+  }
+
+  // ---------------- the pan ----------------
+  var GCOL = [
+    function (i) { var v = hash(i, 1); return v < 0.5 ? [150, 130, 98] : v < 0.8 ? [172, 152, 114] : [122, 104, 80]; },
+    function (i) { var v = hash(i, 2); return v < 0.4 ? [104, 92, 78] : v < 0.75 ? [126, 108, 86] : [88, 84, 80]; },
+    function (i) { return hash(i, 7) < 0.3 ? [52, 56, 66] : [18, 20, 26]; },
+    function () { return [150, 26, 40]; },
+    function () { return [250, 205, 80]; }, function () { return [255, 212, 90]; }, function () { return [240, 190, 60]; }
+  ];
+  var order = [], fly = [], sparks = [], BED = 200, bedCan = document.createElement("canvas"); bedCan.width = bedCan.height = BED; var bc = bedCan.getContext("2d");
+  function panXY(p, i) { return [PCX + p.x[i] * PR, PCY + p.y[i] * PR]; }
+  function tiltOf(p) { return Math.hypot(p.tx, p.ty); }
+  function safeTip(p) { return P.FLOAT_AT / Math.sqrt(p.cold || 1); }
+  function drawPan(p, t, opts) {
+    opts = opts || {};
+    var T = tiltOf(p), ang = Math.atan2(p.ty, p.tx), jx = Math.sin(t * 41) * p.shake * 4, jy = Math.cos(t * 37) * p.shake * 4;
+    cx.save();
+    cx.translate(PCX + jx + p.tx * 10, PCY + jy + p.ty * 10); cx.rotate(ang); cx.scale(1 - 0.09 * T, 1); cx.rotate(-ang); cx.translate(-PCX, -PCY);
+    // shadow and rim
+    glow(cx, PCX + 14, PCY + 22, PR * 1.22, "rgba(0,0,0,A)", 0.55);
+    var rim = cx.createRadialGradient(PCX - PR * 0.3, PCY - PR * 0.3, PR * 0.2, PCX, PCY, PR * 1.08);
+    rim.addColorStop(0, "#3f8a58"); rim.addColorStop(0.75, "#1d5a33"); rim.addColorStop(0.93, "#5fae78"); rim.addColorStop(1, "#1a4a2b");
+    cx.fillStyle = rim; cx.beginPath(); cx.arc(PCX, PCY, PR * 1.07, 0, 7); cx.fill();
+    var bed = cx.createRadialGradient(PCX - 60, PCY - 70, 10, PCX, PCY, PR);
+    bed.addColorStop(0, "#2f7247"); bed.addColorStop(0.7, "#22583a"); bed.addColorStop(1, "#18432b"); cx.fillStyle = bed; cx.beginPath(); cx.arc(PCX, PCY, PR, 0, 7); cx.fill();
+    cx.strokeStyle = "rgba(150,220,170,0.16)"; cx.lineWidth = 2; cx.beginPath(); cx.arc(PCX, PCY, PR * 0.62, 0, 7); cx.stroke();
+    var rl = p.s ? P.lv(g, "RIFFLE") : 0;
+    for (var q = 0; q < rl + 1; q++) { cx.strokeStyle = "rgba(10,40,22," + (0.25 + 0.1 * rl) + ")"; cx.lineWidth = 3; cx.beginPath(); cx.arc(PCX, PCY, PR * (0.84 + q * 0.045), 0, 7); cx.stroke(); }
+    // the gravel bed: a soft, blurred mass under the grains so the pile reads as a pile
+    bc.clearRect(0, 0, BED, BED);
+    for (var i = 0; i < p.n; i++) {
+      if (!p.alive[i] || p.k[i] >= K.FINE) continue;
+      var bcl = GCOL[p.k[i]](i); bc.fillStyle = "rgba(" + (bcl[0] * 0.62 | 0) + "," + (bcl[1] * 0.6 | 0) + "," + (bcl[2] * 0.58 | 0) + "," + (p.k[i] === K.BLACK ? 0.38 : 0.8) + ")";
+      bc.beginPath(); bc.arc((p.x[i] + 1) * BED / 2, (p.y[i] + 1) * BED / 2, Math.max(2, KINDS[p.k[i]].r * BED * 2.3), 0, 7); bc.fill();
+    }
+    cx.save(); cx.beginPath(); cx.arc(PCX, PCY, PR * 0.99, 0, 7); cx.clip(); cx.filter = "blur(5px)"; cx.drawImage(bedCan, PCX - PR, PCY - PR, PR * 2, PR * 2); cx.restore();
+    // grains, deepest first
+    order.length = 0; for (i = 0; i < p.n; i++) if (p.alive[i]) order.push(i);
+    order.sort(function (a, b) { return p.z[a] - p.z[b]; });
+    var pick = p.s.pick, seen = 0;
+    for (var j = 0; j < order.length; j++) {
+      i = order[j];
+      var kk = p.k[i], xy = panXY(p, i), r = KINDS[kk].r * PR * (kk >= K.FINE ? 1.25 : kk === K.PEBBLE ? 1 : 1.35), col = GCOL[kk](i), d = p.d[i], sh = 1 / (1 + d * 0.45);
+      if (kk === K.PEBBLE) { cx.fillStyle = "rgb(" + (col[0] * sh | 0) + "," + (col[1] * sh | 0) + "," + (col[2] * sh | 0) + ")"; cx.beginPath(); cx.ellipse(xy[0], xy[1], r, r * 0.82, hash(i, 3) * 3, 0, 7); cx.fill(); cx.strokeStyle = "rgba(0,0,0,0.35)"; cx.lineWidth = 1.2; cx.stroke(); cx.fillStyle = "rgba(255,255,255," + 0.18 * sh + ")"; cx.beginPath(); cx.arc(xy[0] - r * 0.3, xy[1] - r * 0.3, r * 0.35, 0, 7); cx.fill(); continue; }
+      if (kk === K.SAND || kk === K.BLACK) {
+        // a grain here is a pinch of real sand: a few specks of slightly different tones
+        var nsp = kk === K.BLACK ? 9 : 5;
+        for (var sp = 0; sp < nsp; sp++) {
+          var tv = 0.75 + hash(i, sp + 20) * 0.5, sz = (kk === K.BLACK ? 1.1 : 1.4) + hash(i, sp + 30) * (kk === K.BLACK ? 1.3 : 1.6);
+          if (kk === K.BLACK && hash(i, sp + 70) < 0.22) tv = 3.2;  // magnetite catches the light
+          cx.fillStyle = "rgb(" + Math.min(255, col[0] * sh * tv | 0) + "," + Math.min(255, col[1] * sh * tv | 0) + "," + Math.min(255, col[2] * sh * tv * 1.08 | 0) + ")";
+          cx.fillRect(xy[0] + (hash(i, sp + 40) - 0.5) * r * (kk === K.BLACK ? 3.4 : 2.6), xy[1] + (hash(i, sp + 50) - 0.5) * r * (kk === K.BLACK ? 3.4 : 2.6), sz, sz);
+        }
+        if (kk === K.SAND && d < 0.5 && hash(i, 60) < 0.4) { cx.fillStyle = "rgba(255,248,230," + 0.35 * sh + ")"; cx.fillRect(xy[0], xy[1], 1.2, 1.2); }
+        continue;
+      }
+      cx.fillStyle = "rgb(" + (col[0] * sh | 0) + "," + (col[1] * sh | 0) + "," + (col[2] * sh | 0) + ")";
+      cx.beginPath();
+      if (kk === K.FLAKE) cx.ellipse(xy[0], xy[1], r * 1.6, r * 0.9, hash(i, 8) * 3, 0, 7);
+      else if (kk === K.NUGGET) { for (var nv = 0; nv < 9; nv++) { var na = nv / 9 * 6.283, nr = r * (1.1 + hash(i, nv + 80) * 0.45); if (nv) cx.lineTo(xy[0] + Math.cos(na) * nr, xy[1] + Math.sin(na) * nr * 0.85); else cx.moveTo(xy[0] + nr, xy[1]); } cx.closePath(); }
+      else cx.arc(xy[0], xy[1], kk >= K.FINE ? r * 1.35 : r, 0, 7);
+      cx.fill();
+      if (kk >= K.FINE && d <= pick) { seen++; }
+      if (kk === K.GARNET) { cx.fillStyle = "rgba(255,150,160," + 0.5 * sh + ")"; cx.fillRect(xy[0] - 1, xy[1] - 1, 1.6, 1.6); }
+    }
+    // the gold you can see glints on top
+    var glintT = t * 1.7;
+    for (j = 0; j < order.length; j++) {
+      i = order[j]; kk = p.k[i]; if (kk < K.FINE || p.d[i] > pick + 0.15) continue;
+      xy = panXY(p, i); r = KINDS[kk].r * PR * 1.7;
+      var ph = (glintT + hash(i, 9) * 7) % 3, a = ph < 0.35 ? Math.sin(ph / 0.35 * Math.PI) : 0, vis = p.d[i] <= pick ? 1 : 0.35;
+      glow(cx, xy[0], xy[1], r * 3.2, "rgba(255,220,120,A)", 0.35 * vis);
+      cx.fillStyle = "rgba(255,248,210," + 0.7 * vis + ")"; cx.beginPath(); cx.arc(xy[0] - r * 0.3, xy[1] - r * 0.35, Math.max(0.8, r * 0.4), 0, 7); cx.fill();
+      if (a > 0 && vis === 1) { var L = (5 + r * 2.4) * a; cx.strokeStyle = "rgba(255,250,225," + a + ")"; cx.lineWidth = 1.3; cx.beginPath(); cx.moveTo(xy[0] - L, xy[1]); cx.lineTo(xy[0] + L, xy[1]); cx.moveTo(xy[0], xy[1] - L); cx.lineTo(xy[0], xy[1] + L); cx.stroke(); }
+      if (i === p.glint) { glow(cx, xy[0], xy[1], 70, "rgba(255,230,140,A)", 0.45 + 0.2 * Math.sin(t * 4)); }
+    }
+    // water pools on the low side
+    cx.save(); cx.beginPath(); cx.arc(PCX, PCY, PR * 0.995, 0, 7); cx.clip();
+    if (T < 0.08) { cx.fillStyle = "rgba(90,170,185," + (0.06 + 0.12 * p.water) + ")"; cx.fillRect(PCX - PR, PCY - PR, PR * 2, PR * 2); }
+    else {
+      var ux = p.tx / T, uy = p.ty / T, e = 1 - (0.2 + 0.8 * p.water) * (0.75 + 0.5 * T);
+      if (e < 0.98) {
+        var ex = PCX + ux * PR * e, ey = PCY + uy * PR * e, vx2 = -uy, vy2 = ux;
+        cx.save(); cx.beginPath(); cx.moveTo(ex + vx2 * PR * 2, ey + vy2 * PR * 2); cx.lineTo(ex - vx2 * PR * 2, ey - vy2 * PR * 2); cx.lineTo(ex - vx2 * PR * 2 + ux * PR * 3, ey - vy2 * PR * 2 + uy * PR * 3); cx.lineTo(ex + vx2 * PR * 2 + ux * PR * 3, ey + vy2 * PR * 2 + uy * PR * 3); cx.closePath(); cx.clip();
+        var wg = cx.createLinearGradient(ex, ey, PCX + ux * PR, PCY + uy * PR);
+        wg.addColorStop(0, "rgba(40,120,135,0.16)"); wg.addColorStop(1, "rgba(80,170,185," + (0.16 + 0.22 * p.water) + ")");
+        cx.fillStyle = wg; cx.fillRect(PCX - PR, PCY - PR, PR * 2, PR * 2);
+        for (var wv = 0; wv < 4; wv++) { var off = (t * 40 + wv * 37) % 120; cx.strokeStyle = "rgba(220,248,255," + 0.08 * (1 - off / 120) + ")"; cx.lineWidth = 2; cx.beginPath(); cx.moveTo(ex + vx2 * PR * 1.2 + ux * off, ey + vy2 * PR * 1.2 + uy * off); cx.lineTo(ex - vx2 * PR * 1.2 + ux * off, ey - vy2 * PR * 1.2 + uy * off); cx.stroke(); }
+        cx.restore();
+        cx.strokeStyle = "rgba(225,250,255,0.55)"; cx.lineWidth = 2.2; cx.beginPath();
+        for (var sgi = -20; sgi <= 20; sgi++) { var sx2 = ex + vx2 * PR * sgi / 20 * 1.05 + ux * Math.sin(t * 5 + sgi * 0.7) * 2.5, sy2 = ey + vy2 * PR * sgi / 20 * 1.05 + uy * Math.sin(t * 5 + sgi * 0.7) * 2.5; if (sgi === -20) cx.moveTo(sx2, sy2); else cx.lineTo(sx2, sy2); }
+        cx.stroke();
+      }
+    }
+    // swirl ripples
+    if (p.shake > 0.1) { cx.strokeStyle = "rgba(210,240,245," + 0.12 * p.shake * p.water + ")"; cx.lineWidth = 2; for (q = 0; q < 5; q++) { var rad = PR * (0.25 + q * 0.16), st = t * 3 + q; cx.beginPath(); cx.arc(PCX, PCY, rad, st, st + 1.4); cx.stroke(); } }
+    cx.restore();
+    // foam where the water pours over the lip
+    if (T > 0.12 && p.water > 0.05) {
+      var lx = PCX + p.tx / T * PR, ly = PCY + p.ty / T * PR;
+      cx.strokeStyle = "rgba(235,250,255," + Math.min(0.8, T * p.water * 1.4) + ")"; cx.lineWidth = 4 + T * 6; cx.beginPath(); cx.arc(PCX, PCY, PR * 1.0, ang - 0.35 - T * 0.3, ang + 0.35 + T * 0.3); cx.stroke();
+      glow(cx, lx, ly, 60 + T * 50, "rgba(220,245,255,A)", 0.18 * p.water);
+    }
+    cx.restore();
+    return seen;
+  }
+  function drawTipGauge(p) {
+    var T = tiltOf(p), safe = safeTip(p), x = PCX, y = PCY;
+    if (T < 0.05) return;
+    var ang = Math.atan2(p.ty, p.tx), L = 40 + T * 150, col = T < safe - 0.04 ? "rgba(155,227,160," : T < safe + 0.03 ? "rgba(242,193,78," : "rgba(255,120,100,";
+    cx.strokeStyle = col + "0.75)"; cx.lineWidth = 4; cx.beginPath(); cx.moveTo(x, y); cx.lineTo(x + Math.cos(ang) * L, y + Math.sin(ang) * L); cx.stroke();
+    cx.fillStyle = col + "0.9)"; cx.beginPath(); cx.moveTo(x + Math.cos(ang) * (L + 14), y + Math.sin(ang) * (L + 14)); cx.lineTo(x + Math.cos(ang + 2.6) * 12 + Math.cos(ang) * L, y + Math.sin(ang + 2.6) * 12 + Math.sin(ang) * L); cx.lineTo(x + Math.cos(ang - 2.6) * 12 + Math.cos(ang) * L, y + Math.sin(ang - 2.6) * 12 + Math.sin(ang) * L); cx.fill();
+  }
+
+  // ---------------- a working day ----------------
+  var screen = "title", run = null, paused = false, helpOpen = false, helpPage = 0, msg = null, after = 0, dusk = null, lostFlash = 0, panLost = 0, lastRes = null, vialGold = 0;
+  var keys = {}, hideHud = false;
+  function flash(s, col, life) { msg = { s: s, t: 0, col: col || COL.text, life: life || 2.6 }; }
+  function startDay(ci) {
+    run = P.startDay(g, ci); screen = "work"; paused = false; dusk = null; after = 0; vialGold = 0; lastRes = null;
+    persist(); nextPan();
+    if (!settings.seenHelp) { helpOpen = true; helpPage = 0; }
+    flash(C.CLAIMS[ci].name + " - day " + g.day, COL.gold);
+  }
+  function nextPan() { P.newPan(run); panLost = 0; sfx("scoop"); if (run.pan.glint >= 0) flash("Something big is in this scoop...", COL.gold, 4); }
+  function handle(e) {
+    if (e.e === "lost") { panLost += KINDS[e.k].gold; lostFlash = 1.2; sfx("lost"); sparks.push({ x: PCX + e.x * PR, y: PCY + e.y * PR, vx: e.x * 160, vy: e.y * 160, t: 0, gold: true }); }
+    else if (e.e === "wash") { if (Math.random() < 0.25) splash(0.025); if (sparks.length < 160) sparks.push({ x: PCX + e.x * PR, y: PCY + e.y * PR, vx: e.x * (90 + Math.random() * 90), vy: e.y * (90 + Math.random() * 90), t: 0, k: e.k }); }
+    else if (e.e === "dip") sfx("dip");
+    else if (e.e === "magnet") { sfx("magnet"); flash(e.n ? "The magnet lifts " + e.n + " grains of black sand" : "Nothing magnetic on top", COL.dim, 1.6); }
+  }
+  function input() {
+    var inp = { tx: 0, ty: 0, shake: 0, dip: false, magnet: false };
+    if (paused || helpOpen || after > 0) return inp;
+    var dx = mouse.x - PCX, dy = mouse.y - PCY, dist = Math.hypot(dx, dy) / PR;
+    if (mouse.x < PANEL - 10 && dist < 1.5 && mouse.x >= 0) {
+      var m = Math.max(0, Math.min(1, (dist - 0.12) / 1.15));
+      if (dist > 0.001) { inp.tx = dx / (dist * PR) * m; inp.ty = dy / (dist * PR) * m; }
+      if (mouse.down) inp.shake = 1;
+    }
+    var kx = (keys.arrowright || keys.d ? 1 : 0) - (keys.arrowleft || keys.a ? 1 : 0), ky = (keys.arrowdown || keys.s ? 1 : 0) - (keys.arrowup || keys.w ? 1 : 0);
+    if (kx || ky) { var mm = keys.shift ? 0.75 : 0.38, l = Math.hypot(kx, ky); inp.tx = kx / l * mm; inp.ty = ky / l * mm; }
+    if (keys[" "]) inp.shake = 1;
+    if (want.dip) { inp.dip = true; want.dip = false; }
+    if (want.magnet) { inp.magnet = true; want.magnet = false; }
+    return inp;
+  }
+  var want = { dip: false, magnet: false };
+  function pickNow() {
+    if (!run || !run.pan || after > 0 || paused) return;
+    if (!P.canPick(run.pan)) { flash("Wash it down first - you can pick when " + Math.round(P.PICK_AT * 100) + "% of the sand is left", COL.bad, 2.4); sfx("bad"); return; }
+    var p = run.pan, res = P.closePan(run); run.pan = p; lastRes = res;
+    res.picked.forEach(function (i, n) { var xy = panXY(p, i); fly.push({ x: xy[0], y: xy[1], t: -n * 0.05, k: p.k[i], n: n }); p.alive[i] = 0; });
+    after = 1.5 + Math.min(1.2, res.picked.length * 0.05);
+    var line = res.gold ? "+" + res.gold + " gold" + (res.gem ? "  +$" + res.gem + " garnets" : "") : "No gold in sight";
+    var rec = Math.round(res.recovery * 100);
+    flash(line + "   ·   " + rec + "% of the pan's gold" + (res.buried ? "   ·   " + res.buried + " left buried" : ""), res.recovery > 0.85 ? COL.good : res.recovery > 0.6 ? COL.gold : COL.bad, 3);
+    if (res.glint) { after = 3.2; flash("THE GLINT!", COL.gold, 4); sfx("open"); }
+  }
+  function afterPick() {
+    run.pan = null;
+    if (g.glintFound && !DEMO) { endTheDay(); return; }
+    if (run.t < run.len) { nextPan(); return; }
+    if (P.stats(g).sluice && !run.cleanup) { P.cleanupPan(run); panLost = 0; flash("Dusk. Time to clean up the sluice box - pan its concentrate.", COL.gold, 4); return; }
+    endTheDay();
+  }
+  function endTheDay() {
+    var s = P.endDay(run); persist(); sfx("dusk"); dusk = { s: s, t: 0 }; screen = "dusk"; if (s.opened) setTimeout(function () { sfx("open"); }, 600);
+  }
+  function stepWork(dt) {
+    if (paused || helpOpen) return;
+    if (after > 0) { after -= dt; if (after <= 0) afterPick(); return; }
+    var p = run.pan; if (!p) return;
+    var inp = input(), steps = Math.max(1, Math.round(dt / P.STEP));
+    for (var s = 0; s < steps; s++) { P.step(p, inp, P.STEP); inp.dip = false; inp.magnet = false; p.events.forEach(handle); p.events.length = 0; }
+    if (!run.cleanup) run.t = Math.min(run.len + 0.001, run.t + dt);
+  }
+  function drawWork(dt) {
+    var t = now();
+    stepWork(dt);
+    drawCreek(t);
+    var p = run.pan || (after > 0 && lastRes ? lastPan() : null), seen = 0;
+    if (p) { seen = drawPan(p, t); if (!after && !hideHud) drawTipGauge(p); }
+    // grains flying off the lip into the creek
+    sparks = sparks.filter(function (s) { s.t += dt; s.x += s.vx * dt; s.y += s.vy * dt; s.vx *= 0.96; s.vy *= 0.96; return s.t < 0.7; });
+    sparks.forEach(function (s) { cx.globalAlpha = 1 - s.t / 0.7; cx.fillStyle = s.gold ? "#ffd65a" : "rgba(220,240,245,0.8)"; cx.beginPath(); cx.arc(s.x, s.y, s.gold ? 3 : 2 + s.t * 4, 0, 7); cx.fill(); }); cx.globalAlpha = 1;
+    // picked gold flies to the vial
+    var vx = PANEL + 60, vy = 470;
+    fly = fly.filter(function (f) {
+      f.t += dt; if (f.t < 0) { return true; }
+      var u = Math.min(1, f.t / 0.7), e = u * u * (3 - 2 * u), x = f.x + (vx - f.x) * e, y = f.y + (vy - f.y) * e - Math.sin(u * Math.PI) * 120;
+      cx.fillStyle = f.k === K.GARNET ? "#e0455a" : "#ffd65a"; cx.beginPath(); cx.arc(x, y, f.k === K.NUGGET ? 7 : 3, 0, 7); cx.fill(); glow(cx, x, y, 14, "rgba(255,220,120,A)", 0.5);
+      if (u >= 1) { sfx("chime", f.n); if (f.k !== K.GARNET) vialGold += 1; return false; }
+      return true;
+    });
+    if (!hideHud) drawHud(seen, t);
+    if (lostFlash > 0) { lostFlash -= dt; text("Gold washed out!", PCX, PCY - PR - 30, 20, "rgba(255,143,122," + Math.min(1, lostFlash) + ")", "center", 800); }
+    drawMsg(dt);
+    if (paused) drawPause();
+    if (helpOpen) drawHelp();
+  }
+  var lp = null; function lastPan() { return lp; }
+  function clockStr(f) { var mins = 7 * 60 + f * 11 * 60, h = Math.floor(mins / 60), m = Math.floor(mins % 60), ap = h >= 12 ? "PM" : "AM"; return (h % 12 || 12) + ":" + (m < 10 ? "0" : "") + m + " " + ap; }
+  function drawHud(seen, t) {
+    var x = PANEL, p = run.pan, cl = C.CLAIMS[run.ci];
+    rr(x, 20, W - x - 20, H - 40, 16); cx.fillStyle = COL.panel; cx.fill(); cx.strokeStyle = COL.line; cx.lineWidth = 1.2; cx.stroke();
+    text(cl.name.toUpperCase(), x + 24, 52, 18, COL.text, "left", 700, SERIF);
+    text("Day " + g.day, W - 44, 52, 14, COL.dim, "right", 700);
+    // daylight
+    var f = Math.min(1, run.t / run.len), bw = W - x - 68;
+    rr(x + 24, 76, bw, 14, 7); cx.fillStyle = "rgba(255,255,255,0.08)"; cx.fill();
+    rr(x + 24, 76, Math.max(14, bw * (1 - f)), 14, 7); cx.fillStyle = f > 0.85 ? "#e08a4a" : "#f2c14e"; cx.fill();
+    text(run.cleanup ? "Dusk - cleaning the sluice" : f >= 1 ? "Dark - finish this pan" : clockStr(f) + "  ·  " + Math.ceil(run.len - run.t) + "s of daylight", x + 24, 104, 12, COL.dim, "left", 700);
+    // claim goal
+    var got = g.got[run.ci] + run.gold, goal = cl.goal, gf = Math.min(1, got / goal);
+    text("CLAIM", x + 24, 134, 11, COL.dim, "left", 800); text(got + " / " + goal + " gold", W - 44, 134, 12, COL.text, "right", 700);
+    rr(x + 24, 144, bw, 8, 4); cx.fillStyle = "rgba(255,255,255,0.08)"; cx.fill(); rr(x + 24, 144, Math.max(8, bw * gf), 8, 4); cx.fillStyle = COL.good; cx.fill();
+    // this pan
+    var y = 186;
+    text("THIS PAN", x + 24, y, 11, COL.dim, "left", 800);
+    if (p) {
+      var c = P.census(p), sand = c.by[K.SAND] + c.by[K.PEBBLE], bs = c.by[K.BLACK];
+      text("Gold in sight", x + 24, y + 26, 15, COL.text, "left", 600); text(seen + (seen === 1 ? " flake" : " flakes"), W - 44, y + 26, 17, COL.gold, "right", 800);
+      var sf = sand / Math.max(1, p.light0); text("Sand left", x + 24, y + 52, 15, COL.text, "left", 600); text(Math.round(sf * 100) + "%", W - 44, y + 52, 15, sf <= P.PICK_AT ? COL.good : COL.text, "right", 700);
+      text("Black sand", x + 24, y + 76, 15, COL.text, "left", 600); text(bs + "", W - 44, y + 76, 15, COL.dim, "right", 700);
+      text("Water", x + 24, y + 102, 15, COL.text, "left", 600);
+      rr(x + 140, y + 95, bw - 116, 14, 7); cx.fillStyle = "rgba(255,255,255,0.08)"; cx.fill(); rr(x + 140, y + 95, Math.max(10, (bw - 116) * p.water), 14, 7); cx.fillStyle = p.water < 0.25 ? COL.bad : COL.water; cx.fill();
+      if (panLost) text("Lost to the creek: " + panLost + " gold", x + 24, y + 128, 13, COL.bad, "left", 700);
+      var T = tiltOf(p), safe = safeTip(p);
+      text(T < 0.05 ? "Level" : T < safe - 0.04 ? "Gentle tip - only the sand washes" : T < safe + 0.03 ? "Careful - right at the edge" : "Too steep - the gold is lifting!", x + 24, y + 150, 13, T < safe - 0.04 ? COL.good : T < safe + 0.03 ? COL.gold : COL.bad, "left", 700);
+    }
+    // the vial
+    y = 400;
+    text("TODAY", x + 24, y, 11, COL.dim, "left", 800);
+    var vx = x + 60, vy = 470;
+    rr(vx - 18, vy - 44, 36, 88, 14); cx.fillStyle = "rgba(200,230,235,0.12)"; cx.fill(); cx.strokeStyle = "rgba(220,240,245,0.5)"; cx.lineWidth = 1.5; cx.stroke();
+    var fillH = Math.min(80, run.gold * 0.25); rr(vx - 14, vy + 40 - fillH, 28, fillH, 10); cx.fillStyle = "#e9b93c"; cx.fill();
+    text(run.gold + " gold", x + 100, vy - 18, 22, COL.gold, "left", 800, SERIF);
+    text("≈ $" + Math.round(run.gold * P.price(g, run.ci) + run.gem) + (run.gem ? "  (garnets $" + run.gem + ")" : ""), x + 100, vy + 12, 14, COL.dim, "left", 700);
+    text(run.pans + (run.pans === 1 ? " pan" : " pans") + " so far", x + 100, vy + 36, 13, COL.dim, "left", 600);
+    // controls
+    y = 560;
+    var ready = p && !after && P.canPick(p);
+    button(x + 24, y, bw, 48, ready || !p || after ? "PICK THE GOLD  (F)" : "WASH TO " + Math.round(P.PICK_AT * 100) + "% SAND TO PICK", pickNow, { primary: ready, size: 15, disabled: !ready });
+    button(x + 24, y + 58, (bw - 10) / 2, 40, "DIP  (E)", function () { want.dip = true; }, { size: 13, disabled: !p || after > 0 });
+    button(x + 24 + (bw + 10) / 2, y + 58, (bw - 10) / 2, 40, P.stats(g).magnet ? "MAGNET  (Q)" : "NO MAGNET", function () { want.magnet = true; }, { size: 13, disabled: !p || after > 0 || !P.stats(g).magnet || p.magCool > 0 });
+    wrap("Hold the mouse button on the pan to swirl. Move away from the centre to tip it. Right-click or E dips water.", x + 24, y + 124, bw, 11, COL.dim, 15, 600);
+    button(W - 84, H - 70, 44, 36, "II", function () { paused = true; }, { size: 13 });
+  }
+  function drawMsg(dt) {
+    if (!msg) return; msg.t += dt; if (msg.t > msg.life) { msg = null; return; }
+    var a = Math.min(1, msg.t * 4, (msg.life - msg.t) * 2), w = tw(msg.s, 17, 700) + 40;
+    cx.globalAlpha = a; rr(PCX - w / 2, 22, w, 38, 19); cx.fillStyle = "rgba(20,18,14,0.88)"; cx.fill(); text(msg.s, PCX, 42, 17, msg.col, "center", 700); cx.globalAlpha = 1;
+  }
+  function drawPause() {
+    cx.fillStyle = "rgba(8,8,6,0.72)"; cx.fillRect(0, 0, W, H);
+    text("PAUSED", W / 2, 260, 40, COL.text, "center", 700, SERIF);
+    button(W / 2 - 110, 330, 220, 48, "RESUME", function () { paused = false; }, { primary: true });
+    button(W / 2 - 110, 390, 220, 40, "HOW TO PLAY", function () { helpOpen = true; helpPage = 0; }, { size: 13 });
+    button(W / 2 - 110, 440, 220, 40, "CALL IT A DAY", function () { paused = false; run.t = run.len; if (!run.pan) afterPick(); else { flash("Last pan of the day", COL.dim); } }, { size: 13 });
+    button(W / 2 - 110, 490, 220, 40, settings.sound ? "SOUND ON" : "SOUND OFF", function () { settings.sound = !settings.sound; saveSettings(); }, { size: 13 });
+    button(W / 2 - 110, 540, 220, 40, settings.music ? "MUSIC ON" : "MUSIC OFF", function () { settings.music = !settings.music; saveSettings(); }, { size: 13 });
+  }
+
+  // ---------------- dusk ----------------
+  function drawDusk(dt) {
+    var t = now(); dusk.t += dt;
+    drawCreek(t); cx.fillStyle = "rgba(30,14,6,0.55)"; cx.fillRect(0, 0, W, H);
+    var s = dusk.s, cl = C.CLAIMS[run.ci];
+    text("DUSK AT " + cl.name.toUpperCase(), W / 2, 130, 34, COL.gold, "center", 700, SERIF);
+    var lines = [["Your pans (" + s.pans + ")", s.own + " gold"]];
+    if (s.partners) lines.push(["Your partners", s.partners + " gold"]);
+    lines.push(["Price at the assay office", "$" + P.price(g, run.ci).toFixed(2) + " a unit"]);
+    if (s.gem) lines.push(["Garnets", "$" + s.gem]);
+    lines.push(["The day's pay", "$" + s.pay]);
+    lines.forEach(function (l, i) { var y = 210 + i * 36, last = i === lines.length - 1; text(l[0], W / 2 - 300, y, last ? 20 : 17, last ? COL.gold : COL.text, "left", 600); text(l[1], W / 2 + 300, y, last ? 22 : 18, last ? COL.gold : COL.text, "right", 800); });
+    var y = 210 + lines.length * 36 + 24, bw = 600, gf = Math.min(1, s.got / s.goal);
+    text("Claim: " + s.got + " / " + s.goal + " gold", W / 2, y, 15, COL.dim, "center", 700);
+    rr(W / 2 - bw / 2, y + 16, bw, 12, 6); cx.fillStyle = "rgba(255,255,255,0.1)"; cx.fill(); rr(W / 2 - bw / 2, y + 16, Math.max(12, bw * gf), 12, 6); cx.fillStyle = COL.good; cx.fill();
+    if (s.opened) text("A new claim is open upstream: " + C.CLAIMS[g.open - 1].name + "!", W / 2, y + 60, 19, COL.good, "center", 800);
+    else if (g.glintDue && !g.glintFound) text("Old-timers say the Glint is in the next scoop at Glacier Run...", W / 2, y + 60, 17, COL.gold, "center", 700);
+    if (dusk.t > 0.6) {
+      button(W / 2 - 240, 600, 230, 52, "TO THE OUTFITTER", function () { afterDusk("shop"); }, { primary: true, size: 16 });
+      button(W / 2 + 10, 600, 230, 52, "ANOTHER DAY HERE", function () { afterDusk("again"); }, { size: 15 });
+    }
+    followLine(H - 50);
+  }
+  function afterDusk(where) {
+    var s = dusk.s; dusk = null;
+    if (DEMO && s.done && !g.sawDemoEnd) { g.sawDemoEnd = true; persist(); screen = "demoend"; return; }
+    if (!DEMO && s.glint && !g.sawWin) { g.sawWin = true; persist(); screen = "won"; return; }
+    if (where === "again") startDay(run.ci); else { screen = "shop"; pickC = g.open - 1; }
+  }
+  function followLine(y) {
+    var label = "Enjoying it? Follow Proven Little Games on itch.io for new games", w = tw(label, 13, 700) + 30, x = W / 2 - w / 2, on = hot(x, y - 15, w, 30);
+    rr(x, y - 15, w, 30, 15); cx.fillStyle = on ? "rgba(90,74,50,0.95)" : "rgba(30,26,20,0.85)"; cx.fill();
+    text(label, W / 2, y, 13, on ? COL.gold : COL.dim, "center", 700);
+    buttons.push({ x: x, y: y - 15, w: w, h: 30, fn: function () { try { window.open(PROFILE_URL, "_blank", "noopener"); } catch (e) {} } });
+  }
+
+  // ---------------- the outfitter ----------------
+  var pickC = 0;
+  var LOCKED = ["", "Black Sand Bar", "Garnet Gulch", "Bedrock Canyon", "Glacier Run"];
+  function drawShop() {
+    drawBackdrop(); cx.fillStyle = "rgba(14,12,8,0.78)"; cx.fillRect(0, 0, W, H);
+    text("THE OUTFITTER", 50, 50, 30, COL.text, "left", 700, SERIF);
+    text("$" + g.money, W - 50, 50, 26, COL.gold, "right", 800, SERIF);
+    text("TOMORROW'S CLAIM", 50, 96, 12, COL.dim, "left", 800);
+    for (var i = 0; i < 5; i++) (function (i) {
+      var x = 50 + i * 238, y = 110, w = 226, h = 108, cl = C.CLAIMS[i], open = cl && i < g.open, sel = pickC === i;
+      rr(x, y, w, h, 12); cx.fillStyle = sel ? "rgba(96,80,50,0.95)" : open ? "rgba(44,38,28,0.94)" : "rgba(28,24,18,0.9)"; cx.fill();
+      cx.strokeStyle = sel ? COL.gold : "rgba(230,210,170,0.25)"; cx.lineWidth = sel ? 2 : 1.2; cx.stroke();
+      if (cl && open) {
+        text(cl.name, x + 14, y + 22, 16, COL.text, "left", 700, SERIF);
+        text(Math.min(g.got[i], cl.goal) >= cl.goal ? "✓" : Math.floor(g.got[i] / cl.goal * 100) + "%", x + w - 14, y + 22, 13, g.got[i] >= cl.goal ? COL.good : COL.gold, "right", 800);
+        wrap(cl.blurb, x + 14, y + 46, w - 28, 11, COL.dim, 15, 600);
+        buttons.push({ x: x, y: y, w: w, h: h, fn: function () { pickC = i; sfx("ui"); } });
+      } else text(cl ? "Locked" : "FULL GAME", x + w / 2, y + h / 2, 14, "#7a705e", "center", 700);
+      if (!cl) text(LOCKED[i], x + w / 2, y + h / 2 + 22, 15, "#a8987a", "center", 700, SERIF);
+    })(i);
+    text("UPGRADES", 50, 246, 12, COL.dim, "left", 800);
+    C.UPGRADES.forEach(function (u, i) {
+      var col = i % 2, row = Math.floor(i / 2), x = 50 + col * 600, y = 260 + row * 76, l = P.lv(g, u.id), c = P.cost(g, u.id), can = P.canBuy(g, u.id);
+      rr(x, y, 580, 66, 10); cx.fillStyle = "rgba(40,34,26,0.92)"; cx.fill();
+      text(u.name, x + 14, y + 20, 15, COL.text, "left", 700);
+      wrap(u.desc, x + 14, y + 42, 360, 11, COL.dim, 14, 600);
+      for (var q = 0; q < u.max; q++) { cx.beginPath(); cx.arc(x + 440 - (u.max - q) * 11, y + 20, 3.6, 0, 7); cx.fillStyle = q < l ? COL.gold : "rgba(220,200,160,0.3)"; cx.fill(); }
+      button(x + 452, y + 14, 116, 38, l >= u.max ? "MAX" : "$" + c, function () { if (P.buy(g, u.id)) { sfx("buy"); persist(); } else sfx("bad"); }, { primary: can, disabled: !can, size: 14 });
+    });
+    button(W - 290, H - 62, 240, 48, "START THE DAY", function () { startDay(pickC); }, { primary: true, size: 17 });
+    button(50, H - 58, 120, 40, "TITLE", function () { screen = "title"; }, { size: 13 });
+    button(182, H - 58, 150, 40, "HOW TO PLAY", function () { helpOpen = true; helpPage = 0; }, { size: 13 });
+    if (helpOpen) drawHelp();
+  }
+
+  // ---------------- help ----------------
+  var HELP = [
+    ["Pan the creek", "Every scoop of creek gravel hides a little gold. Gold is seven times heavier than sand - your job is to wash the light stuff out of the pan and keep the heavy stuff in. You have until dark."],
+    ["Swirl", "Hold the mouse button on the pan (or Space) to swirl it. Swirling sorts the gravel: gold and black sand sink to the bottom, sand stays on top and pebbles float up."],
+    ["Tip", "Move the mouse away from the centre of the pan to tip it toward that side. Water pours over the low lip and takes the top layer with it. The arrow turns amber, then red, when you tip too steep - then the rushing water lifts the gold too. Swirl, tip, swirl, tip."],
+    ["Dip and pick", "Low on water? Right-click or E dips the pan in the creek - it stirs the top layer, so swirl again. When the pan is mostly black sand and gold, press F to pick. You keep the gold you can see; gold still buried under sand goes back into the creek."],
+    ["The outfitter", "At dusk the assay office buys your gold. Spend it on a bigger pan, a better shovel, a riffled pan, a magnet for black sand, a sluice box and partners. Reach a claim's goal to open the next claim upstream."]
+  ];
+  function drawHelp() {
+    cx.fillStyle = "rgba(8,8,6,0.78)"; cx.fillRect(0, 0, W, H);
+    var x = 250, y = 130, ww = 780, hh = 520, p = HELP[helpPage];
+    rr(x, y, ww, hh, 18); cx.fillStyle = COL.panel; cx.fill(); cx.strokeStyle = COL.line; cx.lineWidth = 1.5; cx.stroke();
+    text("HOW TO PLAY " + (helpPage + 1) + "/" + HELP.length, x + 30, y + 34, 12, COL.dim, "left", 800);
+    text(p[0], x + 30, y + 80, 32, COL.gold, "left", 700, SERIF);
+    wrap(p[1], x + 30, y + 136, ww - 60, 18, COL.text, 29, 600);
+    var close = function () { helpOpen = false; settings.seenHelp = true; saveSettings(); };
+    if (helpPage > 0) button(x + 30, y + hh - 66, 120, 42, "BACK", function () { helpPage--; }, {});
+    if (helpPage < HELP.length - 1) button(x + ww - 150, y + hh - 66, 120, 42, "NEXT", function () { helpPage++; }, { primary: true });
+    else button(x + ww - 150, y + hh - 66, 120, 42, "PAN!", close, { primary: true });
+    button(x + ww / 2 - 60, y + hh - 66, 120, 42, "CLOSE", close, {});
+  }
+
+  // ---------------- title: an old hand pans behind the logo ----------------
+  var back = null, backCtl = null, backT = 0;
+  function stepBackdrop(dt) {
+    if (!back || backT > 0) {
+      if (!back || backT > 2.5) { var bg = P.newGame({ seed: 5 }); bg.ups = { RIFFLE: 2, SNUFFER: 1, SHOVEL: 5, PAN: 2 }; back = P.scoop(bg, 0, P.rng(Math.floor(now() * 1000) + 3)); backCtl = BOT.controller(back, 1); backT = 0; }
+      else { backT += dt; return; }
+    }
+    var inp = backCtl();
+    if (!inp) { backT = 0.001; return; }
+    P.step(back, inp, P.STEP); back.events.length = 0;
+  }
+  function drawBackdrop() {
+    stepBackdrop(1 / 60);
+    var t = now(); drawCreek(t); drawPan(back, t);
+  }
+  function drawTitle() {
+    drawBackdrop();
+    var gr = cx.createLinearGradient(0, 0, W, 0); gr.addColorStop(0, "rgba(10,10,6,0.1)"); gr.addColorStop(0.55, "rgba(10,10,6,0.55)"); gr.addColorStop(1, "rgba(10,10,6,0.85)"); cx.fillStyle = gr; cx.fillRect(0, 0, W, H);
+    var lx = 1000;
+    cx.font = "700 92px " + SERIF; cx.textAlign = "center"; cx.textBaseline = "middle";
+    cx.shadowColor = "rgba(255,200,80,0.8)"; cx.shadowBlur = 30; cx.fillStyle = "#ffe7a6"; cx.fillText("PANGLINT", lx, 170); cx.shadowBlur = 0;
+    var t = now(), sx = lx - 170 + ((t * 120) % 420); glow(cx, sx, 150, 26, "rgba(255,250,220,A)", 0.5);
+    text("Swirl the gravel. Keep the gold.", lx, 236, 22, "#f6e8c8", "center", 600, SERIF);
+    text("FREE DEMO · Willow Creek", lx, 272, 14, COL.gold, "center", 800);
+    button(lx - 160, 520, 320, 58, g.day ? "CONTINUE" : "START PANNING", function () { audio(); if (!g.day) startDay(0); else { screen = "shop"; pickC = g.open - 1; } }, { primary: true, size: 19 });
+    button(lx - 160, 590, 155, 40, "HOW TO PLAY", function () { helpOpen = true; helpPage = 0; }, { size: 13 });
+    button(lx + 5, 590, 155, 40, settings.music ? "MUSIC ON" : "MUSIC OFF", function () { settings.music = !settings.music; saveSettings(); audio(); }, { size: 13 });
+    button(lx - 160, 640, 320, 34, settings.sound ? "SOUND ON" : "SOUND OFF", function () { settings.sound = !settings.sound; saveSettings(); }, { size: 12 });
+    button(lx - 160, 690, 320, 40, "GET THE FULL GAME", openStore, { size: 13 });
+    if (helpOpen) drawHelp();
+  }
+  
+  function openStore() { try { window.open(STORE_URL, "_blank", "noopener"); } catch (e) {} }
+  function drawDemoEnd() {
+    drawBackdrop();
+    cx.fillStyle = "rgba(10,8,4,0.74)"; cx.fillRect(0, 0, W, H);
+    text("THE DEMO ENDS HERE", W / 2, 190, 38, COL.gold, "center", 700, SERIF);
+    var y = wrap("You've panned Willow Creek's goal. The full game goes upstream: Black Sand Bar, Garnet Gulch's red garnets, the nuggets of Bedrock Canyon and the flour gold of Glacier Run - with the magnet, the sluice box, partners, and somewhere up there, the Glint.", W / 2, 260, 780, 18, COL.text, 28, 600, "center");
+    button(W / 2 - 170, y + 36, 340, 56, "GET THE FULL GAME", openStore, { primary: true, size: 18 });
+    button(W / 2 - 100, y + 104, 200, 42, "KEEP PANNING", function () { screen = "shop"; pickC = 0; }, { size: 13 });
+    followLine(H - 60);
+  }
+  
+  function drawWon() {
+    drawBackdrop();
+    cx.fillStyle = "rgba(10,8,4,0.7)"; cx.fillRect(0, 0, W, H);
+    var t = now(); glow(cx, W / 2, 330, 120 + 10 * Math.sin(t * 2), "rgba(255,220,120,A)", 0.5);
+    cx.fillStyle = "#ffd65a"; cx.beginPath(); cx.ellipse(W / 2, 330, 46, 34, 0.4, 0, 7); cx.fill(); cx.fillStyle = "rgba(255,250,220,0.8)"; cx.beginPath(); cx.ellipse(W / 2 - 14, 318, 14, 9, 0.4, 0, 7); cx.fill();
+    text("THE GLINT", W / 2, 180, 52, COL.gold, "center", 700, SERIF);
+    wrap(g.day + (g.day === 1 ? " day" : " days") + " on the creek, $" + g.total + " at the assay office, and the biggest nugget Glacier Run ever gave up. Every claim is open. The creek keeps running - so can you.", W / 2, 430, 720, 18, COL.text, 28, 600, "center");
+    button(W / 2 - 110, 560, 220, 50, "TO THE OUTFITTER", function () { screen = "shop"; pickC = g.open - 1; }, { primary: true });
+    followLine(H - 60);
+  }
+
+  // ---------------- main loop and input ----------------
+  var lastT = performance.now();
+  function frame(nowT) {
+    var dt = Math.min(0.05, (nowT - lastT) / 1000); lastT = nowT;
+    buttons = [];
+    cx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+    ambient();
+    if (screen === "title") drawTitle();
+    else if (screen === "work") { if (run.pan) lp = run.pan; drawWork(dt); }
+    else if (screen === "dusk") drawDusk(dt);
+    else if (screen === "shop") drawShop();
+    else if (screen === "won") drawWon();
+    else if (screen === "demoend") drawDemoEnd();
+    requestAnimationFrame(frame);
+  }
+  function resize() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    scale = Math.min(vw / W, vh / H); dpr = window.devicePixelRatio || 1;
+    cv.style.width = Math.floor(W * scale) + "px"; cv.style.height = Math.floor(H * scale) + "px";
+    cv.width = Math.floor(W * scale * dpr); cv.height = Math.floor(H * scale * dpr);
+  }
+  window.addEventListener("resize", resize); resize();
+  function local(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+  cv.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  cv.addEventListener("pointermove", function (e) { var m = local(e); mouse.x = m.x; mouse.y = m.y; });
+  cv.addEventListener("pointerdown", function (e) {
+    var m = local(e); mouse.x = m.x; mouse.y = m.y; cv.focus(); audio();
+    try { cv.setPointerCapture(e.pointerId); } catch (er) {}
+    for (var i = buttons.length - 1; i >= 0; i--) { var b = buttons[i]; if (m.x >= b.x && m.x <= b.x + b.w && m.y >= b.y && m.y <= b.y + b.h) { sfx("ui"); b.fn(); return; } }
+    if (screen === "work" && e.button === 2) { want.dip = true; return; }
+    mouse.down = true;
+  });
+  window.addEventListener("pointerup", function () { mouse.down = false; });
+  window.addEventListener("keydown", function (e) {
+    var k = e.key.toLowerCase(); keys[k] = true; audio();
+    if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].indexOf(k) >= 0) e.preventDefault();
+    if (screen === "work" && run) {
+      if (k === "escape" || k === "p") { if (helpOpen) helpOpen = false; else paused = !paused; }
+      else if (paused || helpOpen) return;
+      else if (k === "f" || k === "enter") pickNow();
+      else if (k === "e") want.dip = true;
+      else if (k === "q") want.magnet = true;
+    } else if (screen === "dusk" && dusk && k === "enter" && dusk.t > 0.6) afterDusk("shop");
+    else if (k === "escape") helpOpen = false;
+  });
+  window.addEventListener("keyup", function (e) { keys[e.key.toLowerCase()] = false; });
+  window.addEventListener("blur", function () { keys = {}; mouse.down = false; if (screen === "work" && run && run.pan) paused = true; });
+
+  // hooks for the screenshot tool and tests
+  window.PANGLINT_APP = {
+    edition: ED, game: function () { return g; }, run: function () { return run; }, setGame: function (str) { g = P.load(str); },
+    start: function (ci) { startDay(ci); msg = null; }, screen: function (s) { if (s) screen = s; return screen; }, help: function (v) { helpOpen = v; }, settings: settings,
+    hover: function (x, y) { mouse.x = x; mouse.y = y; }, down: function (v) { mouse.down = v; }, pause: function (v) { paused = v; }, keys: keys,
+    sim: function (sec, inp) { var p = run.pan; for (var t = 0; t < sec; t += P.STEP) { P.step(p, inp || {}, P.STEP); p.events.length = 0; } },
+    botPan: function (sec, skill) { var p = run.pan, ctl = BOT.controller(p, skill == null ? 1 : skill), inp; for (var t = 0; t < sec && (inp = ctl()); t += P.STEP) { P.step(p, inp, P.STEP); p.events.length = 0; } },
+    hud: function (v) { hideHud = !v; }, setPan: function (list, seed) { run.pan = P.makePan(list, P.rng(seed || 1), P.stats(g)); run.pan.cold = 1; return run.pan; }, K: K,
+    pick: pickNow, flash: flash, msgOff: function () { msg = null; }, pickClaim: function (i) { pickC = i; }, endDay: function () { run.t = run.len; endTheDay(); }
+  };
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
