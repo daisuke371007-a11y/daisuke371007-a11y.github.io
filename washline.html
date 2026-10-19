@@ -1,0 +1,1010 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WASHLINE (Demo)</title>
+<style>
+:root { --ink:#4a4038; --soft:#8a7d70; --paper:#f6f0e3; --accent:#3e78c2; --warm:#d9534a; --note:#6f6357; --link:#1f5fa8; }
+body.dark { --note:#b9ae9f; --link:#9cc8ff; }
+a { color:var(--link); }
+a:hover { text-decoration-thickness:2px; }
+* { box-sizing:border-box; }
+html, body { margin:0; height:100%; overflow:hidden; background:#e9e1d1; font-family:"Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif; color:var(--ink); user-select:none; -webkit-user-select:none; }
+#wrap { position:absolute; left:0; top:0; width:1280px; height:720px; transform-origin:0 0; overflow:hidden; }
+#cv { position:absolute; left:0; top:0; width:1280px; height:720px; touch-action:none; }
+body.dark { color:#e8e0d2; }
+.ov { position:absolute; inset:0; display:none; align-items:center; justify-content:center; }
+.ov.on { display:flex; }
+.dim { background:rgba(246,240,227,0.72); backdrop-filter:blur(3px); }
+body.dark .dim { background:rgba(30,28,36,0.75); }
+.card { background:rgba(255,253,247,0.96); border-radius:4px; padding:26px 34px; box-shadow:0 14px 40px rgba(80,60,30,0.25), 0 0 0 1px rgba(120,100,70,0.15); max-height:680px; overflow:auto; }
+body.dark .card { background:#34323d; box-shadow:0 14px 40px rgba(0,0,0,0.5); }
+h1, h2 { font-weight:normal; letter-spacing:.16em; margin:0; }
+h2 { font-size:26px; }
+.sub { font-style:italic; color:var(--soft); margin:4px 0 14px; }
+button { font-family:inherit; font-size:16px; color:var(--ink); background:transparent; border:1.5px solid rgba(90,75,60,0.45); border-radius:30px; padding:8px 20px; cursor:pointer; transition:background .15s, transform .1s; }
+body.dark button { color:#e8e0d2; border-color:rgba(230,220,200,0.35); }
+button:hover:not(:disabled) { background:rgba(120,100,70,0.08); }
+button:active:not(:disabled) { transform:scale(0.97); }
+button:disabled { opacity:.35; cursor:default; }
+button.main { background:#4a4038; color:#fbf6ec; border-color:#4a4038; }
+body.dark button.main { background:#e8e0d2; color:#2b2a33; }
+/* hud */
+#hud { position:absolute; left:0; right:0; top:0; height:64px; display:none; align-items:center; padding:0 26px; gap:10px; pointer-events:none; }
+#hud.on { display:flex; }
+#hud * { pointer-events:auto; }
+#lvTitle { font-size:22px; letter-spacing:.06em; }
+#lvSub { font-style:italic; color:var(--soft); font-size:15px; margin-left:10px; }
+.sp { flex:1; }
+.ib { width:44px; height:44px; border-radius:50%; padding:0; font-size:19px; display:inline-flex; align-items:center; justify-content:center; }
+#progress { position:absolute; left:0; right:0; bottom:22px; text-align:center; font-style:italic; color:var(--soft); display:none; }
+#progress.on { display:block; }
+/* title */
+#title { flex-direction:column; gap:16px; background:radial-gradient(ellipse 42% 30% at 50% 50%, rgba(246,240,227,0.92), rgba(246,240,227,0.6) 60%, rgba(246,240,227,0)); }
+.logo { font-size:100px; letter-spacing:.2em; margin-left:.2em; line-height:1; background:linear-gradient(100deg, #d9534a 0%, #ea8a35 22%, #efbe3c 40%, #4fa35a 60%, #3e78c2 80%, #8a52a8 100%); -webkit-background-clip:text; background-clip:text; color:transparent; filter:drop-shadow(0 2px 0 rgba(255,255,255,0.8)) drop-shadow(0 6px 18px rgba(120,90,50,0.25)); }
+.tag { font-style:italic; font-size:21px; color:var(--soft); margin:-4px 0 6px; }
+.row { display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+.demoTag { display:none; letter-spacing:.3em; color:#d9534a; font-size:14px; } body.demo .demoTag { display:block; }
+/* chapters */
+#chapSheet { width:1120px; height:640px; display:flex; flex-direction:column; }
+.tabs { display:flex; gap:6px; margin:6px 0 14px; flex-wrap:wrap; }
+.tabs button { font-size:14px; padding:6px 14px; }
+.tabs button.on { background:#4a4038; color:#fbf6ec; }
+body.dark .tabs button.on { background:#e8e0d2; color:#2b2a33; }
+#levels { display:grid; grid-template-columns:repeat(9, 1fr); gap:12px; overflow:auto; padding:4px; }
+.lv { position:relative; aspect-ratio:1; border-radius:3px; cursor:pointer; background:#fffdf7; box-shadow:0 2px 6px rgba(80,60,30,0.15), 0 0 0 1px rgba(120,100,70,0.15); overflow:hidden; }
+body.dark .lv { background:#2b2a33; }
+.lv:hover { transform:translateY(-2px); }
+.lv canvas { width:100%; height:100%; display:block; }
+.lv span { position:absolute; left:6px; top:4px; font-size:12px; color:var(--soft); }
+.lv.lock { opacity:.35; cursor:default; } .lv.lock:hover { transform:none; }
+#chapNote { font-style:italic; color:var(--note); margin-top:10px; min-height:20px; }
+/* win */
+#winCard { text-align:center; min-width:420px; }
+#winCv { width:300px; height:300px; display:block; margin:26px auto 28px; box-shadow:0 0 0 10px #fffdf7, 0 0 0 22px #c9a35a, 0 10px 30px rgba(80,60,30,0.35); }
+/* gallery */
+#galSheet { width:1120px; height:640px; display:flex; flex-direction:column; }
+#gal { display:grid; grid-template-columns:repeat(10, 1fr); gap:16px; overflow:auto; padding:10px; }
+.pic { aspect-ratio:1; box-shadow:0 0 0 5px #fffdf7, 0 0 0 9px #c9a35a, 0 5px 12px rgba(80,60,30,0.3); }
+.pic.empty { box-shadow:0 0 0 1px rgba(120,100,70,0.25); background:rgba(120,100,70,0.05); }
+.pic canvas { width:100%; height:100%; display:block; }
+/* settings */
+.set { display:grid; grid-template-columns:150px 1fr; gap:12px 18px; align-items:center; margin:16px 0; }
+.follow { font-style:italic; color:var(--note); font-size:15px; margin:16px 0 0; line-height:1.5; }
+.help { width:700px; line-height:1.5; font-size:17px; }
+.help canvas { float:right; margin-left:16px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div id="hud">
+    <button class="ib" id="hMenu" title="Levels (Esc)">☰</button>
+    <span id="lvTitle"></span><span id="lvSub"></span>
+    <span class="sp"></span>
+    <button class="ib" id="hUndo" title="Undo (Z)">↶</button>
+    <button class="ib" id="hReset" title="Clear (R)">⟲</button>
+    <button class="ib" id="hHint" title="Hint (H)">?</button>
+    <button class="ib" id="hSet" title="Settings">⚙</button>
+  </div>
+  <div id="progress"></div>
+
+  <div class="ov on" id="title">
+    <div class="logo">WASHLINE</div>
+    <div class="demoTag">FREE DEMO</div>
+    <div class="tag">A quiet puzzle of brushes, pigment and paper.</div>
+    <div class="row"><button class="main" id="tPlay">Paint</button><button id="tLevels">Levels</button><button id="tDaily">Daily painting</button><button id="tGallery">Gallery</button><button id="tHow">How to play</button></div>
+  </div>
+
+  <div class="ov dim" id="chap"><div class="card" id="chapSheet">
+    <div style="display:flex;justify-content:space-between;align-items:center"><div><h2>SKETCHBOOKS</h2><div class="sub" id="chapSub"></div></div><div class="row"><button id="cGallery">Gallery</button><button id="cClose">Close</button></div></div>
+    <div class="tabs" id="tabs"></div>
+    <div id="levels"></div>
+    <div id="chapNote"></div>
+  </div></div>
+
+  <div class="ov dim" id="win"><div class="card" id="winCard">
+    <h2 id="winTitle">PAINTED</h2>
+    <div class="sub" id="winSub"></div>
+    <canvas id="winCv" width="600" height="600"></canvas>
+    <div class="follow" id="winFollow" style="display:none">Every painting is hung - thank you for playing.<br>Enjoyed it? <a class="profileLink" target="_blank" rel="noopener">Follow kqmigqkqri on itch.io</a> to hear about new games and sales.</div>
+    <div class="row" style="margin-top:22px"><button id="wLevels">Levels</button><button class="main" id="wNext">Next painting ›</button></div>
+  </div></div>
+
+  <div class="ov dim" id="gallery"><div class="card" id="galSheet">
+    <div style="display:flex;justify-content:space-between;align-items:center"><div><h2>THE GALLERY</h2><div class="sub" id="galSub"></div></div><button id="gClose">Close</button></div>
+    <div class="tabs" id="gTabs"></div>
+    <div id="gal"></div>
+  </div></div>
+
+  <div class="ov dim" id="settings"><div class="card" style="width:520px">
+    <h2>SETTINGS</h2>
+    <div class="set">
+      <span>Palette</span><div class="row" style="justify-content:flex-start" id="sTheme"></div>
+      <span>Colour symbols</span><div><button id="sSym">Off</button> <span class="sub" style="font-size:13px">dots = red, slashes = yellow, waves = blue</span></div>
+      <span>Sound</span><div><button id="sSnd">Music &amp; sounds</button></div>
+    </div>
+    <div style="text-align:right"><button class="main" id="sClose">Done</button></div>
+  </div></div>
+
+  <div class="ov dim" id="how"><div class="card help">
+    <h2>HOW TO PAINT</h2>
+    <canvas id="howCv" width="440" height="440" style="width:220px;height:220px"></canvas>
+    <p>Drag a brush from its <b>paint well</b> across the paper. Every brush must end in a <b>frame</b> - and arrive in the colour that frame asks for.</p>
+    <p>Pass over a <b>pigment drop</b> and the brush picks it up: red and yellow make orange, yellow and blue make green, blue and red make purple, all three make umber.</p>
+    <p>Paint <b>every square</b> of paper exactly once. Later you'll meet <b>stencils</b> (the brush must be that colour as it passes), <b>soap</b> (washes the brush clear) and <b>currents</b> (cross only one way).</p>
+    <p>Every puzzle has exactly one solution. Drag back to undo a stroke; touch a well to start that brush again.</p>
+    <div style="text-align:right"><button class="main" id="howClose">Let's paint</button></div>
+  </div></div>
+
+  <div class="ov dim" id="demoEnd"><div class="card" style="width:560px;text-align:center">
+    <h2 id="deTitle">END OF THE FREE DEMO</h2>
+    <p id="deText">The first sketchbook is yours. The full game has five more - stencils, mixing, clear water, currents and the gallery's big canvases - 150 paintings in all, plus a daily painting every day from a rotation of 120.</p>
+    <div class="row"><a class="fullLink" target="_blank" rel="noopener"><button class="main">Get WASHLINE</button></a><button id="deClose">Back</button></div>
+    <div class="follow">Enjoyed it? <a class="profileLink" target="_blank" rel="noopener">Follow kqmigqkqri on itch.io</a> to hear about new games and sales.</div>
+  </div></div>
+</div>
+<script>
+window.WL_DEMO=true;
+</script>
+<script>
+// WASHLINE engine: watercolour path puzzles. Brushes start at paint wells, pick up pigment as they travel,
+// and must arrive at frames in the right colour, painting every square of paper exactly once.
+// Shared by the game and the node tools (solver, generator).
+(function (root) {
+  'use strict';
+  // colours are sets of primaries: r=1, y=2, b=4; 0 is clear water
+  const BIT = { 0: 0, r: 1, y: 2, b: 4, o: 3, g: 6, p: 5, n: 7 };
+  const LET = ['0', 'r', 'y', 'o', 'b', 'p', 'g', 'n'];
+  const NAME = { 0: 'Clear', r: 'Red', y: 'Yellow', b: 'Blue', o: 'Orange', g: 'Green', p: 'Purple', n: 'Umber' };
+  const DIRS = [[0, -1, '^'], [1, 0, '>'], [0, 1, 'v'], [-1, 0, '<']];
+
+  // A level: { w, h, cells: ["..", "Wr", ...] } with two-character tokens per cell:
+  //  ..  paper          ##  wall (no paper)
+  //  Wc  paint well     Fc  frame (end) wanting colour c
+  //  Pc  pigment drop   Sc  stencil: the brush must be colour c here
+  //  Kx  bleach (washes the brush clear)   A^ A> Av A<  current: cross in this direction only
+  function parse(L) {
+    const rows = L.rows, h = rows.length, w = rows[0].length / 2, cells = [];
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const t = rows[y].substr(x * 2, 2), k = t[0], v = t[1];
+      cells.push({ x, y, k: t === '..' ? '.' : k, v: k === 'A' ? v : BIT[v] !== undefined ? BIT[v] : 0 });
+    }
+    return { w, h, cells, name: L.name || '' };
+  }
+  const needsPaint = (c) => c.k === '.' || c.k === 'P' || c.k === 'S' || c.k === 'K' || c.k === 'A';
+  function mixAt(c, col) { if (c.k === 'P') return col | c.v; if (c.k === 'K') return 0; return col; }
+
+  // ── Checking a player's paths ───────────────────────────────────
+  // paths: array of arrays of cell indexes, each starting at a well
+  function check(P, paths) {
+    const used = new Array(P.cells.length).fill(-1), res = { ok: false, errors: [], colours: [], done: [] };
+    paths.forEach((path, pi) => {
+      let col = P.cells[path[0]].v, fine = true;
+      for (let i = 1; i < path.length; i++) {
+        const c = P.cells[path[i]], prev = P.cells[path[i - 1]];
+        if (c.k === 'A') { const d = DIRS.find((q) => q[2] === c.v); if (c.x - prev.x !== d[0] || c.y - prev.y !== d[1]) fine = false; }
+        if (prev.k === 'A') { const d = DIRS.find((q) => q[2] === prev.v); if (c.x - prev.x !== d[0] || c.y - prev.y !== d[1]) fine = false; }
+        if (c.k === 'F') { if (col !== c.v) fine = false; break; }
+        col = mixAt(c, col);
+        if (c.k === 'S' && col !== c.v) fine = false;
+        used[path[i]] = pi;
+      }
+      const end = P.cells[path[path.length - 1]];
+      res.colours.push(col); res.done.push(end.k === 'F' && fine && col === end.v);
+      if (!fine) res.errors.push(pi);
+    });
+    const wells = P.cells.filter((c) => c.k === 'W').length;
+    const allPainted = P.cells.every((c, i) => !needsPaint(c) || used[i] >= 0);
+    res.ok = allPainted && res.done.length === wells && res.done.every(Boolean);
+    res.painted = P.cells.reduce((a, c, i) => a + (needsPaint(c) && used[i] >= 0 ? 1 : 0), 0);
+    res.total = P.cells.filter(needsPaint).length;
+    return res;
+  }
+
+  // ── Solver: counts solutions (up to `limit`) ────────────────────
+  function solve(P, limit, nodeCap) {
+    limit = limit || 2; nodeCap = nodeCap || 400000;
+    const { w, h, cells } = P, N = cells.length;
+    const wells = cells.map((c, i) => (c.k === 'W' ? i : -1)).filter((i) => i >= 0);
+    const frames = cells.map((c, i) => (c.k === 'F' ? i : -1)).filter((i) => i >= 0);
+    const nb = cells.map((c) => DIRS.map(([dx, dy]) => { const x = c.x + dx, y = c.y + dy; return x >= 0 && y >= 0 && x < w && y < h ? y * w + x : -1; }));
+    const used = new Uint8Array(N); // 1 = painted / consumed
+    let paperLeft = cells.filter(needsPaint).length, nodes = 0, sols = 0, first = null; const all = [];
+    const frameUsed = new Uint8Array(N);
+    const path = [];
+    const isFreeEnd = (j) => (cells[j].k === 'F' && !frameUsed[j]) || (cells[j].k === 'W' && !used[j]);
+    // a square of paper needs a way in and a way out
+    function deadPaper(head) {
+      for (let i = 0; i < N; i++) {
+        if (used[i] || !needsPaint(cells[i])) continue;
+        let open = 0;
+        for (const j of nb[i]) if (j >= 0 && (j === head || (!used[j] && needsPaint(cells[j])) || isFreeEnd(j))) open++;
+        if (open < 2) return true;
+      }
+      return false;
+    }
+    // every untouched region of paper needs a brush that has not started yet and a free frame beside it
+    const comp = new Int32Array(N), stack = [];
+    function regionsOk(wi, head) {
+      comp.fill(-1); let id = 0;
+      for (let s0 = 0; s0 < N; s0++) {
+        if (comp[s0] >= 0 || used[s0] || !needsPaint(cells[s0])) continue;
+        let touchesHead = false, fr = 0, wl = 0;
+        comp[s0] = id; stack.push(s0);
+        while (stack.length) {
+          const i = stack.pop();
+          for (const j of nb[i]) {
+            if (j < 0) continue;
+            if (j === head) touchesHead = true;
+            if (!used[j] && needsPaint(cells[j]) && comp[j] < 0) { comp[j] = id; stack.push(j); }
+          }
+        }
+        if (!touchesHead) {
+          for (let i = 0; i < N; i++) if (comp[i] === id) for (const j of nb[i]) if (j >= 0) { if (cells[j].k === 'F' && !frameUsed[j]) fr++; if (cells[j].k === 'W' && !used[j]) wl++; }
+          if (!fr || !wl) return false;
+        }
+        id++;
+      }
+      return true;
+    }
+    function step(wi, head, col) {
+      if (sols >= limit || nodes > nodeCap) return;
+      nodes++;
+      if (!regionsOk(wi, head)) return;
+      const hc = cells[head];
+      for (let d = 0; d < 4; d++) {
+        if (hc.k === 'A' && DIRS[d][2] !== hc.v) continue;
+        const j = nb[head][d]; if (j < 0) continue;
+        const c = cells[j];
+        if (c.k === 'F') {
+          if (frameUsed[j] || col !== c.v) continue;
+          frameUsed[j] = 1; path.push(j);
+          if (wi + 1 < wells.length) { const nw = wells[wi + 1]; used[nw] = 1; path.push(-1, nw); if (!deadPaper(nw)) step(wi + 1, nw, cells[nw].v); path.pop(); path.pop(); used[nw] = 0; }
+          else if (paperLeft === 0) { sols++; all.push(path.slice()); if (!first) first = path.slice(); }
+          path.pop(); frameUsed[j] = 0; continue;
+        }
+        if (used[j] || !needsPaint(c)) continue;
+        if (c.k === 'A') { const dd = DIRS.find((q) => q[2] === c.v); if (dd !== DIRS[d]) continue; }
+        const nc = mixAt(c, col);
+        if (c.k === 'S' && nc !== c.v) continue;
+        used[j] = 1; paperLeft--; path.push(j);
+        if (!deadPaper(j)) step(wi, j, nc);
+        path.pop(); paperLeft++; used[j] = 0;
+      }
+    }
+    if (!wells.length) return { count: 0, nodes: 0 };
+    used[wells[0]] = 1; path.push(wells[0]);
+    step(0, wells[0], cells[wells[0]].v);
+    return { count: sols, nodes, capped: nodes > nodeCap, first, all };
+  }
+  // turn a solver path (with -1 separators) into arrays of cells
+  function splitPaths(flat) { const out = [[]]; for (const v of flat) { if (v === -1) out.push([]); else out[out.length - 1].push(v); } return out.filter((p) => p.length); }
+
+  const api = { BIT, LET, NAME, DIRS, parse, check, solve, splitPaths, needsPaint, mixAt };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.WL = api;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+// WASHLINE demo data: the first sketchbook only.
+(function (root) { const D = {"chapters":[{"id":"first","name":"First Wash","levels":[["..Pr....","....FpFp","..PrWbWb","........"],["FoPrWy..","FpPr....","..Pr..Wb","......Pb"],["....Fr..","....Pr..","PyWrFn..","Wb....Pr"],["Fn......","Wy......","Fo..PrWb","..PrPy.."],["Wr......Pr","FgWb....Pr","PyWb....Fn","..Pr..Fr..","....Py...."],["WbFy......","..........","Py..FgPyPy","..Wr..PbPy","..PbFnWy.."],["Wy......Fo","FrPr..Fb..","..Pr......","....Wb....","....Wr...."],["Wb........","..Pb..WbWy","Fb..Pr....","Fb....Fo..","........Pb"],["......WbFo","....PyWrPr","..FoWy....","..Fg......","......Py.."],["Pr..Wr....","..FpWbPb..","..........","......WyFr","Pr..Pb..Fn"],["WrFp......","..Pr..Wb..","..Pr..Fr..","..Wb..Fp..",".........."],["..........","..Wr..Wb..","......PbFp","......FbFb","......WbPb"],["....Wr....","........Py","..Fo....Fg","..Wb....Wr","PbPy..PyFo"],["Py......Pb..","WrWy........","PrFo..Py....","Py....FoWr..","....Fp......"],["......Pb..Wr","..Fr......Wr","..Fr..FpPr..","..Pr..Wr....","............"],["............","....Pb..Pb..","......Fg....","....WyWy....","..FpFgPbWr.."],["..WyFgFo....","....PbPyPb..","............","..WrFp......","........Wr.."],["..........Py","..Fb..WbFr..","..Fn........","..Pr..Pb....","..WrWrPb...."],["............","..PyWbPrPb..","Fn......FpPy","....Pb..Fy..","..PrPyWbWy.."],["............","WyFn..PyPr..","..PyWbWbFnFy","Pb......Wr..","..Py..PrFn..","............"],["..Wb........","..Wy....Fy..","....Pr..Pr..","..Fn..WrPy..","..Fp..PyFo..","....PyPbWy.."],["..PrPr..PbWr","PyFoFpPbPrWb","..........Fg","..Pb..WbFp..","..Py......Py","......Wy...."],["....Wr..PyFo","..PyWrPbPr..","..Pr......Py","..........Pb","Fn....FnFg..","....WbWy...."],["WbWr........","..Fg........","Py..FgFpPb..","........Pr..","..Wb..Pb..Fp","....Pb....Wy"],["....Py......","......Py..Fy","......WyPbFg","......Wb....","..Wb..PyFgWr","......FpPbPb"]]},{"id":"stencil","name":"Stencils","n":25,"levels":[]},{"id":"mix","name":"Mixing","n":25,"levels":[]},{"id":"clear","name":"Clear Water","n":25,"levels":[]},{"id":"current","name":"Currents","n":25,"levels":[]},{"id":"gallery","name":"The Gallery","n":25,"levels":[]}],"daily":[]};
+root.WLL = D; })(window);
+
+</script>
+<script>
+// WASHLINE art: watercolour paper, paint pans, pigment drops, frames, stencils, wet strokes and the finished painting.
+(function (root) {
+  'use strict';
+  const TAU = Math.PI * 2;
+  const THEMES = {
+    watercolour: { name: 'Watercolour', paper: '#f6f0e3', ink: '#5b5149', grid: 'rgba(120,105,90,0.16)', c: { 0: '#c9dbe6', 1: '#d9534a', 2: '#efbe3c', 3: '#ea8a35', 4: '#3e78c2', 5: '#8a52a8', 6: '#4fa35a', 7: '#8b5a3a' } },
+    dusk: { name: 'Dusk', paper: '#2b2a33', ink: '#e8e0d2', grid: 'rgba(230,220,200,0.12)', c: { 0: '#7d8fa0', 1: '#ff6f61', 2: '#ffd166', 3: '#ff9f43', 4: '#4fa3ff', 5: '#b27cff', 6: '#5ed38a', 7: '#c08a62' } },
+    // a palette that keeps the colours apart for red-green colour blindness
+    clear: { name: 'High contrast', paper: '#fbfbf7', ink: '#222', grid: 'rgba(0,0,0,0.14)', c: { 0: '#b8c4cc', 1: '#d55e00', 2: '#f0e442', 3: '#e69f00', 4: '#0072b2', 5: '#cc79a7', 6: '#009e73', 7: '#6b4a2b' } },
+  };
+  let T = THEMES.watercolour;
+  function setTheme(id) { T = THEMES[id] || THEMES.watercolour; }
+  const col = (bits) => T.c[bits];
+  function hexRGB(h) { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; }
+  const rgba = (h, a) => { const c = hexRGB(h); return `rgba(${c[0]},${c[1]},${c[2]},${a})`; };
+  const darker = (h, k) => { const c = hexRGB(h).map((v) => Math.round(v * (1 - k))); return `rgb(${c[0]},${c[1]},${c[2]})`; };
+  function hash(a, b) { let h = (a * 374761393 + b * 668265263) >>> 0; h = (h ^ (h >>> 13)) * 1274126177 >>> 0; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+
+  // Paper: cream with soft fibres and a little cockling, rendered once per size
+  let paperCache = null;
+  function paper(w, h, dpr) {
+    const key = w + 'x' + h + T.paper + dpr;
+    if (paperCache && paperCache.key === key) return paperCache.cv;
+    const cv = document.createElement('canvas'); cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    const c = cv.getContext('2d'); c.scale(dpr, dpr);
+    c.fillStyle = T.paper; c.fillRect(0, 0, w, h);
+    const dark = hexRGB(T.paper)[0] < 100;
+    for (let i = 0; i < 2600; i++) {
+      const x = hash(i, 1) * w, y = hash(i, 2) * h, l = 2 + hash(i, 3) * 9, a = hash(i, 4) * TAU;
+      c.strokeStyle = dark ? `rgba(255,255,255,${0.02 + hash(i, 5) * 0.03})` : `rgba(120,100,70,${0.03 + hash(i, 5) * 0.05})`; c.lineWidth = 0.5;
+      c.beginPath(); c.moveTo(x, y); c.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); c.stroke();
+    }
+    for (let i = 0; i < 18; i++) {
+      const x = hash(i, 9) * w, y = hash(i, 8) * h, r = 120 + hash(i, 7) * 260;
+      const g = c.createRadialGradient(x, y, 0, x, y, r); g.addColorStop(0, dark ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.18)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+      c.fillStyle = g; c.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+    const v = c.createRadialGradient(w / 2, h / 2, h * 0.35, w / 2, h / 2, w * 0.7); v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, dark ? 'rgba(0,0,0,0.35)' : 'rgba(120,90,50,0.16)');
+    c.fillStyle = v; c.fillRect(0, 0, w, h);
+    paperCache = { key, cv };
+    return cv;
+  }
+
+  // Grain texture for washes
+  let grain = null;
+  function grainPattern(c) {
+    if (!grain) {
+      const g = document.createElement('canvas'); g.width = g.height = 128; const x = g.getContext('2d'), img = x.createImageData(128, 128);
+      for (let i = 0; i < 128 * 128; i++) { const v = 200 + Math.floor(hash(i, 77) * 55); img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v; img.data[i * 4 + 3] = 255; }
+      x.putImageData(img, 0, 0); grain = g;
+    }
+    return c.createPattern(grain, 'repeat');
+  }
+
+  // A wet stroke along cell centres; pts: [{x,y,c}] with c the colour after each square.
+  // The route is drawn opaque on its own layer (so joints never double up), then washed onto the paper once.
+  let layer = null;
+  const tint = (h, k) => { const c = hexRGB(h).map((v) => Math.round(v + (255 - v) * k)); return `rgb(${c[0]},${c[1]},${c[2]})`; };
+  const shade = (h, k) => { const c = hexRGB(h).map((v) => Math.round(v * (1 - k))); return `rgb(${c[0]},${c[1]},${c[2]})`; };
+  function stroke(c, pts, width, alpha) {
+    if (pts.length < 2) return;
+    const W = c.canvas.width, H = c.canvas.height;
+    if (!layer || layer.width !== W || layer.height !== H) { layer = document.createElement('canvas'); layer.width = W; layer.height = H; }
+    const g = layer.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, W, H); g.setTransform(c.getTransform());
+    g.lineCap = 'round'; g.lineJoin = 'round';
+    const pass = (wd, colour) => {
+      // runs of one colour as single polylines; a colour change gets its own blended segment
+      let i = 1;
+      while (i < pts.length) {
+        const c0 = pts[i].c; let j = i;
+        while (j + 1 < pts.length && pts[j + 1].c === c0) j++;
+        g.strokeStyle = colour(c0, pts[i - 1].c); g.lineWidth = wd;
+        g.beginPath(); g.moveTo(pts[i - 1].x, pts[i - 1].y); for (let q = i; q <= j; q++) g.lineTo(pts[q].x, pts[q].y); g.stroke();
+        i = j + 1;
+      }
+    };
+    pass(width * 1.32, (c0) => tint(col(c0), 0.72));                   // bleed into the paper
+    pass(width, (c0) => shade(col(c0), 0.16));                         // pigment pools at the edge
+    pass(width * 0.8, (c0) => tint(col(c0), 0.08));                    // the body of the wash
+    // granulation: a little paper grain shows through
+    if (!root.WL_NOGRAIN) { g.globalCompositeOperation = 'source-atop'; g.globalAlpha = 0.18; g.fillStyle = grainPattern(g); g.setTransform(1, 0, 0, 1, 0, 0); g.fillRect(0, 0, W, H); }
+    g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
+    c.save(); c.setTransform(1, 0, 0, 1, 0, 0); c.globalAlpha = 0.78 * alpha; c.drawImage(layer, 0, 0); c.restore();
+  }
+  // the finished painting: every square washed in its brush colour, edges soft and blooming
+  function bloomCell(c, x, y, s, colour, t, seed) {
+    const r = s * 0.5 * Math.min(1, t) * 1.12, cx = x + s / 2, cy = y + s / 2;
+    c.save(); c.fillStyle = rgba(col(colour), 0.5);
+    c.beginPath();
+    for (let k = 0; k <= 14; k++) { const a = k / 14 * TAU, rr = r * (0.92 + hash(seed, k) * 0.16) * (Math.abs(Math.cos(a)) + Math.abs(Math.sin(a)) > 1.2 ? 1.18 : 1.02); const px = cx + Math.cos(a) * rr, py = cy + Math.sin(a) * rr; k ? c.lineTo(px, py) : c.moveTo(px, py); }
+    c.closePath(); c.fill();
+    c.strokeStyle = rgba(darker(col(colour), 0.2), 0.25); c.lineWidth = 1.5; c.stroke();
+    c.restore();
+  }
+
+  // ── Pieces ──────────────────────────────────────────────────────
+  function well(c, x, y, s, colour, t, active) {
+    const cx = x + s / 2, cy = y + s / 2, r = s * 0.36;
+    c.save();
+    c.fillStyle = 'rgba(60,40,20,0.18)'; c.beginPath(); c.ellipse(cx + 2, cy + 3, r * 1.05, r * 1.0, 0, 0, TAU); c.fill();
+    const g = c.createRadialGradient(cx - r * 0.3, cy - r * 0.4, r * 0.1, cx, cy, r * 1.1); g.addColorStop(0, '#ffffff'); g.addColorStop(1, '#dcd6cc');
+    c.fillStyle = g; c.beginPath(); c.arc(cx, cy, r, 0, TAU); c.fill();
+    c.strokeStyle = 'rgba(90,80,70,0.35)'; c.lineWidth = 1; c.stroke();
+    // the paint pool, with a soft meniscus and a highlight
+    const pr = r * 0.72;
+    const pg = c.createRadialGradient(cx - pr * 0.3, cy - pr * 0.3, pr * 0.1, cx, cy, pr);
+    pg.addColorStop(0, rgba(col(colour), colour ? 0.75 : 0.5)); pg.addColorStop(1, colour ? darker(col(colour), 0.12) : rgba(col(0), 0.9));
+    c.fillStyle = pg; c.beginPath(); c.arc(cx, cy, pr, 0, TAU); c.fill();
+    c.fillStyle = 'rgba(255,255,255,0.55)'; c.beginPath(); c.ellipse(cx - pr * 0.35, cy - pr * 0.4, pr * 0.32, pr * 0.16, -0.6, 0, TAU); c.fill();
+    if (!colour) { c.strokeStyle = 'rgba(80,110,140,0.5)'; c.lineWidth = 1.2; c.beginPath(); c.arc(cx, cy, pr * 0.45, 0.2, 2.6); c.stroke(); }
+    if (active) { c.strokeStyle = rgba(col(colour), 0.6 + 0.3 * Math.sin(t * 5)); c.lineWidth = 2.5; c.beginPath(); c.arc(cx, cy, r + 4, 0, TAU); c.stroke(); }
+    c.restore();
+  }
+  function drop(c, x, y, s, colour) {
+    const cx = x + s / 2, cy = y + s / 2, r = s * 0.17;
+    c.save();
+    c.fillStyle = rgba(col(colour), 0.95);
+    c.beginPath(); c.moveTo(cx, cy - r * 1.9); c.bezierCurveTo(cx + r * 0.3, cy - r * 1.2, cx + r * 1.1, cy - r * 0.4, cx + r, cy + r * 0.2); c.arc(cx, cy + r * 0.2, r, 0, Math.PI); c.bezierCurveTo(cx - r * 1.1, cy - r * 0.4, cx - r * 0.3, cy - r * 1.2, cx, cy - r * 1.9); c.fill();
+    c.strokeStyle = darker(col(colour), 0.3); c.lineWidth = 1; c.stroke();
+    c.fillStyle = 'rgba(255,255,255,0.7)'; c.beginPath(); c.ellipse(cx - r * 0.35, cy - r * 0.1, r * 0.22, r * 0.38, -0.4, 0, TAU); c.fill();
+    c.restore();
+  }
+  function frame(c, x, y, s, colour, done, t) {
+    const m = s * 0.16, fx = x + m, fy = y + m, fw = s - m * 2;
+    c.save();
+    c.fillStyle = 'rgba(60,40,20,0.2)'; c.fillRect(fx + 2, fy + 3, fw, fw);
+    const g = c.createLinearGradient(fx, fy, fx + fw, fy + fw); g.addColorStop(0, '#e9c983'); g.addColorStop(0.5, '#b88a3e'); g.addColorStop(1, '#8a6224');
+    c.fillStyle = g; c.fillRect(fx, fy, fw, fw);
+    const b = fw * 0.16;
+    c.fillStyle = '#fbf8f0'; c.fillRect(fx + b, fy + b, fw - b * 2, fw - b * 2);
+    // the colour it wants, as an unfinished wash
+    c.fillStyle = rgba(col(colour), done ? 0.9 : 0.42); c.fillRect(fx + b + 2, fy + b + 2, fw - b * 2 - 4, fw - b * 2 - 4);
+    if (!done) { c.strokeStyle = rgba(col(colour), 0.9); c.setLineDash([3, 3]); c.lineWidth = 1.2; c.strokeRect(fx + b + 2, fy + b + 2, fw - b * 2 - 4, fw - b * 2 - 4); c.setLineDash([]); }
+    c.strokeStyle = 'rgba(70,45,10,0.5)'; c.lineWidth = 1; c.strokeRect(fx + 0.5, fy + 0.5, fw - 1, fw - 1);
+    if (done) { const a = 0.3 + 0.3 * Math.sin(t * 3); c.strokeStyle = `rgba(255,236,170,${a})`; c.lineWidth = 3; c.strokeRect(fx - 2, fy - 2, fw + 4, fw + 4); }
+    c.restore();
+  }
+  function stencil(c, x, y, s, colour, bad) {
+    const cx = x + s / 2, cy = y + s / 2, r = s * 0.3;
+    c.save();
+    c.strokeStyle = bad ? '#c0392b' : rgba(col(colour), 0.95); c.lineWidth = Math.max(2, s * 0.05); c.setLineDash([s * 0.08, s * 0.06]);
+    c.beginPath(); c.arc(cx, cy, r, 0, TAU); c.stroke(); c.setLineDash([]);
+    c.fillStyle = rgba(col(colour), 0.22); c.beginPath(); c.arc(cx, cy, r * 0.8, 0, TAU); c.fill();
+    c.restore();
+  }
+  function bleach(c, x, y, s) {
+    const cx = x + s / 2, cy = y + s / 2, r = s * 0.2;
+    c.save();
+    c.fillStyle = 'rgba(255,255,255,0.9)'; c.strokeStyle = 'rgba(90,120,150,0.6)'; c.lineWidth = 1.2;
+    for (const [dx, dy, rr] of [[-0.35, 0.2, 0.75], [0.4, 0.3, 0.55], [0, -0.35, 0.9]]) { c.beginPath(); c.arc(cx + dx * r * 1.6, cy + dy * r * 1.6, r * rr, 0, TAU); c.fill(); c.stroke(); }
+    c.fillStyle = 'rgba(160,200,230,0.6)'; c.beginPath(); c.arc(cx - r * 0.3, cy - r * 0.8, r * 0.25, 0, TAU); c.fill();
+    c.restore();
+  }
+  function current(c, x, y, s, dir, t) {
+    const cx = x + s / 2, cy = y + s / 2, a = { '^': -Math.PI / 2, '>': 0, v: Math.PI / 2, '<': Math.PI }[dir];
+    c.save(); c.translate(cx, cy); c.rotate(a);
+    c.strokeStyle = 'rgba(80,120,150,0.55)'; c.lineWidth = Math.max(1.5, s * 0.045); c.lineCap = 'round';
+    const off = ((t * 0.6) % 1) * s * 0.2;
+    for (let k = -1; k <= 1; k++) { const xx = k * s * 0.18 + off - s * 0.05; c.beginPath(); c.moveTo(xx - s * 0.08, -s * 0.14); c.lineTo(xx + s * 0.04, 0); c.lineTo(xx - s * 0.08, s * 0.14); c.stroke(); }
+    c.restore();
+  }
+  // patterns for colour-blind mode: dots red, slashes yellow, waves blue
+  function symbols(c, x, y, s, bits) {
+    c.save(); c.strokeStyle = 'rgba(30,30,30,0.6)'; c.fillStyle = 'rgba(30,30,30,0.6)'; c.lineWidth = 1.2;
+    const cx = x + s / 2, cy = y + s / 2, u = s * 0.09;
+    let k = 0; const n = (bits & 1) + ((bits >> 1) & 1) + ((bits >> 2) & 1);
+    const place = () => { const off = (k++ - (n - 1) / 2) * u * 2.6; return cx + off; };
+    if (bits & 1) { const px = place(); c.beginPath(); c.arc(px, cy, u * 0.55, 0, TAU); c.fill(); }
+    if (bits & 2) { const px = place(); c.beginPath(); c.moveTo(px - u * 0.6, cy + u * 0.8); c.lineTo(px + u * 0.6, cy - u * 0.8); c.stroke(); }
+    if (bits & 4) { const px = place(); c.beginPath(); c.moveTo(px - u * 0.8, cy); c.quadraticCurveTo(px - u * 0.4, cy - u * 0.7, px, cy); c.quadraticCurveTo(px + u * 0.4, cy + u * 0.7, px + u * 0.8, cy); c.stroke(); }
+    c.restore();
+  }
+
+  root.WLArt = { THEMES, setTheme, col, rgba, darker, hash, paper, grainPattern, stroke, bloomCell, well, drop, frame, stencil, bleach, current, symbols, get T() { return T; } };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+// WASHLINE audio: a soft kalimba note for every square you paint, a chord when a brush reaches its frame,
+// and a slow lo-fi piano loop with tape hiss. All synthesised.
+(function (root) {
+  'use strict';
+  let ctx = null, master = null, sfx = null, music = null, verb = null, noise = null;
+  let muted = false, musicOn = true, timer = null, nextT = 0, step = 0;
+  function init() {
+    if (ctx) return ctx;
+    const AC = root.AudioContext || root.webkitAudioContext; if (!AC) return null;
+    ctx = new AC();
+    const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 3;
+    master = ctx.createGain(); master.gain.value = muted ? 0 : 0.85; comp.connect(master).connect(ctx.destination);
+    sfx = ctx.createGain(); sfx.gain.value = 0.85; sfx.connect(comp);
+    music = ctx.createGain(); music.gain.value = musicOn ? 0.3 : 0; music.connect(comp);
+    const len = ctx.sampleRate * 2.4, ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.8); }
+    verb = ctx.createConvolver(); verb.buffer = ir; const vg = ctx.createGain(); vg.gain.value = 0.55; verb.connect(vg).connect(comp);
+    noise = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate); const nd = noise.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+    // tape hiss under the music
+    const h = ctx.createBufferSource(); h.buffer = noise; h.loop = true; const hf = ctx.createBiquadFilter(); hf.type = 'bandpass'; hf.frequency.value = 5200; hf.Q.value = 0.4; const hg = ctx.createGain(); hg.gain.value = 0.012; h.connect(hf).connect(hg).connect(music); h.start();
+    return ctx;
+  }
+  const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
+  // kalimba-ish: a sine with a fast-decaying metallic partial
+  function tine(m, t, peak, dest, wet) {
+    const f = mtof(m);
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+    const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 5.4;
+    const g = ctx.createGain(), g2 = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + 0.005); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.4);
+    g2.gain.setValueAtTime(0.0001, t); g2.gain.exponentialRampToValueAtTime(peak * 0.25, t + 0.003); g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+    o.connect(g); o2.connect(g2); g.connect(dest || sfx); g2.connect(dest || sfx);
+    const w = ctx.createGain(); w.gain.value = wet === undefined ? 0.4 : wet; g.connect(w).connect(verb);
+    o.start(t); o2.start(t); o.stop(t + 1.5); o2.stop(t + 0.2);
+  }
+  // soft electric piano for the music
+  function ep(m, t, peak, dur) {
+    const f = mtof(m);
+    const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = f;
+    const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = f * 2.001;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1400;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + 0.02); g.gain.exponentialRampToValueAtTime(peak * 0.4, t + 0.4); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    const g2 = ctx.createGain(); g2.gain.value = 0.25;
+    o.connect(lp); o2.connect(g2).connect(lp); lp.connect(g).connect(music);
+    const w = ctx.createGain(); w.gain.value = 0.5; g.connect(w).connect(verb);
+    o.start(t); o2.start(t); o.stop(t + dur + 0.1); o2.stop(t + dur + 0.1);
+  }
+  function swish(t, peak) {
+    const s = ctx.createBufferSource(); s.buffer = noise; const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.setValueAtTime(1800, t); f.frequency.exponentialRampToValueAtTime(700, t + 0.18); f.Q.value = 0.8;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + 0.03); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+    s.connect(f).connect(g).connect(sfx); s.start(t); s.stop(t + 0.25);
+  }
+  const ready = () => ctx && !muted;
+  const now = () => ctx.currentTime + 0.005;
+  const SCALE = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24, 26, 28];
+  const S = {
+    unlock() { init(); if (ctx && ctx.state === 'suspended') ctx.resume(); if (!timer && ctx) startMusic(); },
+    paint(i, colour) { if (!ready()) return; const t = now(); tine(64 + SCALE[Math.min(SCALE.length - 1, i % 13)] + (colour ? 0 : -12), t, 0.12); swish(t, 0.035); },
+    back() { if (!ready()) return; const t = now(); swish(t, 0.03); },
+    blocked() { if (!ready()) return; const t = now(); tine(52, t, 0.08, null, 0.1); tine(51, t + 0.06, 0.06, null, 0.1); },
+    pigment() { if (!ready()) return; const t = now(); tine(88, t, 0.08); tine(95, t + 0.05, 0.05); },
+    frame(n) { if (!ready()) return; const t = now(); [0, 4, 7, 11].forEach((k, i) => tine(64 + k + (n % 3) * 2, t + i * 0.05, 0.11)); },
+    win() { if (!ready()) return; const t = now(); [0, 4, 7, 12, 16, 19, 24, 28].forEach((k, i) => tine(60 + k, t + i * 0.08, 0.14)); [48, 55, 64].forEach((m) => ep(m, t, 0.06, 3)); },
+    ui() { if (!ready()) return; const t = now(); tine(81, t, 0.05, null, 0.2); },
+    page() { if (!ready()) return; const t = now(); swish(t, 0.05); },
+    setMuted(m) { muted = m; if (master) master.gain.setTargetAtTime(m ? 0 : 0.85, ctx.currentTime, 0.05); },
+    setMusic(on) { musicOn = on; if (music) music.gain.setTargetAtTime(on ? 0.3 : 0, ctx.currentTime, 0.3); },
+  };
+  // lo-fi loop: Fmaj7 - Em7 - Dm9 - Cmaj7, lazy swung melody notes
+  const CH = [[53, 57, 60, 64], [52, 55, 59, 62], [50, 53, 57, 64], [48, 52, 55, 59]];
+  function startMusic() { nextT = ctx.currentTime + 0.5; timer = setInterval(schedule, 150); }
+  function schedule() {
+    const beat = 0.75;
+    while (nextT < ctx.currentTime + 0.8) {
+      const bar = Math.floor(step / 4) % 4, pos = step % 4, ch = CH[bar], t = nextT;
+      if (pos === 0) { ep(ch[0] - 12, t, 0.07, beat * 4); ch.slice(1).forEach((m, i) => ep(m, t + i * 0.03, 0.045, beat * 3.6)); }
+      if (pos === 2 && Math.random() < 0.6) ep(ch[1 + Math.floor(Math.random() * 3)] + 12, t + beat * 0.15, 0.04, beat * 1.5);
+      if (Math.random() < 0.18) tine(ch[Math.floor(Math.random() * 4)] + 24, t + beat * 0.5, 0.03, music, 0.7);
+      step++; nextT += beat;
+    }
+  }
+  root.WLA = S;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+// WASHLINE UI: drawing brushes, the board, the finished painting, sketchbooks, daily painting, gallery, saving.
+(function () {
+  'use strict';
+  const WL = window.WL, D = window.WLL, A = window.WLArt, S = window.WLA;
+  const DEMO = !!window.WL_DEMO, DEMO_CH = 1, UNLOCK = 15;
+  const SAVE = DEMO ? 'washline-demo-v1' : 'washline-v1';
+  const FULL_URL = 'https://kqmigqkqri.itch.io/washline';
+  const PROFILE_URL = 'https://kqmigqkqri.itch.io/';
+  const $ = (id) => document.getElementById(id);
+  const LW = 1280, LH = 720;
+  if (DEMO) document.body.classList.add('demo');
+  document.querySelectorAll('.fullLink').forEach((a) => { a.href = FULL_URL; });
+  document.querySelectorAll('.profileLink').forEach((a) => { a.href = PROFILE_URL; });
+  // The demo build ships only the first sketchbook's puzzles. The other chapters are stubs: { id, name, n } with no levels.
+  const chN = (ci) => D.chapters[ci].n || D.chapters[ci].levels.length;
+  const TOTAL = D.chapters.reduce((a, ch) => a + (ch.n || ch.levels.length), 0); // 150 in both builds
+  const SHOWN = DEMO ? chN(0) : TOTAL; // paintings that can be played in this build
+
+  // titles for the paintings: two short word lists, the same every time
+  const ADJ = ['Quiet', 'Morning', 'Harbour', 'Lemon', 'Late', 'Small', 'Blue', 'Garden', 'Rainy', 'Golden', 'Winter', 'Low', 'Salt', 'Willow', 'Paper', 'Soft', 'Copper', 'Kitchen', 'Orchard', 'Tidal', 'Hazy', 'Second', 'Plum', 'River', 'Evening'];
+  const NOUN = ['Study', 'Window', 'Field', 'Pier', 'Kite', 'Lantern', 'Tide', 'Hill', 'Boats', 'Orchard', 'Path', 'Bloom', 'Sails', 'Meadow', 'Shore', 'Rooftops', 'Teacup', 'Weather', 'Bridge', 'Gate', 'Lighthouse', 'Market', 'Reeds', 'Clouds', 'Steps'];
+  const titleOf = (ci, li) => `${ADJ[(ci * 7 + li * 3) % ADJ.length]} ${NOUN[(ci * 11 + li * 5 + ci) % NOUN.length]}`;
+  const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI'];
+
+  // ── Save ────────────────────────────────────────────────────────
+  let save = { done: {}, pics: {}, daily: {}, theme: 'watercolour', sym: false, snd: 0, last: null, seenHow: false, hints: 0 };
+  try { const s = JSON.parse(localStorage.getItem(SAVE) || 'null'); if (s) save = Object.assign(save, s); } catch (e) { /* none */ }
+  const persist = () => { try { localStorage.setItem(SAVE, JSON.stringify(save)); } catch (e) { /* blocked */ } };
+  A.setTheme(save.theme);
+  const keyOf = (ci, li) => ci + ':' + li;
+  const solvedIn = (ci) => { let n = 0; for (let li = 0; li < chN(ci); li++) if (save.done[keyOf(ci, li)]) n++; return n; };
+  const totalSolved = () => Object.keys(save.done).filter((k) => !k.startsWith('d')).length;
+  const chapterOpen = (ci) => (DEMO ? ci < DEMO_CH : ci === 0 || solvedIn(ci - 1) >= UNLOCK);
+
+  // ── Canvas fit ──────────────────────────────────────────────────
+  const wrap = $('wrap'), cv = $('cv'), ctx = cv.getContext('2d');
+  let k = 1, dpr = 1;
+  function fit() {
+    k = Math.min(innerWidth / LW, innerHeight / LH);
+    wrap.style.transform = `scale(${k})`;
+    wrap.style.left = Math.round((innerWidth - LW * k) / 2) + 'px'; wrap.style.top = Math.round((innerHeight - LH * k) / 2) + 'px';
+    dpr = Math.min(2.5, (window.devicePixelRatio || 1) * k);
+    cv.width = Math.round(LW * dpr); cv.height = Math.round(LH * dpr);
+    document.body.style.background = A.T.paper;
+  }
+  addEventListener('resize', fit);
+
+  // ── Level state ─────────────────────────────────────────────────
+  let P = null, cur = null, paths = {}, owner = null, drawing = null, undo = [], won = null, solution = null, shake = [];
+  const T0 = performance.now(), now = () => (performance.now() - T0) / 1000;
+  let geo = { x: 0, y: 0, cs: 60 };
+  function load(ci, li, daily) {
+    const rows = daily !== undefined ? D.daily[daily] : D.chapters[ci].levels[li];
+    if (!rows) { openChapters(0); return; } // a saved position that this build does not have
+    P = WL.parse({ rows }); cur = { ci, li, daily, rows };
+    paths = {}; owner = new Int32Array(P.cells.length).fill(-1); drawing = null; undo = []; won = null; solution = null; shake = [];
+    P.cells.forEach((c, i) => { if (c.k === 'W') { paths[i] = [i]; owner[i] = i; } });
+    const cs = Math.floor(Math.min(86, 1040 / P.w, 540 / P.h));
+    geo = { cs, x: Math.round((LW - cs * P.w) / 2), y: Math.round(86 + (560 - cs * P.h) / 2) };
+    if (daily === undefined) { save.last = [ci, li]; persist(); }
+    $('lvTitle').textContent = daily !== undefined ? 'Daily painting' : titleOf(ci, li);
+    $('lvSub').textContent = daily !== undefined ? todayLabel() : `${D.chapters[ci].name} · ${ROMAN[ci]}.${li + 1}`;
+    hideAll(); $('hud').classList.add('on'); $('progress').classList.add('on');
+    S.page(); updateProgress();
+  }
+  // colour after each square of a brush's route
+  function coloursOf(path) { const out = []; let c = P.cells[path[0]].v; out.push(c); for (let t = 1; t < path.length; t++) { const cell = P.cells[path[t]]; if (cell.k !== 'F') c = WL.mixAt(cell, c); out.push(c); } return out; }
+  const headColour = (path) => { const cs = coloursOf(path); return cs[cs.length - 1]; };
+  function setPath(w, p) { for (const i of paths[w]) if (owner[i] === w) owner[i] = -1; paths[w] = p; for (const i of p) owner[i] = w; }
+  function snapshot() { undo.push(JSON.stringify(paths)); if (undo.length > 100) undo.shift(); }
+  function restore(s) { const ps = JSON.parse(s); owner.fill(-1); paths = {}; for (const w in ps) { paths[w] = ps[w]; for (const i of ps[w]) owner[i] = +w; } }
+  const cellAt = (x, y) => { const cx = Math.floor((x - geo.x) / geo.cs), cy = Math.floor((y - geo.y) / geo.cs); return cx >= 0 && cy >= 0 && cx < P.w && cy < P.h ? cy * P.w + cx : -1; };
+  const isEnd = (p) => P.cells[p[p.length - 1]].k === 'F';
+
+  function startAt(i) {
+    if (won) return;
+    const c = P.cells[i];
+    if (c.k === 'W') { snapshot(); setPath(i, [i]); drawing = i; S.paint(0, c.v); return; }
+    const w = owner[i]; if (w < 0) return;
+    snapshot();
+    const p = paths[w], at = p.indexOf(i);
+    setPath(w, p.slice(0, c.k === 'F' ? at : at + 1)); drawing = w;
+  }
+  function blocked(i) { S.blocked(); shake.push({ i, t0: now() }); }
+  // extend the active brush into square i (one step)
+  function stepTo(i) {
+    const p = paths[drawing], head = p[p.length - 1];
+    if (i === head) return;
+    const hx = head % P.w, hy = (head / P.w) | 0, x = i % P.w, y = (i / P.w) | 0;
+    if (Math.abs(hx - x) + Math.abs(hy - y) !== 1) return;
+    // backing up
+    if (p.length > 1 && p[p.length - 2] === i) { setPath(drawing, p.slice(0, -1)); S.back(); return; }
+    if (isEnd(p)) return;
+    const own = p.indexOf(i); if (own >= 0) { setPath(drawing, p.slice(0, own + 1)); S.back(); return; }
+    const c = P.cells[i], hc = P.cells[head];
+    if (c.k === '#' || c.k === 'W') return blocked(i);
+    const dir = WL.DIRS.find((d) => d[0] === x - hx && d[1] === y - hy)[2];
+    if (hc.k === 'A' && hc.v !== dir) return blocked(head);
+    if (c.k === 'A' && c.v !== dir) return blocked(i);
+    const col = headColour(p);
+    if (c.k === 'F' && c.v !== col) return blocked(i);
+    if (c.k === 'S' && c.v !== col) return blocked(i);
+    // another brush is in the way: cut it back
+    if (owner[i] >= 0 && owner[i] !== drawing) { const o = owner[i], op = paths[o]; setPath(o, op.slice(0, op.indexOf(i))); }
+    setPath(drawing, p.concat([i]));
+    if (c.k === 'F') { S.frame(Object.keys(paths).filter((w) => isEnd(paths[w])).length); }
+    else { S.paint(p.length, WL.mixAt(c, col)); if (c.k === 'P' || c.k === 'K') setTimeout(() => S.pigment(), 40); }
+    afterChange();
+  }
+  function afterChange() {
+    updateProgress();
+    const r = WL.check(P, Object.values(paths));
+    if (r.ok) { drawing = null; win(); }
+  }
+  function updateProgress() {
+    if (!P) return;
+    const r = WL.check(P, Object.values(paths));
+    const frames = P.cells.filter((c) => c.k === 'F').length, done = r.done.filter(Boolean).length;
+    $('progress').textContent = `${r.painted} of ${r.total} squares painted · ${done} of ${frames} frames`;
+  }
+
+  // ── Input ───────────────────────────────────────────────────────
+  const toL = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * LW, (e.clientY - r.top) / r.height * LH]; };
+  let lastCell = -1;
+  cv.addEventListener('pointerdown', (e) => {
+    S.unlock(); if (!P || won) return;
+    cv.setPointerCapture(e.pointerId);
+    const [x, y] = toL(e), i = cellAt(x, y); if (i < 0) return;
+    startAt(i); lastCell = i;
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (drawing === null || !P) return;
+    const [x, y] = toL(e), i = cellAt(x, y); if (i < 0 || i === lastCell) return;
+    // walk one square at a time towards the pointer so fast drags still work
+    let guard = 0;
+    while (guard++ < 20) {
+      const p = paths[drawing], head = p[p.length - 1];
+      if (head === i) break;
+      const hx = head % P.w, hy = (head / P.w) | 0, tx = i % P.w, ty = (i / P.w) | 0;
+      const dx = Math.sign(tx - hx), dy = Math.sign(ty - hy);
+      const nxt = Math.abs(tx - hx) >= Math.abs(ty - hy) ? head + dx : head + dy * P.w;
+      const before = p.length; stepTo(nxt);
+      if (drawing === null || paths[drawing].length === before && paths[drawing][paths[drawing].length - 1] === head) break;
+    }
+    lastCell = i;
+  });
+  addEventListener('pointerup', () => { drawing = null; lastCell = -1; });
+  addEventListener('keydown', (e) => {
+    if (!P || $('hud').className.indexOf('on') < 0) return;
+    if (e.key === 'z' || e.key === 'Z' || ((e.ctrlKey || e.metaKey) && e.key === 'z')) $('hUndo').onclick();
+    else if (e.key === 'r' || e.key === 'R') $('hReset').onclick();
+    else if (e.key === 'h' || e.key === 'H') $('hHint').onclick();
+    else if (e.key === 'Escape') openChapters();
+  });
+  $('hUndo').onclick = () => { if (won || !undo.length) return; restore(undo.pop()); S.back(); updateProgress(); };
+  $('hReset').onclick = () => { if (won) return; snapshot(); for (const w in paths) setPath(+w, [+w]); S.page(); updateProgress(); };
+  $('hHint').onclick = () => {
+    if (won || !P) return; S.ui();
+    if (!solution) { const r = WL.solve(P, 1, 3000000); solution = r.first ? WL.splitPaths(r.first) : []; }
+    // finish the first brush that isn't already right
+    for (const sp of solution) {
+      const w = sp[0], p = paths[w];
+      const right = p.length === sp.length && p.every((v, t) => v === sp[t]);
+      if (right) continue;
+      snapshot();
+      for (const i of sp) if (owner[i] >= 0 && owner[i] !== w) { const o = owner[i]; setPath(o, paths[o].slice(0, paths[o].indexOf(i))); }
+      setPath(w, sp.slice()); save.hints++; persist();
+      S.frame(1); afterChange(); return;
+    }
+  };
+
+  // ── Drawing the board ───────────────────────────────────────────
+  function centre(i) { return { x: geo.x + (i % P.w + 0.5) * geo.cs, y: geo.y + (((i / P.w) | 0) + 0.5) * geo.cs }; }
+  function drawBoard(t) {
+    const c = ctx, cs = geo.cs;
+    // pencil grid
+    c.save(); c.strokeStyle = A.T.grid; c.lineWidth = 1;
+    for (let i = 0; i < P.cells.length; i++) {
+      const cell = P.cells[i], x = geo.x + cell.x * cs, y = geo.y + cell.y * cs;
+      if (cell.k === '#') { c.save(); c.beginPath(); c.rect(x + 3, y + 3, cs - 6, cs - 6); c.clip(); c.strokeStyle = A.T.grid; for (let d = -cs; d < cs * 2; d += 7) { c.beginPath(); c.moveTo(x + d, y); c.lineTo(x + d - cs, y + cs); c.stroke(); } c.restore(); continue; }
+      c.strokeRect(x + 2.5, y + 2.5, cs - 5, cs - 5);
+    }
+    c.restore();
+    // static marks under the paint
+    for (let i = 0; i < P.cells.length; i++) {
+      const cell = P.cells[i], x = geo.x + cell.x * cs, y = geo.y + cell.y * cs;
+      if (cell.k === 'A') A.current(c, x, y, cs, cell.v, t);
+      if (cell.k === 'S') A.stencil(c, x, y, cs, cell.v, shake.some((s) => s.i === i && t - s.t0 < 0.5));
+    }
+    // paint: blend with the paper
+    c.save(); c.globalCompositeOperation = A.T.paper === '#2b2a33' ? 'source-over' : 'multiply';
+
+    for (const w in paths) {
+      const p = paths[w]; if (p.length < 2) continue;
+      const cols = coloursOf(p);
+      const pts = p.map((i, n) => Object.assign(centre(i), { c: cols[n] }));
+      if (isEnd(p)) { pts[pts.length - 1].c = pts[pts.length - 2].c; }
+      const grow = won ? Math.min(1, (t - won.t0) * 1.2) : 0;
+      A.stroke(c, pts, cs * (0.56 + 0.48 * grow * grow * (3 - 2 * grow)), 1);
+    }
+    c.restore();
+    // pieces on top
+    for (let i = 0; i < P.cells.length; i++) {
+      const cell = P.cells[i], x = geo.x + cell.x * cs, y = geo.y + cell.y * cs;
+      const sh = shake.find((s) => s.i === i && t - s.t0 < 0.4), dx = sh ? Math.sin((t - sh.t0) * 60) * 3 : 0;
+      if (cell.k === 'P') { c.save(); c.globalAlpha = owner[i] >= 0 ? 0.55 : 1; A.drop(c, x, y, cs, cell.v); c.restore(); if (save.sym) A.symbols(c, x, y + cs * 0.28, cs, cell.v); }
+      if (cell.k === 'K') { c.save(); c.globalAlpha = owner[i] >= 0 ? 0.6 : 1; A.bleach(c, x, y, cs); c.restore(); }
+      if (cell.k === 'W') { A.well(c, x, y, cs, cell.v, t, drawing === i); if (save.sym) A.symbols(c, x, y + cs * 0.32, cs, cell.v); }
+      if (cell.k === 'F') { A.frame(c, x + dx, y, cs, cell.v, owner[i] >= 0, t); if (save.sym) A.symbols(c, x + dx, y, cs, cell.v); }
+      if (cell.k === 'S' && save.sym) A.symbols(c, x, y, cs, cell.v);
+    }
+    // brush tip on the active head
+    if (drawing !== null && paths[drawing]) {
+      const p = paths[drawing], h = centre(p[p.length - 1]), colr = headColour(p);
+      c.save(); c.fillStyle = A.rgba(A.col(colr), 0.9); c.strokeStyle = 'rgba(60,50,40,0.5)'; c.lineWidth = 1.5;
+      c.beginPath(); c.arc(h.x, h.y, cs * 0.16, 0, Math.PI * 2); c.fill(); c.stroke(); c.restore();
+    }
+  }
+
+  // ── Winning ─────────────────────────────────────────────────────
+  function paintingOf() {
+    // colour per square (-1 for walls), from the finished routes
+    const out = new Array(P.cells.length).fill(-1), routes = [];
+    for (const w in paths) { const p = paths[w], cols = coloursOf(p); p.forEach((i, n) => { out[i] = P.cells[i].k === 'F' ? cols[n - 1] : cols[n]; }); routes.push(p.map((i, n) => [i, P.cells[i].k === 'F' ? cols[n - 1] : cols[n]])); }
+    return { w: P.w, h: P.h, c: out, r: routes };
+  }
+  function win() {
+    const order = [];
+    for (const w in paths) { const p = paths[w], cols = coloursOf(p); p.forEach((i, n) => order.push({ i, x: i % P.w, y: (i / P.w) | 0, c: P.cells[i].k === 'F' ? cols[n - 1] : cols[n] })); }
+    won = { t0: now(), order };
+    S.win();
+    const pic = paintingOf();
+    if (cur.daily !== undefined) { save.daily[todayKey()] = 1; save.pics['d' + todayKey()] = pic; }
+    else { save.done[keyOf(cur.ci, cur.li)] = 1; save.pics[keyOf(cur.ci, cur.li)] = pic; }
+    persist();
+    setTimeout(() => showWin(pic), 1900);
+  }
+  function drawPic(canvas, pic, opts) {
+    const c = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
+    c.setTransform(1, 0, 0, 1, 0, 0); c.fillStyle = '#fbf6ec'; c.fillRect(0, 0, W, H);
+    const cs = Math.min(W / pic.w, H / pic.h), ox = (W - cs * pic.w) / 2, oy = (H - cs * pic.h) / 2;
+    c.globalCompositeOperation = 'multiply';
+    if (pic.r) for (const route of pic.r) A.stroke(c, route.map(([i, col]) => ({ x: ox + (i % pic.w + 0.5) * cs, y: oy + (((i / pic.w) | 0) + 0.5) * cs, c: col })), cs * 1.04, 1);
+    else pic.c.forEach((col, i) => { if (col < 0) return; A.bloomCell(c, ox + (i % pic.w) * cs, oy + ((i / pic.w) | 0) * cs, cs, col, 1, i); });
+    c.globalCompositeOperation = 'source-over';
+    void opts;
+  }
+  function showWin(pic) {
+    if (!won) return;
+    $('winTitle').textContent = cur.daily !== undefined ? 'TODAY\'S PAINTING' : 'PAINTED';
+    $('winSub').textContent = cur.daily !== undefined ? `${todayLabel()} · daily paintings finished: ${Object.keys(save.daily).length}` : `"${titleOf(cur.ci, cur.li)}" · ${D.chapters[cur.ci].name} ${ROMAN[cur.ci]}.${cur.li + 1} · ${totalSolved()} of ${SHOWN} paintings`;
+    drawPic($('winCv'), pic);
+    const nxt = nextLevel();
+    $('wNext').style.display = cur.daily !== undefined ? 'none' : '';
+    $('wNext').textContent = nxt ? 'Next painting ›' : DEMO ? 'Finish the demo ›' : 'Sketchbooks';
+    // every painting in the game is hung: say thanks and point to the profile
+    $('winFollow').style.display = cur.daily === undefined && !DEMO && totalSolved() >= TOTAL ? 'block' : 'none';
+    $('win').classList.add('on');
+  }
+  function nextLevel() {
+    if (!cur || cur.daily !== undefined) return null;
+    for (let ci = cur.ci; ci < D.chapters.length; ci++) {
+      if (!chapterOpen(ci)) return null;
+      const n = D.chapters[ci].levels.length;
+      for (let li = ci === cur.ci ? cur.li + 1 : 0; li < n; li++) if (!save.done[keyOf(ci, li)]) return [ci, li];
+    }
+    for (let ci = 0; ci < D.chapters.length; ci++) if (chapterOpen(ci)) for (let li = 0; li < D.chapters[ci].levels.length; li++) if (!save.done[keyOf(ci, li)]) return [ci, li];
+    return null;
+  }
+  $('wNext').onclick = () => {
+    S.ui(); const n = nextLevel();
+    if (DEMO && cur.ci === 0 && solvedIn(0) >= chN(0)) { showDemoEnd(false); return; }
+    if (n) load(n[0], n[1]); else openChapters();
+  };
+  $('wLevels').onclick = () => { S.ui(); openChapters(); };
+
+  // ── Daily ───────────────────────────────────────────────────────
+  const dayIndex = () => Math.floor((Date.now() - Date.UTC(2026, 0, 1)) / 86400000);
+  const todayKey = () => String(dayIndex());
+  const todayLabel = () => new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long' });
+  // the demo has no daily painting (no puzzle data for it either): the button shows what the full game adds
+  function showDemoEnd(daily) {
+    hideAll();
+    $('deTitle').textContent = daily ? 'DAILY PAINTING' : 'END OF THE FREE DEMO';
+    $('deText').textContent = daily
+      ? 'A daily painting, the same for everyone, from a rotation of 120, is part of the full game - along with five more sketchbooks and 150 paintings in all.'
+      : "The first sketchbook is yours. The full game has five more - stencils, mixing, clear water, currents and the gallery's big canvases - 150 paintings in all, plus a daily painting every day from a rotation of 120.";
+    $('demoEnd').classList.add('on');
+  }
+  function openDaily() {
+    if (DEMO) { showDemoEnd(true); return; }
+    load(null, null, ((dayIndex() % D.daily.length) + D.daily.length) % D.daily.length);
+  }
+
+  // ── Menus ───────────────────────────────────────────────────────
+  function hideAll() { document.querySelectorAll('.ov').forEach((o) => o.classList.remove('on')); }
+  let tabCh = 0;
+  function blankPic(rows) { const P2 = WL.parse({ rows }); return P2; }
+  function thumb(canvas, ci, li) {
+    const pic = save.pics[keyOf(ci, li)];
+    if (pic) { drawPic(canvas, pic); return; }
+    // unsolved: a pencil sketch of the board with its wells and frames
+    const P2 = blankPic(D.chapters[ci].levels[li]), c = canvas.getContext('2d'), W = canvas.width;
+    c.fillStyle = A.T.paper; c.fillRect(0, 0, W, W);
+    const cs = (W - 20) / Math.max(P2.w, P2.h), ox = (W - cs * P2.w) / 2, oy = (W - cs * P2.h) / 2;
+    P2.cells.forEach((cell) => {
+      const x = ox + cell.x * cs, y = oy + cell.y * cs;
+      c.strokeStyle = A.T.grid; c.strokeRect(x + 1, y + 1, cs - 2, cs - 2);
+      if (cell.k === 'W' || cell.k === 'F') { c.fillStyle = A.rgba(A.col(cell.v), cell.k === 'W' ? 0.85 : 0.35); c.beginPath(); if (cell.k === 'W') c.arc(x + cs / 2, y + cs / 2, cs * 0.3, 0, 6.3); else c.rect(x + cs * 0.22, y + cs * 0.22, cs * 0.56, cs * 0.56); c.fill(); }
+    });
+  }
+  // a locked demo sketchbook has no puzzle data: show empty pencil squares
+  function blankThumb(canvas) {
+    const c = canvas.getContext('2d'), W = canvas.width; c.fillStyle = A.T.paper; c.fillRect(0, 0, W, W);
+    c.strokeStyle = A.T.grid; c.lineWidth = 2; for (let i = 1; i < 4; i++) { c.beginPath(); c.moveTo(20 + i * (W - 40) / 4, 20); c.lineTo(20 + i * (W - 40) / 4, W - 20); c.moveTo(20, 20 + i * (W - 40) / 4); c.lineTo(W - 20, 20 + i * (W - 40) / 4); c.stroke(); }
+    c.strokeRect(20, 20, W - 40, W - 40);
+  }
+  function openChapters(ci) {
+    S.page(); hideAll(); $('hud').classList.remove('on'); $('progress').classList.remove('on');
+    if (ci !== undefined) tabCh = ci; else if (cur && cur.ci !== null && cur.ci !== undefined) tabCh = cur.ci;
+    const tabs = $('tabs'); tabs.innerHTML = '';
+    D.chapters.forEach((ch, i) => {
+      const b = document.createElement('button'); b.textContent = `${ROMAN[i]}. ${ch.name} · ${solvedIn(i)}/${chN(i)}`;
+      if (i === tabCh) b.classList.add('on'); if (!chapterOpen(i)) b.textContent += ' 🔒';
+      b.onclick = () => { S.ui(); tabCh = i; openChapters(i); }; tabs.appendChild(b);
+    });
+    const grid = $('levels'); grid.innerHTML = '';
+    const open = chapterOpen(tabCh);
+    for (let li = 0; li < chN(tabCh); li++) {
+      const d = document.createElement('div'); d.className = 'lv' + (open ? '' : ' lock');
+      const c = document.createElement('canvas'); c.width = c.height = 220;
+      if (D.chapters[tabCh].levels[li]) thumb(c, tabCh, li); else blankThumb(c);
+      d.appendChild(c); const sp = document.createElement('span'); sp.textContent = li + 1; d.appendChild(sp);
+      d.title = titleOf(tabCh, li);
+      d.onclick = () => { if (open) load(tabCh, li); else S.blocked(); };
+      grid.appendChild(d);
+    }
+    $('chapNote').textContent = open ? `Every painting in an open sketchbook can be played in any order.` : DEMO ? 'This sketchbook is in the full game.' : `Finish ${UNLOCK} paintings in "${D.chapters[tabCh - 1].name}" to open this sketchbook.`;
+    $('chapSub').textContent = `${totalSolved()} of ${SHOWN} paintings`;
+    $('chap').classList.add('on');
+    if (DEMO && tabCh > 0) $('chapNote').innerHTML = 'This sketchbook is in the full game. <a class="fullLink" href="' + FULL_URL + '" target="_blank" rel="noopener">Get WASHLINE</a>';
+  }
+  $('cClose').onclick = () => { hideAll(); if (P && !won) { $('hud').classList.add('on'); $('progress').classList.add('on'); } else $('title').classList.add('on'); };
+  $('hMenu').onclick = () => openChapters();
+  function openGallery(ci) {
+    S.page(); hideAll();
+    const tabs = $('gTabs'); tabs.innerHTML = '';
+    const g = ci === undefined ? 0 : ci;
+    D.chapters.forEach((ch, i) => { if (DEMO && i >= 1) return; const b = document.createElement('button'); b.textContent = ch.name; if (i === g) b.classList.add('on'); b.onclick = () => openGallery(i); tabs.appendChild(b); });
+    if (!DEMO) { const dB = document.createElement('button'); dB.textContent = 'Daily'; if (g === -1) dB.classList.add('on'); dB.onclick = () => openGallery(-1); tabs.appendChild(dB); }
+    const gal = $('gal'); gal.innerHTML = '';
+    const keys = g === -1 ? Object.keys(save.pics).filter((x) => x[0] === 'd').sort() : Array.from({ length: chN(g) }, (_, li) => keyOf(g, li));
+    for (const key of keys) {
+      const d = document.createElement('div'); d.className = 'pic' + (save.pics[key] ? '' : ' empty');
+      if (save.pics[key]) { const c = document.createElement('canvas'); c.width = c.height = 200; drawPic(c, save.pics[key]); d.appendChild(c); }
+      gal.appendChild(d);
+    }
+    $('galSub').textContent = DEMO ? `${totalSolved()} of ${SHOWN} paintings hung` : `${totalSolved()} of ${TOTAL} paintings hung · ${Object.keys(save.daily).length} daily paintings`;
+    $('gallery').classList.add('on');
+  }
+  $('gClose').onclick = () => { hideAll(); $('title').classList.add('on'); P = null; };
+  $('cGallery').onclick = () => openGallery(tabCh);
+  $('tGallery').onclick = () => { S.unlock(); openGallery(0); };
+  $('tLevels').onclick = () => { S.unlock(); openChapters(0); };
+  $('tDaily').onclick = () => { S.unlock(); openDaily(); };
+  $('tPlay').onclick = () => {
+    S.unlock();
+    if (!save.seenHow) { save.seenHow = true; persist(); hideAll(); howPreview(); $('how').classList.add('on'); return; }
+    const n = save.last && !save.done[keyOf(save.last[0], save.last[1])] ? save.last : (cur = { ci: 0, li: -1 }, nextLevel()) || [0, 0];
+    load(n[0], n[1]);
+  };
+  $('tHow').onclick = () => { S.unlock(); hideAll(); howPreview(); $('how').classList.add('on'); };
+  $('howClose').onclick = () => { hideAll(); if (!P) { const n = save.last || [0, 0]; load(n[0], n[1]); } else { $('hud').classList.add('on'); $('progress').classList.add('on'); } };
+  $('deClose').onclick = () => openChapters(0);
+  function howPreview() {
+    const c = $('howCv').getContext('2d'); c.setTransform(2, 0, 0, 2, 0, 0); c.fillStyle = A.T.paper; c.fillRect(0, 0, 220, 220);
+    const cs = 52, ox = 6, oy = 32;
+    c.strokeStyle = A.T.grid; for (let x = 0; x < 4; x++) c.strokeRect(ox + x * cs + 2, oy + 2, cs - 4, cs - 4);
+    for (let x = 0; x < 4; x++) c.strokeRect(ox + x * cs + 2, oy + cs + 2, cs - 4, cs - 4);
+    c.save(); c.globalCompositeOperation = 'multiply';
+    A.stroke(c, [{ x: ox + 26, y: oy + 26, c: 2 }, { x: ox + 78, y: oy + 26, c: 6 }, { x: ox + 130, y: oy + 26, c: 6 }, { x: ox + 182, y: oy + 26, c: 6 }], cs * 0.56, 1);
+    c.restore();
+    A.well(c, ox, oy, cs, 2, 0, false); A.drop(c, ox + cs, oy, cs, 4); A.frame(c, ox + cs * 3, oy, cs, 6, true, 0);
+    A.well(c, ox, oy + cs, cs, 1, 0, false); A.frame(c, ox + cs * 3, oy + cs, cs, 3, false, 0); A.drop(c, ox + cs * 2, oy + cs, cs, 2);
+    c.fillStyle = A.T.ink; c.font = 'italic 12px Georgia'; c.fillText('yellow + blue = green', 8, 160); c.fillText('your turn: red + yellow = ?', 8, 180);
+  }
+  // settings
+  function openSettings() {
+    S.ui(); hideAll();
+    const st = $('sTheme'); st.innerHTML = '';
+    for (const id in A.THEMES) { const b = document.createElement('button'); b.textContent = A.THEMES[id].name; if (save.theme === id) b.classList.add('main'); b.onclick = () => { save.theme = id; A.setTheme(id); document.body.classList.toggle('dark', id === 'dusk'); fit(); persist(); openSettings(); }; st.appendChild(b); }
+    $('sSym').textContent = save.sym ? 'On' : 'Off';
+    $('sSnd').textContent = ['Music & sounds', 'Sounds only', 'Silent'][save.snd];
+    $('settings').classList.add('on');
+  }
+  $('hSet').onclick = openSettings;
+  $('sSym').onclick = () => { save.sym = !save.sym; persist(); openSettings(); };
+  $('sSnd').onclick = () => { save.snd = (save.snd + 1) % 3; applySnd(); persist(); openSettings(); };
+  $('sClose').onclick = () => { hideAll(); if (P && !won) { $('hud').classList.add('on'); $('progress').classList.add('on'); } else $('title').classList.add('on'); };
+  function applySnd() { S.setMuted(save.snd === 2); S.setMusic(save.snd === 0); }
+  applySnd(); document.body.classList.toggle('dark', save.theme === 'dusk');
+
+  // ── Title backdrop: a painting that paints itself ───────────────
+  let demoP = null, demoSol = null, demoT = 0, demoIdx = 0;
+  function titleBackdrop(t) {
+    if (!demoP || t - demoT > 9) {
+      // full game: boards from the mixing, clear water and currents sketchbooks; the demo only has the first sketchbook (its larger boards)
+      const ci = demoIdx % 3, rowsOf = DEMO ? D.chapters[0].levels[10 + (demoIdx * 7 + 3) % 15] : D.chapters[ci + 2].levels[(demoIdx * 7 + 3) % 25]; demoIdx++;
+      demoP = WL.parse({ rows: rowsOf }); demoT = t;
+      const r = WL.solve(demoP, 1, 400000); demoSol = r.first ? WL.splitPaths(r.first) : [];
+    }
+    const cs = Math.floor(Math.min(110, 1200 / demoP.w, 700 / demoP.h)), ox = (LW - cs * demoP.w) / 2, oy = (LH - cs * demoP.h) / 2;
+    const c = ctx, prog = (t - demoT) * 9;
+    c.save(); c.globalAlpha = 0.4;
+    c.strokeStyle = A.T.grid; demoP.cells.forEach((cell) => { if (cell.k !== '#') c.strokeRect(ox + cell.x * cs + 3, oy + cell.y * cs + 3, cs - 6, cs - 6); });
+    c.globalCompositeOperation = 'multiply';
+    let n = 0;
+    for (const p of demoSol) {
+      let col = demoP.cells[p[0]].v; const pts = [];
+      for (let q = 0; q < p.length; q++) { const cell = demoP.cells[p[q]]; if (cell.k !== 'F') col = WL.mixAt(cell, col); if (n++ > prog) break; pts.push({ x: ox + (cell.x + 0.5) * cs, y: oy + (cell.y + 0.5) * cs, c: col }); }
+      A.stroke(c, pts, cs * 0.56, 1);
+    }
+    c.restore();
+  }
+
+  function frame() {
+    const t = now();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(A.paper(LW, LH, dpr), 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if ($('title').classList.contains('on')) titleBackdrop(t);
+    else if (P) drawBoard(t);
+    requestAnimationFrame(frame);
+  }
+  fit(); requestAnimationFrame(frame);
+  if (!save.last) $('tPlay').textContent = 'Start painting';
+
+  window.WLUI = {
+    load, openChapters, openGallery, openDaily, openSettings, get P() { return P; }, get paths() { return paths; }, get save() { return save; }, persist, get geo() { return geo; },
+    solveNow() { const r = WL.solve(P, 1, 3000000); const sol = WL.splitPaths(r.first); for (const sp of sol) setPath(sp[0], sp.slice()); afterChange(); },
+    partial(frac) { const r = WL.solve(P, 1, 3000000); const sol = WL.splitPaths(r.first); sol.forEach((sp, n) => { if (n / sol.length < frac) setPath(sp[0], sp.slice()); else setPath(sp[0], sp.slice(0, Math.max(1, Math.floor(sp.length / 2)))); }); updateProgress(); },
+    get won() { return won; }, setDrawing(w) { drawing = w; },
+  };
+})();
+
+</script>
+</body>
+</html>
