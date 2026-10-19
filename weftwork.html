@@ -1,0 +1,1208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WEFTWORK (Demo)</title>
+<style>
+:root { --ink:#3a2a1c; --paper:#f3e8cf; --paper2:#e8d9b6; --brass:#c9973f; --brass2:#8a6020; --cream:#fff6e2; --red:#a8322a; --green:#4f7a3a; }
+* { box-sizing:border-box; }
+html, body { margin:0; height:100%; overflow:hidden; background:#1c120a; font-family:Georgia, "Times New Roman", serif; color:var(--ink); user-select:none; -webkit-user-select:none; }
+#wrap { position:absolute; left:0; top:0; width:1280px; height:720px; transform-origin:0 0; overflow:hidden; }
+#cv { position:absolute; left:0; top:0; width:1280px; height:720px; }
+.ov { position:absolute; inset:0; display:none; align-items:center; justify-content:center; background:rgba(28,16,6,0.62); }
+.ov.on { display:flex; }
+.sheet { background:linear-gradient(#f6ecd4, #ead9b2); border-radius:6px; padding:22px 28px; box-shadow:0 18px 50px rgba(0,0,0,0.6), inset 0 0 0 1px #fff8, inset 0 0 60px rgba(140,90,40,0.18); position:relative; max-height:680px; overflow:auto; }
+.sheet h2 { margin:0 0 4px; font-size:28px; letter-spacing:.08em; font-weight:normal; }
+.sheet .sub { font-style:italic; color:#6a5238; margin-bottom:12px; }
+button { font-family:inherit; font-size:16px; color:var(--cream); background:linear-gradient(#a0703a, #6e4520); border:1px solid #3e260f; border-radius:6px; padding:8px 18px; cursor:pointer; box-shadow:inset 0 1px 0 #ffffff44, 0 3px 0 #3e260f; text-shadow:0 1px 0 #0006; }
+button:hover:not(:disabled) { filter:brightness(1.12); }
+button:active:not(:disabled) { transform:translateY(2px); box-shadow:inset 0 1px 0 #ffffff44, 0 1px 0 #3e260f; }
+button:disabled { opacity:.45; cursor:default; }
+button.brass { background:linear-gradient(#e2b45a, #a8762a); color:#2a1a08; text-shadow:0 1px 0 #fff6; border-color:#5a3a10; }
+button.ghost { background:none; color:var(--ink); border:1px solid #8a6a40; box-shadow:none; text-shadow:none; }
+#corner { position:absolute; right:14px; top:10px; display:none; gap:6px; }
+#corner button { font-size:13px; padding:5px 11px; }
+/* title */
+#title { background:radial-gradient(ellipse 50% 46% at 50% 44%, rgba(28,16,6,0.74), rgba(28,16,6,0.25) 70%, rgba(28,16,6,0.05)); flex-direction:column; gap:14px; }
+.logo { font-size:96px; letter-spacing:.14em; color:#fff1d2; text-shadow:0 4px 0 #6e4520, 0 10px 30px #000c; font-weight:bold; margin-left:.14em; }
+.tagline { font-style:italic; font-size:21px; color:#f6e2bc; text-shadow:0 2px 6px #000; margin:-6px 0 8px; }
+.demoTag { display:none; letter-spacing:.3em; color:#ffd77a; font-size:14px; } body.demo .demoTag { display:block; }
+.trow { display:flex; gap:10px; }
+/* book */
+#bookSheet { width:1180px; height:660px; display:flex; flex-direction:column; }
+#bookBody { flex:1; overflow:auto; padding-right:8px; }
+.chap { margin:10px 0 16px; }
+.chap h3 { margin:0; font-size:19px; font-weight:normal; letter-spacing:.06em; display:flex; align-items:center; gap:10px; }
+.chap h3 canvas { width:34px; height:34px; }
+.chap .bl { font-style:italic; color:#6a5238; font-size:14px; margin:2px 0 8px 44px; }
+.tiles { display:flex; flex-wrap:wrap; gap:10px; margin-left:44px; }
+.tile { width:118px; background:#fbf3df; border:1px solid #c8ab78; border-radius:5px; padding:6px; cursor:pointer; text-align:center; box-shadow:0 2px 0 #c8ab78; position:relative; }
+.tile:hover { transform:translateY(-2px); box-shadow:0 4px 0 #b8955a; }
+.tile canvas { width:104px; height:72px; display:block; margin:0 auto 4px; border-radius:3px; }
+.tile .nm { font-size:12.5px; line-height:1.15; height:30px; overflow:hidden; }
+.tile .st { color:#b8862a; font-size:14px; letter-spacing:2px; }
+.tile.lock { opacity:.45; cursor:default; } .tile.lock:hover { transform:none; }
+.tile .no { position:absolute; left:6px; top:4px; font-size:11px; color:#fff; text-shadow:0 1px 2px #000; }
+.tile.special { background:#f2e2c0; border-style:dashed; }
+/* done */
+#doneSheet { width:520px; text-align:center; }
+#doneStars { font-size:44px; color:#c99230; letter-spacing:8px; margin:6px 0; }
+#doneStars span { opacity:.2; transition:opacity .3s, transform .3s; display:inline-block; } #doneStars span.on { opacity:1; transform:scale(1.15); }
+.dl { display:grid; grid-template-columns:1fr auto; gap:4px 18px; text-align:left; width:330px; margin:10px auto; font-size:15px; }
+.dl .ok { color:var(--green); } .dl .no { color:#9a6a40; }
+/* quilt */
+#quiltSheet { width:900px; text-align:center; }
+#quiltCv { width:820px; height:520px; display:block; margin:8px auto; }
+/* help */
+.help { width:760px; font-size:16px; line-height:1.45; }
+.help b { color:#7a3a1a; }
+.follow { font-size:14px; color:#6a5238; margin:14px 0 0; } .follow a { color:#7a3a1a; font-weight:bold; }
+.help canvas { float:right; margin:0 0 8px 16px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="cv"></canvas>
+  <div id="corner"><button id="bMenu">≡ Orders</button><button id="bSnd">♪ Sound</button></div>
+
+  <div class="ov on" id="title">
+    <div class="logo">WEFTWORK</div>
+    <div class="demoTag">FREE DEMO</div>
+    <div class="tagline">A puzzle game about reading cloth - and weaving it back.</div>
+    <div class="trow"><button class="brass" id="tContinue">Continue</button><button id="tOrders">Orders</button><button id="tQuilt">Quilt</button><button id="tHelp">How to weave</button></div>
+  </div>
+
+  <div class="ov" id="book"><div class="sheet" id="bookSheet">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h2>THE ORDER BOOK</h2><div class="sub" id="bookSub"></div></div><div style="display:flex;gap:8px"><button class="ghost" id="bkQuilt">Quilt</button><button class="ghost" id="bkHelp">How to weave</button><button id="bkClose">Close</button></div></div>
+    <div id="bookBody"></div>
+  </div></div>
+
+  <div class="ov" id="done"><div class="sheet" id="doneSheet">
+    <h2 id="doneTitle">ORDER DELIVERED</h2>
+    <div class="sub" id="doneSub"></div>
+    <div id="doneStars"><span>★</span><span>★</span><span>★</span></div>
+    <div class="dl" id="doneList"></div>
+    <div style="display:flex;gap:10px;justify-content:center;margin-top:10px"><button class="ghost" id="dStay">Keep weaving</button><button id="dBook">Order book</button><button class="brass" id="dNext">Next order ›</button></div>
+  </div></div>
+
+  <div class="ov" id="quilt"><div class="sheet" id="quiltSheet">
+    <h2>YOUR QUILT</h2><div class="sub" id="quiltSub"></div>
+    <canvas id="quiltCv" width="1640" height="1040"></canvas>
+    <button id="qClose">Close</button>
+  </div></div>
+
+  <div class="ov" id="help"><div class="sheet help">
+    <h2>HOW TO WEAVE</h2>
+    <canvas id="helpCv" width="560" height="420" style="width:280px;height:210px"></canvas>
+    <p>Every order is a piece of cloth. Your job is to work out the <b>draft</b> that weaves it - the plan a weaver sets up on the loom.</p>
+    <p><b>Threading</b> (top): every warp end - every column - is threaded through one <b>shaft</b>.<br>
+    <b>Tie-up</b> (top right): every <b>treadle</b> lifts some shafts.<br>
+    <b>Treadling</b> (right): every pick - every row - presses one treadle.</p>
+    <p>Where a lifted shaft holds an end, the <b>warp</b> shows on top. Everywhere else the <b>weft</b> shows. The cloth in the middle updates as you go; press <b>Weave</b> when it matches the order.</p>
+    <p><b>Colours</b>: paint warp colours along the top and weft colours down the right with yarn from the basket.</p>
+    <p>One star for a match, one for using no more shafts than needed, one for no more treadles. Click and drag to draw lines. <b>Repeat</b> copies what you've drawn so far across the rest; <b>As drawn in</b> copies the threading into the treadling.</p>
+    <div style="text-align:right"><button class="brass" id="hClose">Got it</button></div>
+  </div></div>
+
+  <div class="ov" id="demoEnd"><div class="sheet" style="width:560px;text-align:center">
+    <h2 id="deTitle">END OF THE FREE DEMO</h2>
+    <p id="deText">Nine orders woven. The full order book has 33 - houndstooth, log cabin, tartans, satin, monk's belt, eight-shaft diamonds and the Rinsewick Banner - plus endless market orders, an eight-shaft studio loom and a quilt with all 33 patches.</p>
+    <div style="display:flex;gap:10px;justify-content:center"><a class="fullLink" target="_blank" rel="noopener"><button class="brass">Get WEFTWORK</button></a><button id="deClose">Back</button></div>
+    <p class="follow">Enjoyed it? <a href="https://kqmigqkqri.itch.io/" target="_blank" rel="noopener">Follow kqmigqkqri on itch.io</a> to hear about new games and sales.</p>
+  </div></div>
+
+  
+</div>
+<script>
+window.WW_DEMO=true;
+</script>
+<script>
+// WEFTWORK engine: weaving drafts (threading, tie-up, treadling, yarn colours), drawdowns,
+// commissions, scoring and a generator for endless commissions. Shared by the game and node tools.
+(function (root) {
+  'use strict';
+  // Yarns by letter. Order matters only for the palette strip.
+  const YARN = {
+    w: { name: 'Chalk', hex: '#f3efe4' }, c: { name: 'Cream', hex: '#e6d8b8' }, o: { name: 'Oat', hex: '#c9b48a' },
+    g: { name: 'Saffron', hex: '#e7b93c' }, y: { name: 'Ochre', hex: '#c98a2a' }, u: { name: 'Rust', hex: '#b0592f' },
+    r: { name: 'Madder', hex: '#b5322c' }, s: { name: 'Rose', hex: '#d98591' }, p: { name: 'Plum', hex: '#6b3a66' },
+    b: { name: 'Sky', hex: '#86b2d6' }, t: { name: 'Teal', hex: '#2f7e86' }, n: { name: 'Indigo', hex: '#253a66' },
+    m: { name: 'Moss', hex: '#6f8a3c' }, f: { name: 'Forest', hex: '#2c5a3c' }, k: { name: 'Slate', hex: '#4b4f58' }, x: { name: 'Coal', hex: '#1f1d22' },
+  };
+  const YARNS = Object.keys(YARN);
+
+  const tile = (s, n) => { let o = ''; while (o.length < n) o += s; return o.slice(0, n); };
+  // Expand a level spec into arrays. th/tr digits are 1-based; tu is a list of lifted shafts per treadle.
+  function expand(L) {
+    const th = tile(L.th, L.W).split('').map((d) => +d - 1);
+    const tr = tile(L.tr, L.H).split('').map((d) => +d - 1);
+    const tu = Array.from({ length: L.S }, (_, s) => Array.from({ length: L.T }, (_, t) => !!(L.tu[t] && L.tu[t].includes(String(s + 1)))));
+    const wc = tile(L.wc, L.W).split(''), fc = tile(L.fc, L.H).split('');
+    return { th, tu, tr, wc, fc };
+  }
+  function drawdown(L, d) {
+    const up = [], col = [];
+    for (let r = 0; r < L.H; r++) {
+      const ur = [], cr = [];
+      for (let c = 0; c < L.W; c++) {
+        const s = d.th[c], t = d.tr[r];
+        const u = s >= 0 && t >= 0 && !!(d.tu[s] && d.tu[s][t]);
+        ur.push(u); cr.push(u ? d.wc[c] : d.fc[r]);
+      }
+      up.push(ur); col.push(cr);
+    }
+    return { up, col };
+  }
+  // A fresh puzzle state: locked parts come from the solution, open parts start empty.
+  function startState(L) {
+    const src = expand(L), lock = L.lock || '';
+    const has = (k) => lock.split(' ').includes(k);
+    const pal = L.pal || [...new Set(src.wc.concat(src.fc))].join('');
+    return {
+      th: has('th') ? src.th.slice() : Array(L.W).fill(-1),
+      tu: has('tu') ? src.tu.map((r) => r.slice()) : Array.from({ length: L.S }, () => Array(L.T).fill(false)),
+      tr: has('tr') ? src.tr.slice() : Array(L.H).fill(-1),
+      wc: has('wc') ? src.wc.slice() : Array(L.W).fill(pal[0]),
+      fc: has('fc') ? src.fc.slice() : Array(L.H).fill(pal[pal.length > 1 ? 1 : 0]),
+    };
+  }
+  const locked = (L, k) => (L.lock || '').split(' ').includes(k);
+  function target(L) { return drawdown(L, expand(L)); }
+  function diff(L, d) {
+    const a = target(L).col, b = drawdown(L, d).col; let n = 0; const cells = [];
+    for (let r = 0; r < L.H; r++) for (let c = 0; c < L.W; c++) if (a[r][c] !== b[r][c]) { n++; cells.push([r, c]); }
+    return { n, cells };
+  }
+  // Shafts and treadles a draft really needs: identical columns can share a shaft, identical rows a treadle.
+  function usage(L, d) {
+    const dd = drawdown(L, d).up;
+    const cols = new Set(), rows = new Set();
+    for (let c = 0; c < L.W; c++) { if (d.th[c] < 0) continue; cols.add(d.th[c]); }
+    for (let r = 0; r < L.H; r++) { if (d.tr[r] < 0) continue; rows.add(d.tr[r]); }
+    let dc = new Set(), dr = new Set();
+    for (let c = 0; c < L.W; c++) dc.add(dd.map((row) => +row[c]).join(''));
+    for (let r = 0; r < L.H; r++) dr.add(dd[r].map((x) => +x).join(''));
+    return { shafts: cols.size, treadles: rows.size, minShafts: dc.size, minTreadles: dr.size };
+  }
+  function par(L) { const u = usage(L, expand(L)); return { S: u.minShafts, T: u.minTreadles }; }
+  // Stars: woven to match; shafts within par; treadles within par.
+  function score(L, d) {
+    const ok = diff(L, d).n === 0; if (!ok) return { ok, stars: 0 };
+    const u = usage(L, d), p = par(L);
+    return { ok, stars: 1 + (u.shafts <= p.S ? 1 : 0) + (u.treadles <= p.T ? 1 : 0), shafts: u.shafts, treadles: u.treadles, par: p };
+  }
+  // The first pick (row) or end (column) that is wrong, for gentle hints.
+  function hint(L, d) {
+    const df = diff(L, d); if (!df.n) return null;
+    const rows = {}, cols = {};
+    for (const [r, c] of df.cells) { rows[r] = (rows[r] || 0) + 1; cols[c] = (cols[c] || 0) + 1; }
+    const r = +Object.keys(rows).sort((a, b) => rows[b] - rows[a] || a - b)[0];
+    const c = +Object.keys(cols).sort((a, b) => cols[b] - cols[a] || a - b)[0];
+    return rows[r] >= cols[c] ? { kind: 'pick', i: r, n: df.n } : { kind: 'end', i: c, n: df.n };
+  }
+
+  
+  const api = { YARN, YARNS, tile, expand, drawdown, startState, locked, target, diff, usage, par, score, hint  };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.WW = api;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+// WEFTWORK commissions. Each is a real weaving draft; the player sees the cloth and rebuilds the draft.
+// th / tr: shaft / treadle per end / pick (repeated to width / height). tu: shafts each treadle lifts.
+// wc / fc: warp / weft yarn letters (repeated). lock: parts that come already set.
+(function (root) {
+  'use strict';
+  const TW22 = ['12', '23', '34', '41'];
+  const CHAPTERS = [
+    { id: 'first', name: 'First Threads', client: 'wenna', blurb: 'Old Wenna leaves you her loom - and a list of orders.' },
+    { id: 'diag', name: 'Diagonals', client: 'fisher', blurb: 'Four shafts, and the cloth starts to slant.' },
+    { id: 'colour', name: 'Colour & Weave', client: 'tailor', blurb: 'Two colours and a simple weave make shapes neither has alone.' },
+    { id: 'tartan', name: 'Setts', client: 'piper', blurb: 'Stripes one way, the same stripes the other: plaids.' },
+    { id: 'eight', name: 'Eight Shafts', client: 'mayor', blurb: 'A bigger loom for bigger ideas.' },
+    { id: 'master', name: 'Masterworks', client: 'guild', blurb: 'The guild judges what you can do with everything open.' },
+  ];
+  const L = [
+    // ── First Threads ──
+    { ch: 0, name: 'Tea Towel', W: 8, H: 8, S: 2, T: 2, th: '12', tu: ['1', '2'], tr: '12', wc: 'c', fc: 'r', lock: 'th tu wc fc',
+      text: 'Plain weave - over one, under one. The loom is threaded and tied. Choose a treadle for every pick (row) in the treadling on the right.' },
+    { ch: 0, name: 'Napkins', W: 8, H: 8, S: 2, T: 2, th: '12', tu: ['1', '2'], tr: '12', wc: 'w', fc: 'n', lock: 'tu tr wc fc',
+      text: 'This time the treadling is done. Thread each warp end (column) onto a shaft in the threading at the top. A lifted shaft shows its warp.' },
+    { ch: 0, name: 'Flour Sack', W: 12, H: 12, S: 2, T: 2, th: '1122', tu: ['1', '2'], tr: '1122', wc: 'o', fc: 'u', lock: 'th wc fc',
+      text: 'Basket weave: two over, two under. Tie each treadle to the shafts it should lift (top right), then treadle it.' },
+    { ch: 0, name: 'Bed Ticking', W: 12, H: 10, S: 2, T: 2, th: '12', tu: ['1', '2'], tr: '12', wc: 'nncwc', fc: 'w', lock: 'th tu tr fc', pal: 'nwc',
+      text: 'Stripes live in the warp. Pick a yarn from the basket and paint the warp colours along the top.' },
+    { ch: 0, name: 'Gingham', W: 12, H: 12, S: 2, T: 2, th: '12', tu: ['1', '2'], tr: '12', wc: 'rrww', fc: 'rrww', lock: 'th tu tr', pal: 'rw',
+      text: 'Gingham: the same stripes in warp and weft. Paint the weft colours on the right as well.' },
+    { ch: 0, name: 'Warp Rib', W: 12, H: 12, S: 2, T: 2, th: '12', tu: ['1', '2'], tr: '1122', wc: 'n', fc: 'b', lock: 'wc fc',
+      text: 'Everything open now. Count the floats: how many picks go into each shed?' },
+    // ── Diagonals ──
+    { ch: 1, name: 'Work Trousers', W: 12, H: 12, S: 4, T: 4, th: '1234', tu: TW22, tr: '1234', wc: 'n', fc: 'c', lock: 'tu wc fc',
+      text: 'Twill: each pick steps one end along, so the cloth grows a diagonal. The tie-up is a 2/2 twill.' },
+    { ch: 1, name: 'Denim', W: 12, H: 12, S: 4, T: 4, th: '1234', tu: ['123', '234', '341', '412'], tr: '1234', wc: 'n', fc: 'w', lock: 'th wc fc',
+      text: 'Denim is warp-faced: three ends up, one down. Tie it up and treadle it.' },
+    { ch: 1, name: 'Left-Hand Twill', W: 12, H: 12, S: 4, T: 4, th: '1234', tu: TW22, tr: '4321', wc: 'f', fc: 'o', lock: 'wc fc',
+      text: 'The diagonal runs the other way. Which part of the draft turns it round?' },
+    
+    
+    // The free demo only knows the names of the other orders: their drafts, colours and texts are not in this file.
+    { ch: 1, name: 'Broken Twill', stub: true },
+    { ch: 1, name: 'Herringbone Coat', stub: true },
+    { ch: 1, name: 'Diamond Shawl', stub: true },
+    { ch: 1, name: 'Goose Eye', stub: true },
+    { ch: 2, name: 'Hairline', stub: true },
+    { ch: 2, name: 'Log Cabin', stub: true },
+    { ch: 2, name: 'Houndstooth', stub: true },
+    { ch: 2, name: 'Shepherd\'s Check', stub: true },
+    { ch: 2, name: 'Hidden Twill', stub: true },
+    { ch: 2, name: 'Bird\'s Eye', stub: true },
+    { ch: 3, name: 'Keeper\'s Plaid', stub: true },
+    { ch: 3, name: 'Harvest', stub: true },
+    { ch: 3, name: 'Night Watch', stub: true },
+    { ch: 3, name: 'Highland Rose', stub: true },
+    { ch: 3, name: 'Sea Loch', stub: true },
+    { ch: 4, name: 'Satin Ribbon', stub: true },
+    { ch: 4, name: 'Advancing Twill', stub: true },
+    { ch: 4, name: 'Big Diamond', stub: true },
+    { ch: 4, name: 'Rosepath', stub: true },
+    { ch: 4, name: 'Monk\'s Belt', stub: true },
+    { ch: 5, name: 'Turned Blocks', stub: true },
+    { ch: 5, name: 'Glen Plaid', stub: true },
+    { ch: 5, name: 'Eight-Shaft Goose Eye', stub: true },
+    { ch: 5, name: 'The Rinsewick Banner', stub: true },
+    
+  ];
+  L.forEach((l, i) => { l.id = 'c' + (i + 1); l.n = i + 1; });
+  const CLIENTS = {
+    wenna: { name: 'Old Wenna', role: 'your teacher' },
+    fisher: { name: 'Tamsin Hook', role: 'fisherwoman' },
+    tailor: { name: 'Mr Pennock', role: 'tailor' },
+    piper: { name: 'Hamish Burr', role: 'piper' },
+    mayor: { name: 'Mayor Clew', role: 'mayor of Rinsewick' },
+    guild: { name: 'The Weavers\' Guild', role: 'examiners' },
+  };
+  const api = { LEVELS: L, CHAPTERS, CLIENTS };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.WWL = api;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+// WEFTWORK art: woven cloth from thread sprites, wooden table, paper, yarn balls, shuttle, client emblems.
+(function (root) {
+  'use strict';
+  const WW = root.WW;
+  const TAU = Math.PI * 2;
+  function hexRGB(h) { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; }
+  const shadeRGB = (c, k) => c.map((v) => Math.max(0, Math.min(255, Math.round(k > 0 ? v + (255 - v) * k : v * (1 + k)))));
+  const css = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a === undefined ? 1 : a})`;
+  const yarnRGB = (k) => hexRGB(WW.YARN[k].hex);
+  function hash(a, b) { let h = (a * 374761393 + b * 668265263) >>> 0; h = (h ^ (h >>> 13)) * 1274126177 >>> 0; return (h ^ (h >>> 16)) / 4294967296; }
+
+  // One cell of thread, warp (vertical) or weft (horizontal), lit from the top left.
+  const cache = new Map();
+  function sprite(k, vert, px) {
+    const key = k + (vert ? 'v' : 'h') + px;
+    if (cache.has(key)) return cache.get(key);
+    const cv = document.createElement('canvas'); cv.width = cv.height = px;
+    const c = cv.getContext('2d'), base = yarnRGB(k);
+    const lum = (base[0] * 0.3 + base[1] * 0.59 + base[2] * 0.11) / 255;
+    c.save();
+    if (!vert) { c.translate(px, 0); c.rotate(Math.PI / 2); }
+    // the thread body: rounded across its width, dipping at both ends where it goes under
+    const inset = px * 0.07;
+    const g = c.createLinearGradient(inset, 0, px - inset, 0);
+    g.addColorStop(0, css(shadeRGB(base, -0.42))); g.addColorStop(0.28, css(shadeRGB(base, 0.08))); g.addColorStop(0.45, css(shadeRGB(base, 0.2 - lum * 0.1)));
+    g.addColorStop(0.75, css(shadeRGB(base, -0.08))); g.addColorStop(1, css(shadeRGB(base, -0.5)));
+    c.fillStyle = css(shadeRGB(base, -0.6)); c.fillRect(0, 0, px, px);
+    c.fillStyle = g;
+    const r = px * 0.3;
+    c.beginPath(); c.moveTo(inset + r, px * 0.02); c.lineTo(px - inset - r, px * 0.02); c.quadraticCurveTo(px - inset, px * 0.02, px - inset, r); c.lineTo(px - inset, px - r); c.quadraticCurveTo(px - inset, px * 0.98, px - inset - r, px * 0.98); c.lineTo(inset + r, px * 0.98); c.quadraticCurveTo(inset, px * 0.98, inset, px - r); c.lineTo(inset, r); c.quadraticCurveTo(inset, px * 0.02, inset + r, px * 0.02); c.fill();
+    // ends dive under the crossing thread
+    const e = c.createLinearGradient(0, 0, 0, px);
+    e.addColorStop(0, 'rgba(0,0,0,0.38)'); e.addColorStop(0.2, 'rgba(0,0,0,0)'); e.addColorStop(0.8, 'rgba(0,0,0,0)'); e.addColorStop(1, 'rgba(0,0,0,0.42)');
+    c.fillStyle = e; c.fillRect(0, 0, px, px);
+    // plied twist: soft diagonal strands
+    if (px >= 10) {
+      c.globalAlpha = 0.22; c.strokeStyle = css(shadeRGB(base, 0.45)); c.lineWidth = Math.max(0.6, px * 0.05);
+      for (let k2 = -2; k2 < 5; k2++) { const y = k2 * px * 0.24; c.beginPath(); c.moveTo(inset, y + px * 0.3); c.lineTo(px - inset, y); c.stroke(); }
+      c.globalAlpha = 0.18; c.strokeStyle = css(shadeRGB(base, -0.5));
+      for (let k2 = -2; k2 < 5; k2++) { const y = k2 * px * 0.24 + px * 0.11; c.beginPath(); c.moveTo(inset, y + px * 0.3); c.lineTo(px - inset, y); c.stroke(); }
+      c.globalAlpha = 1;
+    }
+    c.restore();
+    cache.set(key, cv);
+    return cv;
+  }
+
+  // Draw cloth: col[r][c] yarn letters, up[r][c] true where warp shows. rows: how many picks are woven so far.
+  function drawCloth(c, d, x, y, cell, o) {
+    o = o || {};
+    const H = d.col.length, W = d.col[0].length, rows = o.rows === undefined ? H : o.rows;
+    const dpr = o.dpr || 1, px = Math.max(4, Math.round(cell * dpr));
+    if (o.shadow !== false) { c.save(); c.shadowColor = 'rgba(40,20,5,0.45)'; c.shadowBlur = cell * 1.4; c.shadowOffsetY = cell * 0.5; c.fillStyle = '#2a1c12'; c.fillRect(x, y, W * cell, Math.max(0, rows) * cell); c.restore(); }
+    for (let r = 0; r < rows && r < H; r++) for (let cc = 0; cc < W; cc++) {
+      const up = d.up[r][cc], k = d.col[r][cc];
+      c.drawImage(sprite(k, up, px), x + cc * cell, y + r * cell, cell, cell);
+    }
+    // a little irregularity, like real handspun
+    if (o.noise !== false) {
+      for (let r = 0; r < rows && r < H; r++) for (let cc = 0; cc < W; cc++) {
+        const v = hash(r + (o.seed || 0), cc) - 0.5;
+        c.fillStyle = v > 0 ? `rgba(255,248,230,${v * 0.1})` : `rgba(20,10,0,${-v * 0.14})`;
+        c.fillRect(x + cc * cell, y + r * cell, cell, cell);
+      }
+    }
+    // unwoven warp above the fell, stretched to the beam
+    if (o.warpAbove) {
+      for (let cc = 0; cc < W; cc++) {
+        const k = o.warpAbove[cc]; const top = y - o.warpAboveLen, bot = y + Math.max(0, rows) * cell;
+        if (rows >= H) break;
+        const g = c.createLinearGradient(x + cc * cell, 0, x + (cc + 1) * cell, 0), b = yarnRGB(k);
+        g.addColorStop(0, css(shadeRGB(b, -0.5))); g.addColorStop(0.45, css(shadeRGB(b, 0.15))); g.addColorStop(1, css(shadeRGB(b, -0.55)));
+        c.fillStyle = g; c.fillRect(x + cc * cell + cell * 0.2, y + rows * cell, cell * 0.6, (H - rows) * cell);
+        if (o.lift && o.lift[cc]) { c.fillStyle = 'rgba(255,240,210,0.18)'; c.fillRect(x + cc * cell + cell * 0.2, y + rows * cell, cell * 0.6, (H - rows) * cell); }
+        void top;
+      }
+    }
+    if (o.fringe) fringe(c, d, x, y, cell, rows);
+  }
+  function fringe(c, d, x, y, cell, rows) {
+    const W = d.col[0].length;
+    for (const [yy, dir] of [[y, -1], [y + rows * cell, 1]]) {
+      for (let cc = 0; cc < W; cc++) {
+        const k = d.col[dir < 0 ? 0 : rows - 1][cc] && (d.up[0] ? null : null);
+        const b = yarnRGB(d.wc ? d.wc[cc] : d.col[0][cc]);
+        const len = cell * (1.2 + hash(cc, dir + 7) * 0.7);
+        c.strokeStyle = css(shadeRGB(b, -0.1)); c.lineWidth = Math.max(1, cell * 0.28); c.lineCap = 'round';
+        c.beginPath(); c.moveTo(x + (cc + 0.5) * cell, yy); c.quadraticCurveTo(x + (cc + 0.5 + (hash(cc, 3) - 0.5) * 0.6) * cell, yy + dir * len * 0.6, x + (cc + 0.5 + (hash(cc, 9) - 0.5)) * cell, yy + dir * len); c.stroke();
+        void k;
+      }
+    }
+  }
+
+  // ── Backgrounds ─────────────────────────────────────────────────
+  function wood(c, w, h, seed) {
+    const g = c.createLinearGradient(0, 0, 0, h); g.addColorStop(0, '#6b4528'); g.addColorStop(1, '#4a2e1a');
+    c.fillStyle = g; c.fillRect(0, 0, w, h);
+    const planks = Math.ceil(h / 120);
+    for (let p = 0; p < planks; p++) {
+      const y0 = p * 120;
+      c.fillStyle = `rgba(${p % 2 ? 255 : 0},${p % 2 ? 220 : 0},${p % 2 ? 180 : 0},0.035)`; c.fillRect(0, y0, w, 120);
+      c.strokeStyle = 'rgba(20,10,4,0.55)'; c.lineWidth = 2; c.beginPath(); c.moveTo(0, y0); c.lineTo(w, y0); c.stroke();
+      for (let k = 0; k < 26; k++) {
+        const yy = y0 + 6 + hash(p, k) * 108, amp = 2 + hash(k, p) * 6, ph = hash(p + 3, k) * 10;
+        c.strokeStyle = `rgba(${hash(k, 1) > 0.5 ? '30,15,5' : '150,100,60'},${0.08 + hash(k, 2) * 0.1})`; c.lineWidth = 0.6 + hash(k, 5) * 1.4;
+        c.beginPath(); for (let x = 0; x <= w; x += 24) { const yv = yy + Math.sin(x * 0.004 + ph) * amp + Math.sin(x * 0.017 + ph * 2) * amp * 0.3; x ? c.lineTo(x, yv) : c.moveTo(x, yv); } c.stroke();
+      }
+      // a knot
+      const kx = hash(p, 99) * w, ky = y0 + 30 + hash(99, p) * 60;
+      c.strokeStyle = 'rgba(30,14,4,0.25)'; for (let k = 1; k < 5; k++) { c.beginPath(); c.ellipse(kx, ky, 6 * k, 2.5 * k, 0, 0, TAU); c.stroke(); }
+    }
+    const v = c.createRadialGradient(w / 2, h * 0.45, h * 0.2, w / 2, h / 2, w * 0.75); v.addColorStop(0, 'rgba(255,200,120,0.08)'); v.addColorStop(1, 'rgba(0,0,0,0.5)');
+    c.fillStyle = v; c.fillRect(0, 0, w, h);
+    void seed;
+  }
+  function paper(c, x, y, w, h, tint) {
+    c.save();
+    c.shadowColor = 'rgba(0,0,0,0.45)'; c.shadowBlur = 16; c.shadowOffsetY = 6;
+    c.fillStyle = tint || '#f1e6cc'; c.fillRect(x, y, w, h); c.restore();
+    const g = c.createRadialGradient(x + w * 0.4, y + h * 0.35, 10, x + w / 2, y + h / 2, Math.max(w, h) * 0.75);
+    g.addColorStop(0, 'rgba(255,255,255,0.18)'); g.addColorStop(1, 'rgba(140,100,50,0.2)');
+    c.fillStyle = g; c.fillRect(x, y, w, h);
+    for (let k = 0; k < (w * h) / 900; k++) { c.fillStyle = `rgba(120,90,50,${0.03 + hash(k, 7) * 0.05})`; c.fillRect(x + hash(k, 1) * w, y + hash(k, 2) * h, 1 + hash(k, 3) * 2, 1); }
+  }
+
+  // ── Objects ─────────────────────────────────────────────────────
+  function yarnBall(c, x, y, r, k, t, sel) {
+    const b = yarnRGB(k);
+    c.save();
+    c.fillStyle = 'rgba(0,0,0,0.3)'; c.beginPath(); c.ellipse(x + 2, y + r * 0.85, r * 0.9, r * 0.25, 0, 0, TAU); c.fill();
+    const g = c.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.1, x, y, r);
+    g.addColorStop(0, css(shadeRGB(b, 0.3))); g.addColorStop(0.65, css(b)); g.addColorStop(1, css(shadeRGB(b, -0.5)));
+    c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill();
+    c.beginPath(); c.arc(x, y, r, 0, TAU); c.clip();
+    c.strokeStyle = css(shadeRGB(b, -0.35), 0.6); c.lineWidth = Math.max(0.8, r * 0.07);
+    for (let k = -3; k <= 3; k++) { c.beginPath(); c.ellipse(x, y, r * 1.05, r * 0.32, 0.9, 0, TAU); c.save(); c.restore(); c.translate(0, 0); c.ellipse(x + k * r * 0.18, y, r * 0.95, r * 0.22, 0.9, 0, TAU); c.stroke(); }
+    c.strokeStyle = css(shadeRGB(b, 0.35), 0.45);
+    for (let k = -3; k <= 3; k++) { c.beginPath(); c.ellipse(x + k * r * 0.18, y + r * 0.05, r * 0.95, r * 0.2, -0.7, 0, TAU); c.stroke(); }
+    c.restore();
+    // loose end
+    c.strokeStyle = css(shadeRGB(b, -0.1)); c.lineWidth = Math.max(1, r * 0.09); c.lineCap = 'round';
+    c.beginPath(); c.moveTo(x + r * 0.7, y + r * 0.5); c.quadraticCurveTo(x + r * 1.2, y + r * 0.9 + Math.sin((t || 0) * 2) * 2, x + r * 1.5, y + r * 0.75); c.stroke();
+    if (sel) { c.strokeStyle = '#ffe6a8'; c.lineWidth = 2.5; c.beginPath(); c.arc(x, y, r + 5, 0, TAU); c.stroke(); }
+  }
+  function shuttle(c, x, y, len, k, ang) {
+    c.save(); c.translate(x, y); c.rotate(ang || 0);
+    c.fillStyle = 'rgba(0,0,0,0.35)'; c.beginPath(); c.ellipse(3, len * 0.12, len * 0.5, len * 0.09, 0, 0, TAU); c.fill();
+    const g = c.createLinearGradient(0, -len * 0.12, 0, len * 0.12); g.addColorStop(0, '#e2b77c'); g.addColorStop(0.5, '#b07a3e'); g.addColorStop(1, '#6e4520');
+    c.fillStyle = g; c.beginPath(); c.moveTo(-len * 0.5, 0); c.quadraticCurveTo(-len * 0.3, -len * 0.13, 0, -len * 0.13); c.quadraticCurveTo(len * 0.3, -len * 0.13, len * 0.5, 0); c.quadraticCurveTo(len * 0.3, len * 0.13, 0, len * 0.13); c.quadraticCurveTo(-len * 0.3, len * 0.13, -len * 0.5, 0); c.fill();
+    c.fillStyle = '#3a220e'; c.beginPath(); c.ellipse(0, 0, len * 0.24, len * 0.06, 0, 0, TAU); c.fill();
+    if (k) { const b = yarnRGB(k); c.fillStyle = css(b); c.beginPath(); c.ellipse(0, 0, len * 0.2, len * 0.045, 0, 0, TAU); c.fill(); c.strokeStyle = css(shadeRGB(b, -0.4)); c.lineWidth = 0.8; for (let i = -3; i <= 3; i++) { c.beginPath(); c.moveTo(i * len * 0.05, -len * 0.04); c.lineTo(i * len * 0.05 + 2, len * 0.04); c.stroke(); } }
+    c.fillStyle = 'rgba(255,240,210,0.35)'; c.beginPath(); c.ellipse(-len * 0.1, -len * 0.08, len * 0.25, len * 0.02, 0, 0, TAU); c.fill();
+    c.restore();
+  }
+  // Client emblems: simple carved-medallion icons.
+  function emblem(c, id, x, y, r) {
+    c.save();
+    const g = c.createRadialGradient(x - r * 0.3, y - r * 0.4, r * 0.1, x, y, r);
+    g.addColorStop(0, '#f6e7c4'); g.addColorStop(1, '#c9a66b');
+    c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, TAU); c.fill();
+    c.strokeStyle = '#7a5530'; c.lineWidth = r * 0.08; c.stroke();
+    c.strokeStyle = '#5a3a1c'; c.fillStyle = '#5a3a1c'; c.lineWidth = r * 0.09; c.lineCap = 'round'; c.lineJoin = 'round';
+    c.translate(x, y); const u = r / 10;
+    if (id === 'wenna') { // spindle
+      c.beginPath(); c.moveTo(0, -7 * u); c.lineTo(0, 7 * u); c.stroke(); c.beginPath(); c.ellipse(0, 3 * u, 4 * u, 1.6 * u, 0, 0, TAU); c.fill(); c.lineWidth = u * 0.6; for (let k = -3; k < 3; k++) { c.beginPath(); c.moveTo(-2 * u, k * u - 1 * u); c.lineTo(2 * u, k * u); c.stroke(); }
+    } else if (id === 'fisher') { // anchor
+      c.beginPath(); c.moveTo(0, -6 * u); c.lineTo(0, 6 * u); c.moveTo(-3 * u, -3 * u); c.lineTo(3 * u, -3 * u); c.stroke(); c.beginPath(); c.arc(0, 1 * u, 5 * u, 0.3, Math.PI - 0.3); c.stroke(); c.beginPath(); c.arc(0, -7 * u, 1.5 * u, 0, TAU); c.stroke();
+    } else if (id === 'tailor') { // scissors
+      c.beginPath(); c.arc(-3 * u, 4 * u, 2.2 * u, 0, TAU); c.arc(3 * u, 4 * u, 2.2 * u, 0, TAU); c.stroke(); c.beginPath(); c.moveTo(-2 * u, 2 * u); c.lineTo(3 * u, -7 * u); c.moveTo(2 * u, 2 * u); c.lineTo(-3 * u, -7 * u); c.stroke();
+    } else if (id === 'piper') { // thistle
+      c.beginPath(); c.moveTo(0, 7 * u); c.lineTo(0, 0); c.stroke(); c.beginPath(); c.ellipse(0, -1 * u, 3 * u, 2.6 * u, 0, 0, TAU); c.fill(); for (let k = -2; k <= 2; k++) { c.beginPath(); c.moveTo(k * 1.2 * u, -3 * u); c.lineTo(k * 2 * u, -7 * u); c.stroke(); } c.beginPath(); c.moveTo(0, 4 * u); c.quadraticCurveTo(-5 * u, 3 * u, -6 * u, 0); c.moveTo(0, 4 * u); c.quadraticCurveTo(5 * u, 3 * u, 6 * u, 0); c.stroke();
+    } else if (id === 'mayor') { // key
+      c.beginPath(); c.arc(-3 * u, 0, 3 * u, 0, TAU); c.stroke(); c.beginPath(); c.moveTo(0, 0); c.lineTo(7 * u, 0); c.moveTo(5 * u, 0); c.lineTo(5 * u, 3 * u); c.moveTo(7 * u, 0); c.lineTo(7 * u, 2.5 * u); c.stroke();
+    } else { // guild: crossed shuttles
+      for (const a of [0.7, -0.7]) { c.save(); c.rotate(a); c.beginPath(); c.ellipse(0, 0, 7 * u, 1.8 * u, 0, 0, TAU); c.fill(); c.restore(); }
+      c.fillStyle = '#f6e7c4'; c.beginPath(); c.arc(0, 0, 1.4 * u, 0, TAU); c.fill();
+    }
+    c.restore();
+  }
+
+  root.WWArt = { sprite, drawCloth, wood, paper, yarnBall, shuttle, emblem, hexRGB, shadeRGB, css, yarnRGB, hash };
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+// WEFTWORK audio: plucked-string (Karplus-Strong) folk waltz, wooden loom sounds, and pitched clicks for the draft.
+(function (root) {
+  'use strict';
+  let ctx = null, master = null, sfx = null, music = null, verb = null, noise = null;
+  let muted = false, musicOn = true, timer = null, nextT = 0, step = 0;
+  const pluckCache = new Map();
+
+  function init() {
+    if (ctx) return ctx;
+    const AC = root.AudioContext || root.webkitAudioContext; if (!AC) return null;
+    ctx = new AC();
+    const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 3;
+    master = ctx.createGain(); master.gain.value = muted ? 0 : 0.85; comp.connect(master).connect(ctx.destination);
+    sfx = ctx.createGain(); sfx.gain.value = 0.9; sfx.connect(comp);
+    music = ctx.createGain(); music.gain.value = musicOn ? 0.32 : 0; music.connect(comp);
+    const len = ctx.sampleRate * 2, ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (let c = 0; c < 2; c++) { const d = ir.getChannelData(c); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
+    verb = ctx.createConvolver(); verb.buffer = ir; const vg = ctx.createGain(); vg.gain.value = 0.4; verb.connect(vg).connect(comp);
+    noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate); const nd = noise.getChannelData(0); for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+    return ctx;
+  }
+  const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
+  // Karplus-Strong string, rendered once per pitch and brightness
+  function pluckBuf(midi, bright) {
+    const key = midi + ':' + bright;
+    if (pluckCache.has(key)) return pluckCache.get(key);
+    const sr = ctx.sampleRate, dur = 2.2, n = Math.floor(sr * dur), b = ctx.createBuffer(1, n, sr), d = b.getChannelData(0);
+    const p = Math.max(2, Math.round(sr / mtof(midi)));
+    const buf = new Float32Array(p);
+    for (let i = 0; i < p; i++) buf[i] = (Math.random() * 2 - 1) * (0.6 + 0.4 * Math.sin(i / p * Math.PI));
+    let idx = 0, last = 0; const damp = 0.4985 + bright * 0.0012;
+    for (let i = 0; i < n; i++) {
+      const cur = buf[idx], nxt = buf[(idx + 1) % p];
+      const v = (cur + nxt) * damp; buf[idx] = v; d[i] = cur; idx = (idx + 1) % p; last = v;
+    }
+    void last;
+    // soft attack to remove the click
+    for (let i = 0; i < 64 && i < n; i++) d[i] *= i / 64;
+    pluckCache.set(key, b); return b;
+  }
+  function pluck(midi, t, gain, dest, wet, bright) {
+    const s = ctx.createBufferSource(); s.buffer = pluckBuf(midi, bright === undefined ? 1 : bright);
+    const g = ctx.createGain(); g.gain.value = gain;
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3800;
+    s.connect(lp).connect(g).connect(dest || sfx);
+    if (wet) { const w = ctx.createGain(); w.gain.value = wet; g.connect(w).connect(verb); }
+    s.start(t);
+  }
+  function tone(type, f, t, a, peak, d, dest, f2) {
+    const o = ctx.createOscillator(); o.type = type; o.frequency.setValueAtTime(f, t); if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + a + d);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + a); g.gain.exponentialRampToValueAtTime(0.0001, t + a + d);
+    o.connect(g).connect(dest || sfx); o.start(t); o.stop(t + a + d + 0.05);
+  }
+  function burst(t, dur, type, f, q, peak, f2) {
+    const s = ctx.createBufferSource(); s.buffer = noise;
+    const fl = ctx.createBiquadFilter(); fl.type = type; fl.frequency.setValueAtTime(f, t); if (f2) fl.frequency.exponentialRampToValueAtTime(f2, t + dur); fl.Q.value = q;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + Math.min(0.02, dur / 3)); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(fl).connect(g).connect(sfx); s.start(t); s.stop(t + dur + 0.05);
+  }
+  const ready = () => ctx && !muted;
+  const now = () => ctx.currentTime + 0.005;
+  // D major pentatonic for the draft clicks: each shaft/treadle row has its own note
+  const PENTA = [0, 2, 4, 7, 9];
+  const rowNote = (i) => 62 + PENTA[i % 5] + 12 * Math.floor(i / 5);
+
+  const S = {
+    unlock() { init(); if (ctx && ctx.state === 'suspended') ctx.resume(); if (!timer && ctx) startMusic(); },
+    mark(i, on) { if (!ready()) return; const t = now(); pluck(rowNote(i) + (on ? 12 : 0), t, on ? 0.32 : 0.18, null, 0.2, on ? 1 : 0); },
+    colour(i) { if (!ready()) return; const t = now(); pluck(74 + PENTA[i % 5], t, 0.22, null, 0.25); },
+    pick() { if (!ready()) return; const t = now(); pluck(rowNote(3) + 12, t, 0.12, null, 0.15); },
+    deny() { if (!ready()) return; const t = now(); burst(t, 0.06, 'bandpass', 500, 3, 0.25); tone('sine', 140, t, 0.004, 0.2, 0.08); },
+    clack() { if (!ready()) return; const t = now(); burst(t, 0.05, 'bandpass', 1500, 5, 0.45); tone('sine', 220, t, 0.003, 0.18, 0.06, null, 120); },
+    shuttle(dur) { if (!ready()) return; const t = now(); burst(t, dur || 0.22, 'bandpass', 700, 1.4, 0.18, 2600); },
+    beat() { if (!ready()) return; const t = now(); tone('sine', 95, t, 0.004, 0.5, 0.12, null, 60); burst(t, 0.04, 'bandpass', 2200, 6, 0.25); },
+    ui() { if (!ready()) return; const t = now(); burst(t, 0.03, 'bandpass', 3000, 6, 0.15); },
+    page() { if (!ready()) return; const t = now(); burst(t, 0.25, 'bandpass', 2400, 0.6, 0.08, 900); },
+    win() {
+      if (!ready()) return; const t = now();
+      [62, 66, 69, 74, 78, 81, 86].forEach((m, i) => pluck(m, t + i * 0.07, 0.35, null, 0.5));
+      tone('sine', mtof(74), t + 0.5, 0.02, 0.08, 1.6); tone('sine', mtof(81), t + 0.55, 0.02, 0.05, 1.6);
+    },
+    star(i) { if (!ready()) return; const t = now(); pluck(86 + [0, 4, 7][i % 3], t, 0.4, null, 0.6); tone('sine', mtof(98 + [0, 4, 7][i % 3]), t, 0.003, 0.05, 0.8); },
+    fail() { if (!ready()) return; const t = now(); pluck(69, t, 0.3, null, 0.3); pluck(65, t + 0.16, 0.3, null, 0.3); },
+    setMuted(m) { muted = m; if (master) master.gain.setTargetAtTime(m ? 0 : 0.85, ctx.currentTime, 0.05); },
+    setMusic(on) { musicOn = on; if (music) music.gain.setTargetAtTime(on ? 0.32 : 0, ctx.currentTime, 0.3); },
+  };
+
+  // A slow folk waltz in D: harp-like arpeggios under a simple tune that varies each time round.
+  const CHORDS = [[50, 57, 62, 66], [47, 54, 59, 62], [43, 50, 55, 59], [45, 52, 57, 61], [50, 57, 62, 66], [43, 50, 55, 59], [45, 52, 57, 61], [50, 57, 62, 69]];
+  const TUNE = [[74, 0, 76], [78, 0, 0], [79, 78, 76], [74, 0, 0], [76, 0, 78], [74, 71, 0], [73, 0, 76], [74, 0, 0],
+    [78, 0, 79], [81, 0, 78], [79, 0, 76], [78, 0, 0], [74, 0, 76], [79, 78, 76], [76, 0, 73], [74, 0, 0]];
+  function startMusic() { nextT = ctx.currentTime + 0.4; timer = setInterval(schedule, 150); }
+  function schedule() {
+    if (!ctx) return;
+    const beat = 0.62;
+    while (nextT < ctx.currentTime + 0.6) {
+      const bar = Math.floor(step / 3), pos = step % 3, ch = CHORDS[bar % 8], t = nextT;
+      if (pos === 0) pluck(ch[0] - 12, t, 0.5, music, 0.3, 0);
+      else pluck(ch[pos] + (pos === 2 ? 0 : 12), t, 0.22, music, 0.35, 0);
+      if (pos === 2) pluck(ch[3] + 12, t + beat / 2, 0.14, music, 0.35, 0);
+      const phrase = Math.floor(bar / 16) % 3;
+      if (phrase !== 2) { const m = TUNE[bar % 16][pos]; if (m) pluck(m + (phrase === 1 && bar % 2 ? 12 : 0), t, 0.3, music, 0.45, 1); }
+      step++; nextT += beat;
+    }
+  }
+  root.WWA = S;
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>
+// WEFTWORK UI: the draft table (canvas), weaving animation, order book, quilt, studio, saving.
+(function () {
+  'use strict';
+  const WW = window.WW, LV = window.WWL, A = window.WWArt, S = window.WWA;
+  const DEMO = !!window.WW_DEMO, DEMO_N = 9;
+  const STUDIO_SHAFTS =   4 ;
+  const STUDIO_WORD = STUDIO_SHAFTS === 4 ? 'Four' : 'Eight';
+  const SAVE = DEMO ? 'weftwork-demo-v1' : 'weftwork-v1';
+  const FULL_URL = 'https://kqmigqkqri.itch.io/weftwork';
+  const $ = (id) => document.getElementById(id);
+  const LW = 1280, LH = 720;
+  if (DEMO) document.body.classList.add('demo');
+  document.querySelectorAll('.fullLink').forEach((a) => { a.href = FULL_URL; });
+
+  // ── Save ────────────────────────────────────────────────────────
+  let save = { stars: {}, drafts: {}, gen: 1, genDone: 0, studio: null, snd: 0, helpSeen: false, last: null, finale: false };
+  try { const s = JSON.parse(localStorage.getItem(SAVE) || 'null'); if (s) save = Object.assign(save, s); } catch (e) { /* none */ }
+  function persist() { try { localStorage.setItem(SAVE, JSON.stringify(save)); } catch (e) { /* blocked */ } }
+  const solved = () => LV.LEVELS.filter((l) => save.stars[l.id] > 0).length;
+  const available = (L) => !(DEMO && L.n > DEMO_N) && L.n <= solved() + 3;
+
+  // ── Canvas ──────────────────────────────────────────────────────
+  const wrap = $('wrap'), cv = $('cv'), ctx = cv.getContext('2d');
+  let k = 1, dpr = 1;
+  function fit() {
+    k = Math.min(innerWidth / LW, innerHeight / LH);
+    wrap.style.transform = `scale(${k})`;
+    wrap.style.left = Math.round((innerWidth - LW * k) / 2) + 'px'; wrap.style.top = Math.round((innerHeight - LH * k) / 2) + 'px';
+    dpr = Math.min(2.5, (window.devicePixelRatio || 1) * k);
+    cv.width = Math.round(LW * dpr); cv.height = Math.round(LH * dpr);
+    bg = null;
+  }
+  addEventListener('resize', fit);
+  let bg = null;
+  function background() {
+    if (bg) return bg;
+    bg = document.createElement('canvas'); bg.width = cv.width; bg.height = cv.height;
+    const c = bg.getContext('2d'); c.scale(dpr, dpr); A.wood(c, LW, LH);
+    return bg;
+  }
+
+  // ── Play state ──────────────────────────────────────────────────
+  let screen = 'title', L = null, d = null, undo = [], lastEdit = null, sel = null, showDiff = false;
+  let hover = null, drag = null, weave = null, flash = [], hintMark = null, coachDone = {}, msg = null, studio = false;
+  const T0 = performance.now(); const now = () => (performance.now() - T0) / 1000;
+
+  function levelById(id) { return LV.LEVELS.find((l) => l.id === id); }
+  function studioLevel() { return { id: 'studio', studio: true, name: 'Studio Loom', W: 24, H: 24, S: STUDIO_SHAFTS, T: STUDIO_SHAFTS, th: '1234', tu: ['12', '23', '34', '41'], tr: '1234', wc: 'n', fc: 'c', lock: '', pal: WW.YARNS.join('') }; }
+  function open(level) {
+    L = level; studio = !!L.studio;
+    const key = L.id;
+    d = (studio ? save.studio : save.drafts[key]) || (studio ? WW.expand(L) : WW.startState(L));
+    d = JSON.parse(JSON.stringify(d));
+    undo = []; lastEdit = null; weave = null; flash = []; hintMark = null; msg = null; showDiff = false;
+    const pal = palette(); sel = pal[0];
+    save.last = L.gen ? 'gen' : key; persist();
+    screen = 'play'; hideAll(); $('corner').style.display = 'flex';
+    S.page();
+  }
+  function palette() { return (L.pal || [...new Set(WW.expand(L).wc.concat(WW.expand(L).fc))].join('')).split(''); }
+  function storeDraft() { if (!L) return; if (studio) save.studio = d; else if (!L.gen) save.drafts[L.id] = d; persist(); }
+  const editable = (part) => studio || !WW.locked(L, part);
+  const colourParts = () => editable('wc') || editable('fc');
+
+  // ── Layout of the table ─────────────────────────────────────────
+  const PAPER = { x: 408, y: 54, w: 858, h: 588 };
+  function lay() {
+    const W = L.W, H = L.H, Sx = L.S, T = L.T;
+    // gaps between the grids leave room for their labels
+    const cols = W + 0.7 + T + 0.5 + 1, rows = 1 + Sx + H, gapPx = 44;
+    const cs = Math.max(8, Math.min(30, Math.floor((PAPER.w - 70) / cols), Math.floor((PAPER.h - 50 - gapPx) / rows)));
+    const gap = Math.max(22, cs * 0.7);
+    const bw = cols * cs, bh = rows * cs + gap * 2;
+    const bx = Math.round(PAPER.x + (PAPER.w - bw) / 2 + 6), by = Math.round(PAPER.y + (PAPER.h - bh) / 2 + 8);
+    const wc = { x: bx, y: by, w: W, h: 1 };
+    const th = { x: bx, y: by + cs + gap, w: W, h: Sx };
+    const tu = { x: bx + cs * (W + 0.7), y: th.y, w: T, h: Sx };
+    const cl = { x: bx, y: th.y + cs * Sx + gap, w: W, h: H };
+    const tr = { x: tu.x, y: cl.y, w: T, h: H };
+    const fc = { x: tu.x + cs * (T + 0.5), y: cl.y, w: 1, h: H };
+    return { cs, wc, th, tu, cl, tr, fc };
+  }
+  const ORDER = { x: 20, y: 250, w: 372, h: 330 };
+  const CARD = { x: 20, y: 14, w: 372, h: 222 };
+
+  function cellAt(g, cs, x, y) {
+    const c = Math.floor((x - g.x) / cs), r = Math.floor((y - g.y) / cs);
+    if (c < 0 || r < 0 || c >= g.w || r >= g.h) return null;
+    return { r, c };
+  }
+  // threading rows are drawn top = highest shaft, like a weaver's draft
+  function hit(x, y) {
+    const G = lay(), cs = G.cs;
+    let h;
+    if ((h = cellAt(G.th, cs, x, y))) return { part: 'th', end: h.c, shaft: L.S - 1 - h.r };
+    if ((h = cellAt(G.tu, cs, x, y))) return { part: 'tu', treadle: h.c, shaft: L.S - 1 - h.r };
+    if ((h = cellAt(G.tr, cs, x, y))) return { part: 'tr', pick: h.r, treadle: h.c };
+    if ((h = cellAt(G.wc, cs, x, y))) return { part: 'wc', end: h.c };
+    if ((h = cellAt(G.fc, cs, x, y))) return { part: 'fc', pick: h.r };
+    if ((h = cellAt(G.cl, cs, x, y))) return { part: 'cl', pick: h.r, end: h.c };
+    return null;
+  }
+
+  // ── Buttons drawn on the table ──────────────────────────────────
+  let buttons = [];
+  function btn(id, x, y, w, h, label, o) { buttons.push(Object.assign({ id, x, y, w, h, label }, o || {})); }
+  function layoutButtons() {
+    buttons = [];
+    const y = 652, h = 50;
+    let x = PAPER.x;
+    const add = (id, w, label, o) => { btn(id, x, y, w, h, label, o); x += w + 8; };
+    add('undo', 80, '↶ Undo', { dis: !undo.length });
+    add('clear', 76, 'Clear');
+    add('repeat', 100, '↻ Repeat', { dis: !lastEdit, tip: 'Repeat what you have drawn so far across the rest' });
+    add('drawn', 124, '⇅ As drawn in', { dis: !(editable('tr') && L.T >= L.S), tip: 'Copy the threading into the treadling' });
+    if (!studio) add('hint', 72, '? Hint');
+    if (!studio) add('diff', 128, (showDiff ? '◉' : '○') + ' Differences', { on: showDiff });
+    btn('weave', PAPER.x + PAPER.w - 190, y - 4, 190, h + 8, 'WEAVE', { big: true, glow: !studio && !weave && WW.diff(L, d).n === 0 });
+    if (studio) btn('png', 20, 252, 180, 44, '⤓ Save picture');
+  }
+  function drawButton(b) {
+    const c = ctx, hov = hover && hover.btn === b.id;
+    c.save();
+    const g = c.createLinearGradient(0, b.y, 0, b.y + b.h);
+    if (b.big) { g.addColorStop(0, '#f0c66a'); g.addColorStop(1, '#a8762a'); } else if (b.on) { g.addColorStop(0, '#c9a066'); g.addColorStop(1, '#8a6232'); } else { g.addColorStop(0, '#a0703a'); g.addColorStop(1, '#6e4520'); }
+    c.shadowColor = 'rgba(0,0,0,0.5)'; c.shadowBlur = 8; c.shadowOffsetY = 3;
+    c.globalAlpha = b.dis ? 0.45 : 1;
+    rr(c, b.x, b.y, b.w, b.h, 7); c.fillStyle = g; c.fill(); c.shadowColor = 'transparent';
+    c.strokeStyle = b.big ? '#5a3a10' : '#3e260f'; c.lineWidth = 1.2; c.stroke();
+    if (hov && !b.dis) { c.fillStyle = 'rgba(255,240,200,0.14)'; c.fill(); }
+    if (b.glow) { const p = 0.5 + 0.5 * Math.sin(now() * 4); c.strokeStyle = `rgba(255,236,170,${0.5 + p * 0.5})`; c.lineWidth = 3 + p * 2; rr(c, b.x - 3, b.y - 3, b.w + 6, b.h + 6, 9); c.stroke(); }
+    c.fillStyle = b.big ? '#2a1a08' : '#fff6e2'; c.font = (b.big ? 'bold 22px ' : '15px ') + 'Georgia, serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+    if (b.big) c.letterSpacing = '4px';
+    c.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + 1);
+    c.restore();
+  }
+  function rr(c, x, y, w, h, r) { c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r); c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath(); }
+
+  // ── Editing ─────────────────────────────────────────────────────
+  function snapshot() { undo.push(JSON.stringify(d)); if (undo.length > 80) undo.shift(); }
+  function deny(part) { S.deny(); flash.push({ part, t0: now() }); msg = { text: 'That part of the draft is already set for this order.', t0: now() }; }
+  function apply(h, mode) {
+    if (!h) return false;
+    if (h.part === 'th') { if (mode === 'erase') { if (d.th[h.end] === h.shaft) { d.th[h.end] = -1; return 'off'; } return false; } if (d.th[h.end] === h.shaft) return false; d.th[h.end] = h.shaft; return 'on'; }
+    if (h.part === 'tr') { if (mode === 'erase') { if (d.tr[h.pick] === h.treadle) { d.tr[h.pick] = -1; return 'off'; } return false; } if (d.tr[h.pick] === h.treadle) return false; d.tr[h.pick] = h.treadle; return 'on'; }
+    if (h.part === 'tu') { const v = mode === 'paint'; if (d.tu[h.shaft][h.treadle] === v) return false; d.tu[h.shaft][h.treadle] = v; return v ? 'on' : 'off'; }
+    if (h.part === 'wc') { if (d.wc[h.end] === sel) return false; d.wc[h.end] = sel; return 'on'; }
+    if (h.part === 'fc') { if (d.fc[h.pick] === sel) return false; d.fc[h.pick] = sel; return 'on'; }
+    return false;
+  }
+  function soundFor(h, r) {
+    if (h.part === 'th' || h.part === 'tu') S.mark(h.shaft, r === 'on');
+    else if (h.part === 'tr') S.mark(h.treadle, r === 'on');
+    else S.colour(palette().indexOf(sel));
+  }
+  function down(x, y) {
+    S.unlock();
+    if (screen !== 'play') return;
+    for (const b of buttons) if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { if (!b.dis) press(b.id); return; }
+    // yarn basket
+    const yb = yarnAt(x, y); if (yb) { sel = yb; S.colour(palette().indexOf(yb)); return; }
+    if (weave) return;
+    const h = hit(x, y); if (!h || h.part === 'cl') return;
+    if (!editable(h.part)) { deny(h.part); return; }
+    if ((h.part === 'wc' || h.part === 'fc') && !sel) return;
+    snapshot();
+    let mode = 'paint';
+    if (h.part === 'th' && d.th[h.end] === h.shaft) mode = 'erase';
+    if (h.part === 'tr' && d.tr[h.pick] === h.treadle) mode = 'erase';
+    if (h.part === 'tu' && d.tu[h.shaft][h.treadle]) mode = 'erase';
+    drag = { part: h.part, mode, last: null };
+    move(x, y);
+  }
+  function move(x, y) {
+    hover = { x, y, btn: null };
+    for (const b of buttons) if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) hover.btn = b.id;
+    if (screen !== 'play') return;
+    const h = hit(x, y); hover.h = h;
+    if (!drag || !h || h.part !== drag.part) return;
+    const key = JSON.stringify(h); if (key === drag.last) return; drag.last = key;
+    const r = apply(h, drag.mode);
+    if (r) { soundFor(h, r); lastEdit = { part: h.part, i: h.part === 'th' || h.part === 'wc' ? h.end : h.part === 'tr' || h.part === 'fc' ? h.pick : -1 }; coachDone[h.part] = true; hintMark = null; storeDraft(); }
+  }
+  function up() { if (drag) { drag = null; storeDraft(); } }
+  function press(id) {
+    S.ui();
+    if (id === 'undo' && undo.length) { d = JSON.parse(undo.pop()); storeDraft(); }
+    else if (id === 'clear') { snapshot(); const st = studio ? { th: Array(L.W).fill(-1), tu: Array.from({ length: L.S }, () => Array(L.T).fill(false)), tr: Array(L.H).fill(-1), wc: d.wc.slice(), fc: d.fc.slice() } : WW.startState(L); d = st; storeDraft(); }
+    else if (id === 'repeat' && lastEdit) {
+      snapshot();
+      const rep = (arr, n) => { for (let i = n; i < arr.length; i++) arr[i] = arr[i % n]; };
+      const n = lastEdit.i + 1;
+      if (n > 0) { const a = d[lastEdit.part]; if (editable(lastEdit.part)) rep(a, n); }
+      storeDraft(); S.mark(2, true);
+    } else if (id === 'drawn') { snapshot(); for (let r = 0; r < L.H; r++) { const s = d.th[r % L.W]; d.tr[r] = s >= 0 && s < L.T ? s : -1; } storeDraft(); S.mark(4, true); }
+    else if (id === 'hint') {
+      const h = WW.hint(L, d);
+      if (!h) msg = { text: 'It already matches the order. Press Weave!', t0: now() };
+      else { hintMark = Object.assign({ t0: now() }, h); msg = { text: h.kind === 'pick' ? `Pick ${h.i + 1} (row ${h.i + 1}) is the most wrong. Which treadle should it press - and what does that treadle lift?` : `End ${h.i + 1} (column ${h.i + 1}) is the most wrong. Which shaft should it be threaded on?`, t0: now() }; }
+    } else if (id === 'diff') showDiff = !showDiff;
+    else if (id === 'weave') startWeave();
+    else if (id === 'png') downloadPng();
+  }
+  function downloadPng() {
+    const dd = WW.drawdown(L, d), cell = 24, pad = 40;
+    const c2 = document.createElement('canvas'); c2.width = L.W * cell + pad * 2; c2.height = L.H * cell + pad * 2;
+    const g = c2.getContext('2d'); g.fillStyle = '#efe4c8'; g.fillRect(0, 0, c2.width, c2.height);
+    A.drawCloth(g, dd, pad, pad, cell, { dpr: 1, fringe: false });
+    const a = document.createElement('a'); a.download = 'weftwork-cloth.png'; a.href = c2.toDataURL('image/png'); a.click();
+  }
+
+  // ── Weaving ─────────────────────────────────────────────────────
+  function startWeave() {
+    if (weave) return;
+    weave = { t0: now(), per: Math.max(0.09, Math.min(0.2, 3.2 / L.H)), row: -1, done: false };
+    hintMark = null;
+  }
+  function tickWeave() {
+    if (!weave || weave.done) return;
+    const t = now() - weave.t0, row = Math.floor(t / weave.per);
+    if (row !== weave.row && row < L.H) { weave.row = row; S.clack(); setTimeout(() => S.shuttle(weave ? weave.per * 0.8 : 0.15), 20); setTimeout(() => S.beat(), weave.per * 800); }
+    if (row >= L.H) { weave.done = true; weave.end = now(); finishWeave(); }
+  }
+  function finishWeave() {
+    if (studio) { msg = { text: 'Woven. A fine piece of cloth - save a picture of it if you like.', t0: now() }; S.win(); setTimeout(() => { weave = null; }, 1600); return; }
+    const sc = WW.score(L, d);
+    weave.ok = sc.ok;
+    if (!sc.ok) {
+      S.fail(); const df = WW.diff(L, d);
+      weave.bad = df.cells; msg = { text: `Not quite: ${df.n} ${df.n === 1 ? 'crossing doesn\'t' : 'crossings don\'t'} match the order. They're marked in red.`, t0: now() };
+      setTimeout(() => { weave = null; }, 2600); return;
+    }
+    S.win();
+     save.stars[L.id] = Math.max(save.stars[L.id] || 0, sc.stars);
+    persist();
+    setTimeout(() => showDone(sc), 1100);
+  }
+  function showDone(sc) {
+    $('doneTitle').textContent = 'ORDER DELIVERED';
+    $('doneSub').textContent =  `No. ${L.n} · ${L.name} · for ${LV.CLIENTS[LV.CHAPTERS[L.ch].client].name}`;
+    $('doneList').innerHTML = `<span>Woven to match the order</span><span class="ok">★</span>
+      <span>Shafts used: ${sc.shafts} <span style="color:#8a6a40">(needs ${sc.par.S})</span></span><span class="${sc.shafts <= sc.par.S ? 'ok' : 'no'}">${sc.shafts <= sc.par.S ? '★' : '☆'}</span>
+      <span>Treadles used: ${sc.treadles} <span style="color:#8a6a40">(needs ${sc.par.T})</span></span><span class="${sc.treadles <= sc.par.T ? 'ok' : 'no'}">${sc.treadles <= sc.par.T ? '★' : '☆'}</span>`;
+    const spans = $('doneStars').querySelectorAll('span'); spans.forEach((s) => s.classList.remove('on'));
+    $('done').classList.add('on');
+    for (let i = 0; i < sc.stars; i++) setTimeout(() => { spans[i].classList.add('on'); S.star(i); }, 350 + i * 330);
+    const nxt = nextLevel();
+    const all =   false ;
+    const demoFin = DEMO && solved() >= DEMO_N && (!save.endSeen || L.n >= DEMO_N);
+    $('dNext').style.display = nxt || L.gen || all || demoFin ? '' : 'none';
+    $('dNext').textContent = all ? 'The guild\'s verdict ›' : demoFin ? 'End of the demo ›' : 'Next order ›';
+  }
+  function nextLevel() {
+    
+    const pool = LV.LEVELS.filter((l) => !l.stub), i = pool.indexOf(L);
+    for (let j = i + 1; j < pool.length; j++) if (!save.stars[pool[j].id]) return pool[j];
+    for (const l of pool) if (!save.stars[l.id]) return l;
+    return pool[i + 1] || null;
+  }
+  $('dStay').onclick = () => { $('done').classList.remove('on'); weave = null; };
+  $('dBook').onclick = () => { $('done').classList.remove('on'); weave = null; openBook(); };
+  $('dNext').onclick = () => {
+    $('done').classList.remove('on'); weave = null;
+    if (DEMO && solved() >= DEMO_N && (!save.endSeen || L.n >= DEMO_N)) { save.endSeen = true; persist(); showDemoEnd(); return; }
+    
+    const n = nextLevel();  if (n && available(n)) open(n); else openBook();
+  };
+
+  // ── Drawing ─────────────────────────────────────────────────────
+  function drawGrid(g, cs, part, fill, opts) {
+    const c = ctx, lockd = !editable(part);
+    c.save();
+    c.fillStyle = lockd ? 'rgba(200,180,140,0.25)' : 'rgba(255,252,240,0.55)'; c.fillRect(g.x, g.y, g.w * cs, g.h * cs);
+    for (let r = 0; r < g.h; r++) for (let cc = 0; cc < g.w; cc++) {
+      const v = fill(r, cc); if (!v) continue;
+      if (typeof v === 'string' && v !== 'glow') { // a yarn
+        const b = A.yarnRGB(v); const gr = c.createLinearGradient(g.x + cc * cs, g.y + r * cs, g.x + (cc + 1) * cs, g.y + (r + 1) * cs);
+        gr.addColorStop(0, A.css(A.shadeRGB(b, 0.15))); gr.addColorStop(1, A.css(A.shadeRGB(b, -0.2)));
+        c.fillStyle = gr; c.fillRect(g.x + cc * cs + 1, g.y + r * cs + 1, cs - 2, cs - 2);
+      } else {
+        const ins = Math.max(1.5, cs * 0.14);
+        c.fillStyle = lockd ? '#7b6a55' : (opts && opts.ink) || '#2c2119';
+        rr(c, g.x + cc * cs + ins, g.y + r * cs + ins, cs - ins * 2, cs - ins * 2, Math.min(3, cs * 0.12)); c.fill();
+        if (v === 'glow') { c.fillStyle = 'rgba(255,214,120,0.85)'; c.fill(); }
+      }
+    }
+    // graph lines, heavier every fourth
+    for (let i = 0; i <= g.w; i++) { c.strokeStyle = i % 4 === 0 ? 'rgba(70,100,120,0.55)' : 'rgba(70,100,120,0.25)'; c.lineWidth = i % 4 === 0 ? 1.2 : 0.8; c.beginPath(); c.moveTo(g.x + i * cs, g.y); c.lineTo(g.x + i * cs, g.y + g.h * cs); c.stroke(); }
+    for (let i = 0; i <= g.h; i++) { const k2 = part === 'th' || part === 'tu' ? g.h - i : i; c.strokeStyle = k2 % 4 === 0 ? 'rgba(70,100,120,0.55)' : 'rgba(70,100,120,0.25)'; c.lineWidth = k2 % 4 === 0 ? 1.2 : 0.8; c.beginPath(); c.moveTo(g.x, g.y + i * cs); c.lineTo(g.x + g.w * cs, g.y + i * cs); c.stroke(); }
+    const fl = flash.find((f) => f.part === part && now() - f.t0 < 0.6);
+    if (fl) { c.fillStyle = `rgba(200,60,40,${0.3 * (1 - (now() - fl.t0) / 0.6)})`; c.fillRect(g.x, g.y, g.w * cs, g.h * cs); }
+    c.restore();
+    if (lockd) lockIcon(g.x + g.w * cs - 2 + (g.w === 1 ? 16 : 0), g.y - 4, Math.max(9, Math.min(13, cs * 0.6)));
+  }
+  function lockIcon(x, y, s) {
+    const c = ctx; c.save(); c.translate(x - s, y - s);
+    c.strokeStyle = '#6a5238'; c.lineWidth = s * 0.16; c.beginPath(); c.arc(s / 2, s * 0.42, s * 0.26, Math.PI, 0); c.stroke();
+    c.fillStyle = '#8a6a40'; rr(c, s * 0.12, s * 0.42, s * 0.76, s * 0.55, s * 0.1); c.fill(); c.restore();
+  }
+  function label(text, x, y, align) { const c = ctx; c.save(); c.font = 'italic 13px Georgia, serif'; c.fillStyle = '#6a5238'; c.textAlign = align || 'left'; c.textBaseline = 'alphabetic'; c.fillText(text, x, y); c.restore(); }
+  function wrapText(text, x, y, w, lh, font, col) {
+    const c = ctx; c.save(); c.font = font; c.fillStyle = col; c.textBaseline = 'top';
+    const words = text.split(' '); let line = '', yy = y;
+    for (const wd of words) { const t = line ? line + ' ' + wd : wd; if (c.measureText(t).width > w && line) { c.fillText(line, x, yy); yy += lh; line = wd; } else line = t; }
+    if (line) c.fillText(line, x, yy); c.restore(); return yy + lh;
+  }
+
+  function drawPlay(t) {
+    const c = ctx, G = lay(), cs = G.cs;
+    tickWeave();
+    // the paper
+    A.paper(c, PAPER.x, PAPER.y, PAPER.w, PAPER.h);
+    // labels
+    label('warp colours', G.wc.x, G.wc.y - 5);
+    label('threading', G.th.x, G.th.y - 5);
+    label('tie-up', G.tu.x, G.tu.y - 5);
+    label('treadling', G.tr.x, G.tr.y - 5);
+    label('weft', G.fc.x + cs / 2, G.fc.y - 5, 'center');
+    // shaft and treadle numbers
+    ctx.save(); ctx.font = `${Math.max(9, Math.min(12, cs * 0.5))}px Georgia, serif`; ctx.fillStyle = '#8a6a40'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (let s = 0; s < L.S; s++) ctx.fillText(String(s + 1), G.th.x - 4, G.th.y + (L.S - 1 - s + 0.5) * cs);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    for (let tt = 0; tt < L.T; tt++) ctx.fillText(String(tt + 1), G.tr.x + (tt + 0.5) * cs, G.tr.y + L.H * cs + 3);
+    ctx.restore();
+    const W = weave && !weave.done ? Math.max(0, weave.row) : -1;
+    const liftT = W >= 0 ? d.tr[W] : -1;
+    drawGrid(G.wc, cs, 'wc', (r, cc) => d.wc[cc]);
+    drawGrid(G.th, cs, 'th', (r, cc) => d.th[cc] === L.S - 1 - r ? (liftT >= 0 && d.tu[L.S - 1 - r][liftT] ? 'glow' : true) : false);
+    drawGrid(G.tu, cs, 'tu', (r, cc) => d.tu[L.S - 1 - r][cc] ? (cc === liftT ? 'glow' : true) : false);
+    drawGrid(G.tr, cs, 'tr', (r, cc) => d.tr[r] === cc ? (r === W ? 'glow' : true) : false);
+    drawGrid(G.fc, cs, 'fc', (r) => d.fc[r]);
+    // the cloth
+    const dd = WW.drawdown(L, d);
+    const rows = weave && !weave.done ? Math.max(0, weave.row) : L.H;
+    c.save(); c.fillStyle = 'rgba(60,40,20,0.12)'; c.fillRect(G.cl.x, G.cl.y, L.W * cs, L.H * cs); c.restore();
+    A.drawCloth(c, dd, G.cl.x, G.cl.y, cs, { rows, dpr, warpAbove: d.wc, warpAboveLen: 0, seed: 3 });
+    if (weave && !weave.done && W >= 0 && W < L.H) {
+      // the shed: lifted ends brighten, the shuttle flies across, trailing weft
+      const ty = G.cl.y + (W + 0.5) * cs, prog = ((now() - weave.t0) % weave.per) / weave.per, dir = W % 2 ? -1 : 1;
+      const sx = dir > 0 ? G.cl.x - 30 + prog * (L.W * cs + 60) : G.cl.x + L.W * cs + 30 - prog * (L.W * cs + 60);
+      c.save(); c.strokeStyle = A.css(A.yarnRGB(d.fc[W])); c.lineWidth = cs * 0.55; c.lineCap = 'round';
+      c.beginPath(); c.moveTo(dir > 0 ? G.cl.x : G.cl.x + L.W * cs, ty); c.lineTo(Math.max(G.cl.x, Math.min(G.cl.x + L.W * cs, sx)), ty); c.stroke(); c.restore();
+      A.shuttle(c, sx, ty, Math.max(70, cs * 4.2), d.fc[W], 0);
+    }
+    // the beater bar at the fell
+    if (weave && !weave.done) { const fy = G.cl.y + Math.max(0, weave.row) * cs; c.save(); const g = c.createLinearGradient(0, fy - 6, 0, fy + 6); g.addColorStop(0, '#d8a868'); g.addColorStop(1, '#6e4520'); c.fillStyle = g; c.shadowColor = 'rgba(0,0,0,0.4)'; c.shadowBlur = 6; c.fillRect(G.cl.x - 14, fy - 4, L.W * cs + 28, 8); c.restore(); }
+    // differences
+    const bad = weave && weave.done && weave.bad ? weave.bad : showDiff && !studio ? WW.diff(L, d).cells : [];
+    if (bad.length) { c.save(); const p = 0.55 + 0.45 * Math.sin(t * 6); c.strokeStyle = `rgba(214,40,30,${p})`; c.lineWidth = Math.max(1.5, cs * 0.12); for (const [r, cc] of bad) c.strokeRect(G.cl.x + cc * cs + 1.5, G.cl.y + r * cs + 1.5, cs - 3, cs - 3); c.restore(); }
+    // success glow
+    if (weave && weave.done && weave.ok) { const a = Math.min(1, (now() - weave.end) * 2); c.save(); c.globalCompositeOperation = 'lighter'; c.fillStyle = `rgba(255,220,140,${0.18 * Math.sin(Math.min(Math.PI, (now() - weave.end) * 3))})`; c.fillRect(G.cl.x, G.cl.y, L.W * cs, L.H * cs); c.restore(); stamp(G.cl.x + L.W * cs / 2, G.cl.y + L.H * cs / 2, a); }
+    // hover crosshair: follow an end or a pick through the draft
+    if (hover && hover.h && !weave) {
+      const h = hover.h; c.save(); c.fillStyle = 'rgba(255,200,90,0.18)';
+      const end = h.end !== undefined ? h.end : null, pick = h.pick !== undefined ? h.pick : null;
+      if (end !== null) { c.fillRect(G.th.x + end * cs, G.wc.y, cs, (G.cl.y + L.H * cs) - G.wc.y); }
+      if (pick !== null) { c.fillRect(G.cl.x, G.cl.y + pick * cs, (G.fc.x + cs) - G.cl.x, cs); }
+      if (h.shaft !== undefined) { c.fillRect(G.th.x, G.th.y + (L.S - 1 - h.shaft) * cs, (G.tu.x + L.T * cs) - G.th.x, cs); }
+      if (h.treadle !== undefined) { c.fillRect(G.tu.x + h.treadle * cs, G.tu.y, cs, (G.tr.y + L.H * cs) - G.tu.y); }
+      c.restore();
+    }
+    // hint marker
+    if (hintMark && now() - hintMark.t0 < 6) {
+      const a = 0.5 + 0.5 * Math.sin(t * 5); c.save(); c.strokeStyle = `rgba(40,120,200,${a})`; c.lineWidth = 3;
+      if (hintMark.kind === 'pick') c.strokeRect(G.cl.x - 3, G.cl.y + hintMark.i * cs - 2, (G.fc.x + cs) - G.cl.x + 6, cs + 4);
+      else c.strokeRect(G.th.x + hintMark.i * cs - 2, G.wc.y - 3, cs + 4, (G.cl.y + L.H * cs) - G.wc.y + 6);
+      c.restore();
+    }
+    coach(G, cs, t);
+    // left side: commission card, the order, basket
+    drawCard(t);
+    if (!studio) drawOrder(t);
+    if (colourParts()) drawBasket(t);
+    layoutButtons(); for (const b of buttons) drawButton(b);
+    if (msg && now() - msg.t0 < 7) drawMsg();
+  }
+  function stamp(x, y, a) {
+    const c = ctx; c.save(); c.translate(x, y); c.rotate(-0.18); c.globalAlpha = a * 0.92; const s = 1 + (1 - a) * 0.6; c.scale(s, s);
+    c.strokeStyle = '#a8322a'; c.lineWidth = 5; rr(c, -120, -34, 240, 68, 8); c.stroke(); c.lineWidth = 2; rr(c, -112, -26, 224, 52, 6); c.stroke();
+    c.fillStyle = '#a8322a'; c.font = 'bold 30px Georgia, serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText('MATCHED', 0, 2); c.restore();
+  }
+  function drawMsg() {
+    const c = ctx, a = Math.min(1, (7 - (now() - msg.t0)) * 2);
+    c.save(); c.globalAlpha = a; const x = PAPER.x + 20, y = PAPER.y + PAPER.h - 46, w = PAPER.w - 40;
+    rr(c, x, y, w, 36, 6); c.fillStyle = 'rgba(58,42,28,0.92)'; c.fill();
+    c.fillStyle = '#fff1d2'; c.font = '14.5px Georgia, serif'; c.textBaseline = 'middle'; c.fillText(msg.text, x + 14, y + 18, w - 28); c.restore();
+  }
+  function drawCard(t) {
+    const c = ctx, x = CARD.x, y = CARD.y, w = CARD.w, h = CARD.h;
+    A.paper(c, x, y, w, h, '#f6ecd4');
+    // pin
+    c.save(); const pg = c.createRadialGradient(x + w / 2 - 2, y + 9, 1, x + w / 2, y + 11, 7); pg.addColorStop(0, '#ffe6a0'); pg.addColorStop(1, '#8a5a18'); c.fillStyle = pg; c.beginPath(); c.arc(x + w / 2, y + 11, 6, 0, Math.PI * 2); c.fill(); c.restore();
+    const client = studio ? 'wenna' :  LV.CHAPTERS[L.ch].client;
+    A.emblem(c, client, x + 40, y + 52, 24);
+    c.save(); c.fillStyle = '#3a2a1c'; c.textBaseline = 'alphabetic';
+    c.font = 'italic 13px Georgia, serif'; c.fillStyle = '#7a5a38';
+    const who = studio ? 'Your own loom' :  `No. ${L.n} · for ${LV.CLIENTS[client].name}, ${LV.CLIENTS[client].role}`;
+    c.fillText(who, x + 74, y + 42);
+    c.fillStyle = '#3a2a1c'; c.font = 'bold 22px Georgia, serif'; c.fillText(L.name, x + 74, y + 68, w - 90);
+    c.restore();
+    const text = studio ? `${STUDIO_WORD} shafts, ${STUDIO_WORD.toLowerCase()} treadles and every yarn in the basket. Weave whatever you like.` :  L.text;
+    const yy = wrapText(text, x + 18, y + 92, w - 36, 18, '14.5px Georgia, serif', '#3a2a1c');
+    // usage line
+    if (!studio) {
+      const u = WW.usage(L, d), p = WW.par(L);
+      c.save(); c.font = '13px Georgia, serif'; c.fillStyle = '#6a5238'; c.textBaseline = 'alphabetic';
+      const st = save.stars[L.id] || 0;
+      c.fillText(`Shafts ${u.shafts} (needs ${p.S})   ·   Treadles ${u.treadles} (needs ${p.T})`, x + 18, y + h - 14);
+      if (!L.gen) { c.fillStyle = '#b8862a'; c.font = '16px Georgia, serif'; c.textAlign = 'right'; c.fillText('★'.repeat(st) + '☆'.repeat(3 - st), x + w - 16, y + h - 13); }
+      c.restore();
+    }
+    void yy; void t;
+  }
+  function drawOrder(t) {
+    const c = ctx, td = WW.target(L);
+    const cell = Math.min(22, Math.floor((ORDER.w - 40) / L.W), Math.floor((ORDER.h - 70) / L.H));
+    const w = L.W * cell, h = L.H * cell, x = ORDER.x + (ORDER.w - w) / 2, y = ORDER.y + 30 + (ORDER.h - 50 - h) / 2;
+    c.save(); c.font = 'italic 15px Georgia, serif'; c.fillStyle = '#f3dfb8'; c.textAlign = 'center'; c.shadowColor = '#000'; c.shadowBlur = 4; c.fillText('the order', ORDER.x + ORDER.w / 2, ORDER.y + 14); c.restore();
+    td.wc = WW.expand(L).wc;
+    A.drawCloth(c, td, x, y, cell, { dpr, fringe: true, seed: 11 });
+    if (showDiff) { const bad = WW.diff(L, d).cells; c.save(); c.strokeStyle = 'rgba(214,40,30,0.7)'; c.lineWidth = 1.2; for (const [r, cc] of bad) c.strokeRect(x + cc * cell + 1, y + r * cell + 1, cell - 2, cell - 2); c.restore(); }
+    void t;
+  }
+  let basketBalls = [];
+  function drawBasket(t) {
+    const pal = palette(); basketBalls = [];
+    const n = pal.length, r = n > 8 ? 13 : 17, gap = r * 2 + 10, cols = Math.min(n, Math.floor(340 / gap)), rowsN = Math.ceil(n / cols);
+    const x0 = 20 + (372 - cols * gap) / 2 + gap / 2, y0 = 720 - 20 - rowsN * (r * 2 + 8) + r;
+    const c = ctx; c.save(); c.font = 'italic 13px Georgia, serif'; c.fillStyle = '#f3dfb8'; c.textAlign = 'center'; c.fillText(studio ? 'every yarn' : 'yarn basket', 206, y0 - r - 10); c.restore();
+    pal.forEach((k2, i) => { const x = x0 + (i % cols) * gap, y = y0 + Math.floor(i / cols) * (r * 2 + 8); A.yarnBall(c, x, y, r, k2, t + i, sel === k2); basketBalls.push({ x, y, r, k: k2 }); });
+  }
+  function yarnAt(x, y) { if (!colourParts()) return null; for (const b of basketBalls) if ((x - b.x) ** 2 + (y - b.y) ** 2 < (b.r + 4) ** 2) return b.k; return null; }
+  // first-time pointers on the early orders
+  function coach(G, cs, t) {
+    if (studio || L.gen || L.n > 6) return;
+    const want = { 1: 'tr', 2: 'th', 3: 'tu', 4: 'wc', 5: 'fc' }[L.n];
+    if (!want || coachDone[want] || (save.stars[L.id] || 0) > 0) return;
+    const g = G[want], px = g.x + (want === 'fc' ? cs / 2 : Math.min(g.w, 3) * cs / 2), py = g.y + (want === 'th' || want === 'tu' ? g.h * cs : want === 'wc' ? cs : Math.min(3, g.h) * cs);
+    const bob = Math.sin(t * 4) * 5;
+    const c = ctx; c.save(); c.translate(px, py + 14 + bob);
+    c.fillStyle = '#a8322a'; c.beginPath(); c.moveTo(0, 0); c.lineTo(-10, 16); c.lineTo(10, 16); c.closePath(); c.fill();
+    const txt = { tr: 'Click a treadle for each row', th: 'Click a shaft for each column', tu: 'Tie treadles to shafts', wc: 'Paint the warp colours', fc: 'Now the weft colours' }[want];
+    c.font = '14px Georgia, serif'; const w = c.measureText(txt).width + 22;
+    rr(c, -w / 2, 16, w, 28, 6); c.fill(); c.fillStyle = '#fff1d2'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(txt, 0, 30); c.restore();
+  }
+
+  // ── Title backdrop: a banner weaving itself ─────────────────────
+  const titleL =   { W: 24, H: 24, S: 4, T: 4, th: '123432', tu: ['12', '23', '34', '41'], tr: '123432', wc: 'rrrrrrnnnnggwwggnnnn', fc: 'wwnnnnrrrrrrggnnnnww' } ;
+  // the cloth rolls up as it is woven; below the fell, bare warp runs down to the back beam
+  const titleCloth = WW.target(Object.assign({}, titleL, { W: 24, H: 24 })), titleWarp = WW.tile(titleL.wc, 24).split('');
+  function drawTitle(t) {
+    const c = ctx, cell = 26, Wn = 52, per = 0.34, fell = 520;
+    const woven = Math.floor(t / per), frac = (t % per) / per;
+    const shown = Math.ceil(fell / cell) + 1, x = (LW - Wn * cell) / 2;
+    const big = { col: [], up: [] };
+    for (let r = 0; r < shown; r++) { const rr2 = ((woven - shown + r) % 24 + 24) % 24; big.col.push([]); big.up.push([]); for (let cc = 0; cc < Wn; cc++) { big.col[r].push(titleCloth.col[rr2][cc % 24]); big.up[r].push(titleCloth.up[rr2][cc % 24]); } }
+    A.drawCloth(c, big, x, fell - shown * cell, cell, { dpr, shadow: false, seed: woven });
+    // bare warp
+    for (let cc = 0; cc < Wn; cc++) { const b = A.yarnRGB(titleWarp[cc % 24]), g = c.createLinearGradient(x + cc * cell, 0, x + (cc + 1) * cell, 0); g.addColorStop(0, A.css(A.shadeRGB(b, -0.55))); g.addColorStop(0.45, A.css(A.shadeRGB(b, 0.12))); g.addColorStop(1, A.css(A.shadeRGB(b, -0.6))); c.fillStyle = g; c.fillRect(x + cc * cell + 6, fell, cell - 12, LH - fell); }
+    // beater and shuttle
+    const g = c.createLinearGradient(0, fell - 8, 0, fell + 10); g.addColorStop(0, '#e2b77c'); g.addColorStop(1, '#5a3418'); c.fillStyle = g; c.fillRect(0, fell - 2, LW, 12);
+    const dir = woven % 2 ? -1 : 1, sx = dir > 0 ? -80 + frac * (LW + 160) : LW + 80 - frac * (LW + 160);
+    A.shuttle(c, sx, fell + 34, 130, titleCloth.col[woven % 24][0] === titleWarp[0] ? 'g' : 'n', 0);
+    const v = c.createRadialGradient(LW / 2, LH * 0.42, 100, LW / 2, LH / 2, LW * 0.7); v.addColorStop(0, 'rgba(20,10,4,0.05)'); v.addColorStop(1, 'rgba(20,10,4,0.6)'); c.fillStyle = v; c.fillRect(0, 0, LW, LH);
+  }
+
+  function frame() {
+    const t = now();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(background(), 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (screen === 'play' && L) drawPlay(t); else drawTitle(t);
+    requestAnimationFrame(frame);
+  }
+
+  // ── Input ───────────────────────────────────────────────────────
+  const toLogical = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * LW, (e.clientY - r.top) / r.height * LH]; };
+  cv.addEventListener('pointerdown', (e) => { cv.setPointerCapture(e.pointerId); const [x, y] = toLogical(e); down(x, y); });
+  cv.addEventListener('pointermove', (e) => { const [x, y] = toLogical(e); move(x, y); cv.style.cursor = hover && (hover.btn || (hover.h && hover.h.part !== 'cl')) ? 'pointer' : 'default'; });
+  addEventListener('pointerup', up);
+  addEventListener('keydown', (e) => {
+    if (screen !== 'play') return;
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') { press('undo'); e.preventDefault(); }
+    else if (e.key === ' ' || e.key === 'Enter') { press('weave'); e.preventDefault(); }
+    else if (e.key === 'd') press('diff');
+    else if (e.key === 'r') press('repeat');
+    else if (e.key === 'Escape') openBook();
+  });
+
+  // ── Overlays ────────────────────────────────────────────────────
+  function hideAll() { document.querySelectorAll('.ov').forEach((o) => o.classList.remove('on')); }
+  function miniCloth(canvas, L2, locked) {
+    const c = canvas.getContext('2d');
+    if (L2.stub) { c.fillStyle = '#3a2a1c'; c.fillRect(0, 0, canvas.width, canvas.height); c.fillStyle = 'rgba(243,223,184,0.07)'; for (let y = -canvas.width; y < canvas.height; y += 14) { c.beginPath(); c.moveTo(0, y + canvas.width); c.lineTo(canvas.width, y); c.lineTo(canvas.width, y + 6); c.lineTo(0, y + canvas.width + 6); c.fill(); } return; }
+    const td = WW.target(L2);
+    const cell = Math.max(3, Math.ceil(Math.max(canvas.width / L2.W, canvas.height / L2.H)));
+    c.fillStyle = '#3a2a1c'; c.fillRect(0, 0, canvas.width, canvas.height);
+    // tile the cloth to fill the thumbnail
+    const big = { col: [], up: [] };
+    const nw = Math.ceil(canvas.width / cell), nh = Math.ceil(canvas.height / cell);
+    for (let r = 0; r < nh; r++) { big.col.push([]); big.up.push([]); for (let cc = 0; cc < nw; cc++) { big.col[r].push(td.col[r % L2.H][cc % L2.W]); big.up[r].push(td.up[r % L2.H][cc % L2.W]); } }
+    A.drawCloth(c, big, 0, 0, cell, { dpr: 1, shadow: false, seed: 2 });
+    if (locked) { c.fillStyle = 'rgba(60,40,20,0.75)'; c.fillRect(0, 0, canvas.width, canvas.height); }
+  }
+  function openBook() {
+    S.page(); hideAll(); screen = L ? screen : 'title';
+    const body = $('bookBody'); body.innerHTML = '';
+    LV.CHAPTERS.forEach((ch, ci) => {
+      const lv = LV.LEVELS.filter((l) => l.ch === ci);
+      const sec = document.createElement('div'); sec.className = 'chap';
+      const em = document.createElement('canvas'); em.width = em.height = 68;
+      const ec = em.getContext('2d'); ec.scale(2, 2); A.emblem(ec, ch.client, 17, 17, 16);
+      const h3 = document.createElement('h3'); h3.appendChild(em); h3.appendChild(document.createTextNode(`${ch.name} - ${LV.CLIENTS[ch.client].name}`));
+      const bl = document.createElement('div'); bl.className = 'bl'; bl.textContent = ch.blurb;
+      const tiles = document.createElement('div'); tiles.className = 'tiles';
+      for (const l of lv) {
+        const ok = available(l), st = save.stars[l.id] || 0;
+        const tl = document.createElement('div'); tl.className = 'tile' + (ok ? '' : ' lock');
+        const cvs = document.createElement('canvas'); cvs.width = 208; cvs.height = 144; miniCloth(cvs, l, !ok);
+        tl.innerHTML = `<div class="no">${l.n}</div>`; tl.appendChild(cvs);
+        const nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = DEMO && l.n > DEMO_N ? l.name + ' (full game)' : l.name; tl.appendChild(nm);
+        const sd = document.createElement('div'); sd.className = 'st'; sd.textContent = ok ? '★'.repeat(st) + '☆'.repeat(3 - st) : '🔒'; tl.appendChild(sd);
+        tl.onclick = () => { if (ok) open(l); else if (DEMO && l.n > DEMO_N) $('demoEnd').classList.add('on'); else S.deny(); };
+        tiles.appendChild(tl);
+      }
+      sec.append(h3, bl, tiles); body.appendChild(sec);
+    });
+    // extras
+    const ex = document.createElement('div'); ex.className = 'chap';
+    ex.innerHTML = '<h3>Beyond the book</h3><div class="bl">' + (DEMO ? 'Market orders and an eight-shaft studio loom come with the full game. The demo has a four-shaft studio to play with.' : 'Market orders never run out. The studio loom is yours to play with.') + '</div>';
+    const tiles = document.createElement('div'); tiles.className = 'tiles';
+    const marketOk =   false , studioOk = solved() >= 6;
+    const mk = (name, sub, ok, fn, L2) => { const tl = document.createElement('div'); tl.className = 'tile special' + (ok ? '' : ' lock'); const cvs = document.createElement('canvas'); cvs.width = 208; cvs.height = 144; miniCloth(cvs, L2, !ok); tl.appendChild(cvs); const nm = document.createElement('div'); nm.className = 'nm'; nm.textContent = name; tl.appendChild(nm); const sd = document.createElement('div'); sd.className = 'st'; sd.style.fontSize = '11px'; sd.style.letterSpacing = '0'; sd.textContent = sub; tl.appendChild(sd); tl.onclick = () => { if (ok) fn(); else if (!fn) showDemoEnd(); else S.deny(); }; tiles.appendChild(tl); };
+    
+     mk('Market orders', 'full game', false, null, LV.LEVELS[6]); 
+    mk('Studio loom', studioOk ? (DEMO ? '4 shafts in the demo' : 'free weaving') : 'after 6 orders', studioOk, () => open(studioLevel()), LV.LEVELS[  6 ]);
+    ex.appendChild(tiles); body.appendChild(ex);
+    const tot = LV.LEVELS.reduce((a, l) => a + (save.stars[l.id] || 0), 0);
+    $('bookSub').textContent = `${solved()} of ${LV.LEVELS.length} orders woven · ${tot} of ${LV.LEVELS.length * 3} stars`;
+    $('book').classList.add('on');
+  }
+  $('bkClose').onclick = () => { $('book').classList.remove('on'); if (screen !== 'play') $('title').classList.add('on'); };
+  $('bMenu').onclick = () => { S.unlock(); openBook(); };
+  $('tOrders').onclick = () => { S.unlock(); openBook(); };
+  $('tContinue').onclick = () => {
+    S.unlock();
+    if (!save.helpSeen) { save.helpSeen = true; persist(); }
+    const last =  levelById(save.last);
+    const target = last && (last.gen || (available(last) && !save.stars[last.id])) ? last : LV.LEVELS.find((l) => !save.stars[l.id] && available(l)) || LV.LEVELS[0];
+    open(target);
+  };
+  if (!save.last) $('tContinue').textContent = 'Start weaving';
+  function quilt() {
+    S.page();
+    const qc = $('quiltCv'), c = qc.getContext('2d'); c.setTransform(1, 0, 0, 1, 0, 0);
+    A.wood(c, qc.width, qc.height);
+    const n = LV.LEVELS.length, cols = 11, rowsN = Math.ceil(n / cols), pad = 30, gap = 14;
+    const pw = (qc.width - pad * 2 - gap * (cols - 1)) / cols, ph = (qc.height - pad * 2 - gap * (rowsN - 1)) / rowsN;
+    // backing cloth
+    c.fillStyle = '#e9dcbc'; c.fillRect(pad - 12, pad - 12, qc.width - pad * 2 + 24, qc.height - pad * 2 + 24);
+    LV.LEVELS.forEach((l, i) => {
+      const x = pad + (i % cols) * (pw + gap), y = pad + Math.floor(i / cols) * (ph + gap);
+      if (save.stars[l.id]) {
+        const td = WW.target(l), cell = Math.ceil(Math.max(pw / l.W, ph / l.H, 9));
+        const big = { col: [], up: [] }; const nw = Math.ceil(pw / cell), nh = Math.ceil(ph / cell);
+        for (let r = 0; r < nh; r++) { big.col.push([]); big.up.push([]); for (let cc = 0; cc < nw; cc++) { big.col[r].push(td.col[r % l.H][cc % l.W]); big.up[r].push(td.up[r % l.H][cc % l.W]); } }
+        c.save(); c.beginPath(); c.rect(x, y, pw, ph); c.clip(); A.drawCloth(c, big, x, y, cell, { dpr: 1, shadow: false, seed: i }); c.restore();
+      } else { c.fillStyle = '#d9caa4'; c.fillRect(x, y, pw, ph); c.fillStyle = 'rgba(120,90,50,0.35)'; c.font = '28px Georgia'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(l.n), x + pw / 2, y + ph / 2); }
+      // stitches
+      c.save(); c.setLineDash([7, 6]); c.strokeStyle = 'rgba(250,240,215,0.85)'; c.lineWidth = 2.2; c.strokeRect(x - 5, y - 5, pw + 10, ph + 10); c.restore();
+    });
+    $('quiltSub').textContent = `${solved()} of ${LV.LEVELS.length} patches - every order you weave is sewn in.`;
+    hideAll(); $('quilt').classList.add('on');
+  }
+  $('tQuilt').onclick = () => { S.unlock(); quilt(); };
+  $('bkQuilt').onclick = quilt;
+  $('qClose').onclick = () => { $('quilt').classList.remove('on'); if (screen !== 'play') $('title').classList.add('on'); };
+  function help() {
+    S.page();
+    const hc = $('helpCv'), c = hc.getContext('2d'); c.setTransform(2, 0, 0, 2, 0, 0); c.clearRect(0, 0, 280, 210);
+    const L2 = LV.LEVELS[6], dd = WW.target(L2), cs = 11, x = 20, y = 86;
+    const src = WW.expand(L2);
+    c.fillStyle = '#fbf5e6'; c.fillRect(0, 0, 280, 210);
+    c.font = 'italic 11px Georgia'; c.fillStyle = '#6a5238'; c.fillText('threading', x, 14); c.fillText('tie-up', x + 12 * cs + 8, 14); c.fillText('treadling', x + 12 * cs + 8, y - 4); c.fillText('cloth', x, y - 4);
+    for (let cc = 0; cc < 12; cc++) { c.fillStyle = '#2c2119'; c.fillRect(x + cc * cs + 2, 20 + (3 - src.th[cc]) * cs + 2, cs - 4, cs - 4); }
+    for (let s = 0; s < 4; s++) for (let tt = 0; tt < 4; tt++) if (src.tu[s][tt]) { c.fillStyle = '#2c2119'; c.fillRect(x + 12 * cs + 8 + tt * cs + 2, 20 + (3 - s) * cs + 2, cs - 4, cs - 4); }
+    for (let r = 0; r < 11; r++) { c.fillStyle = '#2c2119'; c.fillRect(x + 12 * cs + 8 + src.tr[r] * cs + 2, y + r * cs + 2, cs - 4, cs - 4); }
+    c.strokeStyle = 'rgba(70,100,120,0.35)'; c.lineWidth = 0.6;
+    for (const [gx, gy, w, h] of [[x, 20, 12, 4], [x + 12 * cs + 8, 20, 4, 4], [x + 12 * cs + 8, y, 4, 11]]) { for (let i = 0; i <= w; i++) { c.beginPath(); c.moveTo(gx + i * cs, gy); c.lineTo(gx + i * cs, gy + h * cs); c.stroke(); } for (let i = 0; i <= h; i++) { c.beginPath(); c.moveTo(gx, gy + i * cs); c.lineTo(gx + w * cs, gy + i * cs); c.stroke(); } }
+    const part = { col: dd.col.slice(0, 11), up: dd.up.slice(0, 11) };
+    A.drawCloth(c, part, x, y, cs, { dpr: 2, shadow: false });
+    hideAll(); $('help').classList.add('on');
+  }
+  $('tHelp').onclick = () => { S.unlock(); help(); };
+  $('bkHelp').onclick = help;
+  $('hClose').onclick = () => { $('help').classList.remove('on'); if (screen !== 'play') $('title').classList.add('on'); };
+  function showDemoEnd() {
+    const all = solved() >= DEMO_N;
+    $('deTitle').textContent = all ? 'END OF THE FREE DEMO' : 'THE FULL GAME';
+    $('deText').textContent = (all ? 'Nine orders woven. ' : 'This order is part of the full game. ') + 'The full order book has 33 - houndstooth, log cabin, tartans, satin, monk\'s belt, eight-shaft diamonds and the Rinsewick Banner - plus endless market orders, an eight-shaft studio loom and a quilt with all 33 patches.';
+    $('demoEnd').classList.add('on');
+  }
+  $('deClose').onclick = () => { $('demoEnd').classList.remove('on'); openBook(); };
+  
+
+  // sound button: all / effects only / off
+  function applySnd() { S.setMuted(save.snd === 2); S.setMusic(save.snd === 0); $('bSnd').textContent = ['♪ Sound', '♪ FX only', '♪ Off'][save.snd]; }
+  $('bSnd').onclick = () => { S.unlock(); save.snd = (save.snd + 1) % 3; applySnd(); persist(); };
+  applySnd();
+
+  fit(); requestAnimationFrame(frame);
+  window.WWUI = {
+    open, openBook, quilt, help, press, get L() { return L; }, get d() { return d; }, set d(v) { d = v; }, get save() { return save; }, persist,
+    lay, down, move, up, startWeave, get weave() { return weave; }, solve() { const src = WW.expand(L); for (const k2 of ['th', 'tu', 'tr', 'wc', 'fc']) if (editable(k2)) d[k2] = JSON.parse(JSON.stringify(src[k2])); storeDraft(); },
+    setMsg(text) { msg = { text, t0: now() }; }, setDiff(v) { showDiff = v; }, get showDiff() { return showDiff; }, setSel(k2) { sel = k2; }, studioLevel,
+  };
+})();
+
+</script>
+</body>
+</html>
